@@ -41,10 +41,12 @@ DEFAULTS = {
     # 휴대폰에서 GitHub Pages 화면으로 접속할 때 허용할 출처와, 이 서버의 바깥 주소
     "allowed_origins": ["https://icekenma.github.io"],
     "public_url": "",
-    "auto_update": True,            # GitHub에 새 버전이 올라오면 노트북 서버가 알아서 받아 다시 시작
+    "auto_update": True,
+    # 내 계좌 보기(조회 전용): 주문은 절대 나가지 않는다
+    "kiwoom_view": {"appkey": "", "secretkey": "", "mock": False},            # GitHub에 새 버전이 올라오면 노트북 서버가 알아서 받아 다시 시작
 }
 
-SECRET_PATHS = [("kiwoom", "scalp", "secretkey"), ("kiwoom", "dca", "secretkey")]
+SECRET_PATHS = [("kiwoom", "scalp", "secretkey"), ("kiwoom", "dca", "secretkey"), ("kiwoom_view", "secretkey")]
 MASK = "********"
 
 

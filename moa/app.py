@@ -164,7 +164,9 @@ def create_app(rt, updater=None):
         month = date.today().strftime("%Y-%m")
         sc = rt.scalp.status()
         dc = rt.dca.status()
+        acct = rt.account.snapshot() if rt.account.configured() else {"configured": False}
         return jsonify(
+            account={k: acct.get(k) for k in ("configured", "ok", "error", "total", "eval", "pnl", "pnl_pct", "cash", "updated_at", "server")},
             ledger=rt.ledger.summary(month), recent=rt.ledger.recent(5),
             assets=rt.assets.overview(),
             scalp={k: sc[k] for k in ("state", "mode_label", "today", "error", "data_source")},
@@ -278,6 +280,20 @@ def create_app(rt, updater=None):
                      res["status"], res["fill_price"], res.get("broker_no", ""), "직접 주문"))
         return jsonify(res)
 
+    # ---------- 내 계좌(조회 전용) ----------
+    @app.get("/api/myaccount")
+    def myaccount():
+        return jsonify(rt.account.snapshot(force=request.args.get("force") == "1"))
+
+    @app.post("/api/myaccount/test")
+    def myaccount_test():
+        if not rt.account.configured():
+            raise ValueError("설정에서 내 계좌 앱키와 시크릿키를 먼저 넣어 주세요")
+        s = rt.account.snapshot(force=True)
+        if not s.get("ok"):
+            raise RuntimeError(s.get("error") or "연결하지 못했어요")
+        return jsonify(s)
+
     # ---------- 단타 ----------
     @app.get("/api/scalp")
     def scalp():
@@ -389,7 +405,7 @@ def create_app(rt, updater=None):
     @app.put("/api/settings")
     def settings_put():
         d = body()
-        allowed = {"data_source", "demo_speed", "trade_mode", "kiwoom", "real_orders_allowed", "paper_start_cash",
+        allowed = {"data_source", "demo_speed", "trade_mode", "kiwoom", "kiwoom_view", "real_orders_allowed", "paper_start_cash",
                    "costs", "holidays", "ntfy_topic", "dca_window", "public_url", "allowed_origins"}
         patch = {k: v for k, v in d.items() if k in allowed}
         if patch.get("data_source") not in (None, "demo", "kiwoom"):

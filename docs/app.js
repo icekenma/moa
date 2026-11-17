@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.0957";
+const UI_VERSION = "261117.1006";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -242,6 +242,11 @@ pages.home = {
         ${dayBars(L)}
       </section>
       <div class="btns"><button class="btn dark" data-add="out">지출 기록</button><button class="btn" data-add="in">수입 기록</button></div>
+      ${d.account && d.account.configured ? `<a class="card" href="#invest/account" style="text-decoration:none;color:inherit">
+        <div class="card-head"><h2>내 키움 계좌</h2><span class="tiny live-dot ${d.account.ok ? "on" : ""}">${d.account.ok ? "실시간" : "연결 확인 필요"}</span></div>
+        ${d.account.total != null ? `<div class="big">${won(d.account.total)}원</div>
+          <div class="small muted"><b class="${tone(d.account.pnl)}">평가손익 ${signed(d.account.pnl)}원 (${pct(d.account.pnl_pct, 2)})</b> · 예수금 ${won(d.account.cash)}원</div>`
+          : `<div class="small muted">${esc(d.account.error || "")}</div>`}</a>` : ""}
       <a class="card" href="#assets" style="text-decoration:none;color:inherit">
         <div class="card-head"><h2>순자산</h2><span class="tiny">자세히</span></div>
         ${A.groups.length ? `<div class="big">${won(A.net)}원</div>
@@ -425,7 +430,7 @@ pages.assets = {
       ${d.groups.map((g) => `<div class="sec-title">${esc(g.label)} · ${g.type === "debt" ? "-" : ""}${won(g.total)}원</div>
         <section class="card tight"><div class="list">${g.items.map((a) => `<button type="button" class="item" data-edit="${a.id}">
           <span class="ico ${a.linked ? "y" : ""}">${esc(g.label.slice(0, 2))}</span>
-          <span class="main"><b>${esc(a.name)}</b><span class="sub">${a.linked ? (a.linked === "scalp" ? "단타 계좌와 연결" : "장기 계좌와 연결") : esc(a.note || "직접 입력")}${a.sync_error ? " · 연결 실패" : ""}</span></span>
+          <span class="main"><b>${esc(a.name)}</b><span class="sub">${a.linked ? ({ scalp: "단타 계좌와 연결", dca: "장기 계좌와 연결", kiwoom: "내 키움 계좌와 연결" }[a.linked]) : esc(a.note || "직접 입력")}${a.sync_error ? " · 연결 실패" : ""}</span></span>
           <span class="end"><b>${g.type === "debt" ? "-" : ""}${won(a.balance)}</b></span></button>`).join("")}</div></section>`).join("")
         || `<section class="card"><div class="empty">통장, 예적금, 연금, 대출을 등록하면<br>순자산을 계산해요</div></section>`}
       <section class="card">
@@ -451,7 +456,8 @@ pages.assets = {
       <label class="field">종류<select id="aType">${Object.entries(d.types).map(([k, v]) => `<option value="${k}" ${e?.type === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
       <label class="field">매매 계좌와 연결<select id="aLink"><option value="">연결 안 함(잔액 직접 입력)</option>
         <option value="scalp" ${e?.linked === "scalp" ? "selected" : ""}>단타 계좌 평가금 자동 반영</option>
-        <option value="dca" ${e?.linked === "dca" ? "selected" : ""}>장기투자 계좌 평가금 자동 반영</option></select></label>
+        <option value="dca" ${e?.linked === "dca" ? "selected" : ""}>장기투자 계좌 평가금 자동 반영</option>
+        <option value="kiwoom" ${e?.linked === "kiwoom" ? "selected" : ""}>내 키움 계좌 총자산 자동 반영</option></select></label>
       <label class="field" id="aBalWrap">잔액<input id="aBal" class="r" inputmode="numeric" value="${e ? won(e.balance) : ""}" placeholder="0원"></label>
       <label class="field">메모<input id="aNote" value="${esc(e?.note || "")}" placeholder="예: 2027년 3월 만기"></label>
       <button class="btn dark wide" id="aSave">${e ? "고친 내용 저장" : "저장"}</button>
@@ -476,16 +482,16 @@ pages.assets = {
 // =====================================================================
 // 투자: 매매 / 단타 / 적립 (+ 백테스트, 매매 규칙)
 // =====================================================================
-const investState = { tab: "scalp" };
+const investState = { tab: "account" };
 pages.invest = {
   every: 2500,
   async mount(h) {
     const sub = h.sub || investState.tab;
     if (sub === "backtest") return this.backtest();
     if (sub === "rules") return this.rules();
-    investState.tab = ["trade", "scalp", "dca"].includes(sub) ? sub : "scalp";
+    investState.tab = ["account", "trade", "scalp", "dca"].includes(sub) ? sub : "account";
     setTop("투자");
-    view.innerHTML = `<div class="sticky-seg">${seg("투자 화면", [["trade", "매매"], ["scalp", "단타 자동"], ["dca", "적립식"]], investState.tab)}</div><div id="iv" style="display:flex;flex-direction:column;gap:12px"></div>`;
+    view.innerHTML = `<div class="sticky-seg">${seg("투자 화면", [["account", "내 계좌"], ["trade", "매매"], ["scalp", "단타"], ["dca", "적립"]], investState.tab)}</div><div id="iv" style="display:flex;flex-direction:column;gap:12px"></div>`;
     bindSeg(view, "투자 화면", (v) => { history.replaceState(null, "", "#invest/" + v); investState.tab = v; this.mount({ sub: v }); });
     await this.fill();
   },
@@ -496,9 +502,51 @@ pages.invest = {
   async fill() {
     const box = $("#iv");
     if (!box) return;
+    if (investState.tab === "account") return this.account(box);
     if (investState.tab === "trade") return this.trade(box);
     if (investState.tab === "scalp") return this.scalp(box);
     return this.dca(box);
+  },
+
+  // ---------- 내 계좌(조회 전용) ----------
+  async account(box) {
+    const d = await GET("/api/myaccount");
+    if (investState.tab !== "account") return;
+    $(".fab")?.remove();
+    if (!d.configured) {
+      box.innerHTML = `<section class="card">
+        <h2>키움 계좌를 연결하면 보유액이 여기 보여요</h2>
+        <div class="small muted" style="line-height:1.7">조회 전용 연결이라 이 키로는 주문이 나가지 않아요.<br>
+          1. 키움 REST API 홈페이지에서 앱키·시크릿키를 받아요(노트북 IP 등록 필요)<br>
+          2. 설정 → 내 계좌 연결에 넣고 연결 확인을 눌러요</div>
+        <a class="btn dark" href="#settings">설정으로 가기</a></section>`;
+      return;
+    }
+    const err = d.error ? `<div class="notice warn">${esc(d.error)}${/8010/.test(d.error) ? "<br>노트북 인터넷 주소(IP)가 바뀐 것 같아요. 키움 REST API 홈페이지 → 계좌 App Key 관리에서 현재 IP를 추가해 주세요." : ""}</div>` : "";
+    if (d.total == null) { box.innerHTML = err || `<div class="empty">불러오는 중</div>`; return; }
+    const H = d.holdings || [];
+    const mixTotal = H.reduce((s2, h) => s2 + h.value, 0) + (d.cash || 0);
+    const colors = ["#172033", "#465269", "#7E8AA3", "#AFB8C9", "#D3D9E4"];
+    const live = d.ok !== false;
+    box.innerHTML = `
+      ${err}
+      <section class="card">
+        <div class="card-head"><span class="tiny">키움 ${esc(d.server)} 계좌 · 조회 전용</span>
+          <span class="tiny live-dot ${live ? "on" : ""}">${live ? "실시간" : "연결 끊김"} · ${esc((d.updated_at || "").slice(11, 19))}</span></div>
+        <div><div class="small muted" style="font-weight:700">총자산(추정예탁자산)</div><div class="big">${won(d.total)}원</div></div>
+        <div class="small ${tone(d.pnl)}" style="font-weight:700">평가손익 ${signed(d.pnl)}원 (${pct(d.pnl_pct, 2)})</div>
+        <div class="kv"><div>주식 평가<b>${won(d.eval)}</b></div><div>예수금<b>${won(d.cash)}</b></div><div>주문 가능<b>${won(d.orderable)}</b></div></div>
+        ${mixTotal ? `<div class="mix" role="img" aria-label="보유 비중">${H.slice(0, 5).map((h, i) => `<div style="flex:${h.value} 1 0;background:${colors[i]}"></div>`).join("")}${H.length > 5 ? `<div style="flex:${H.slice(5).reduce((a, h) => a + h.value, 0)} 1 0;background:#E3E7F0"></div>` : ""}<div style="flex:${d.cash || 0} 1 0;background:var(--hl)"></div></div>
+          <div class="legend tiny">${H.slice(0, 5).map((h, i) => `<span><i class="sw" style="background:${colors[i]}"></i>${esc(h.name)} ${Math.round((h.value / mixTotal) * 100)}%</span>`).join("")}<span><i class="sw" style="background:var(--hl)"></i>예수금 ${Math.round(((d.cash || 0) / mixTotal) * 100)}%</span></div>` : ""}
+      </section>
+      <div class="sec-title">보유 종목 ${H.length}개</div>
+      <section class="card tight"><div class="list">${H.length ? H.map((h) => `<div class="item">
+        <span class="ico">${esc(h.name.slice(0, 2))}</span>
+        <span class="main"><b>${esc(h.name)} <span class="tiny">${esc(h.code)}</span></b>
+          <span class="sub">${won(h.qty)}주 · 평균 ${won(h.avg_price)} · 현재 ${won(h.price)}</span></span>
+        <span class="end"><b>${won(h.value)}</b><span class="small ${tone(h.pnl)}" style="font-weight:700">${signed(h.pnl)} (${pct(h.pnl_pct, 2)})</span></span></div>`).join("")
+        : `<div class="empty">보유 종목이 없어요</div>`}</div></section>
+      <div class="tiny" style="padding:0 4px">몇 초마다 키움에서 새로 받아요. 자산 탭에서 이 계좌를 연결하면 순자산에도 자동으로 들어가요.</div>`;
   },
 
   // ---------- 매매 ----------
@@ -864,6 +912,13 @@ pages.settings = {
         <div class="tiny">가상 시세는 장 시간이 아니어도 시험할 수 있게 빠르게 흐르는 무작위 가격이에요. 실제 검증은 <b>키움 시세 + 앱 내 모의</b>로 하세요.</div>
         <label class="field">가상 시세 속도(1분 = 몇 초)<input class="r" id="demoSpeed" inputmode="decimal" value="${s.demo_speed}"></label>
       </section>
+      <details class="card" ${s.kiwoom_view.appkey ? "" : "open"}><summary>내 계좌 연결(조회 전용) <span class="tiny" style="margin-left:auto;margin-right:12px">${s.kiwoom_view.appkey ? (s.kiwoom_view.mock ? "모의투자" : "실전") : "연결 안 됨"}</span></summary>
+        <div class="small muted">보유액·예수금·종목을 보기만 해요. 이 키로는 주문 기능이 아예 꺼져 있어요.</div>
+        <label class="field">앱키<input data-kv="appkey" value="${esc(s.kiwoom_view.appkey)}" autocomplete="off" autocapitalize="off"></label>
+        <label class="field">시크릿키<input data-kv="secretkey" type="password" value="${esc(s.kiwoom_view.secretkey)}" autocomplete="off"></label>
+        <label class="check"><input type="checkbox" data-kv="mock" ${s.kiwoom_view.mock ? "checked" : ""}> 모의투자 계좌 키예요</label>
+        <button class="btn sm" id="kvTest">저장하고 연결 확인</button>
+      </details>
       ${acct("scalp", "단타 계좌")}
       ${acct("dca", "장기투자 계좌")}
       <details class="card"><summary>거래 비용</summary>
@@ -886,11 +941,12 @@ pages.settings = {
       const kiwoom = { scalp: {}, dca: {} };
       $$("[data-kw]").forEach((i) => { kiwoom[i.dataset.kw][i.dataset.k] = i.type === "checkbox" ? i.checked : i.value.trim(); });
       const real = {}; $$("[data-real]").forEach((i) => (real[i.dataset.real] = i.checked));
+      const kv = {}; $$("[data-kv]").forEach((i) => (kv[i.dataset.kv] = i.type === "checkbox" ? i.checked : i.value.trim()));
       const cash = {}; $$("[data-cash]").forEach((i) => (cash[i.dataset.cash] = num(i.value)));
       const out = {
         data_source: segVal(view, "시세 출처"), demo_speed: num($("#demoSpeed").value) || 2,
         trade_mode: { scalp: segVal(view, "단타 계좌 주문 방식"), dca: segVal(view, "장기투자 계좌 주문 방식") },
-        kiwoom, real_orders_allowed: real, paper_start_cash: cash,
+        kiwoom, kiwoom_view: kv, real_orders_allowed: real, paper_start_cash: cash,
         costs: { commission: num($("#cCom").value) / 100, tax: num($("#cTax").value) / 100, slippage_ticks: num($("#cSlip").value) },
         dca_window: { start: $("#dwS").value.trim(), end: $("#dwE").value.trim() },
         holidays: $("#hol").value.split(/\s+/).filter((x) => /^\d{4}-\d\d-\d\d$/.test(x)),
@@ -942,6 +998,11 @@ pages.settings = {
       });
     };
     bindUp();
+    $("#kvTest").onclick = async () => {
+      await run(() => api("PUT", "/api/settings", collect()));
+      const r = await run(() => api("POST", "/api/myaccount/test"));
+      toast(`${r.server} 계좌 연결 성공. 총자산 ${won(r.total)}원, 보유 ${r.holdings.length}종목`);
+    };
     $("#saveSet").onclick = async () => { const r = await run(() => api("PUT", "/api/settings", collect()), "설정을 저장했어요"); errs(r.errors); };
     view.onclick = async (e) => {
       const t = e.target.closest("[data-test]"), rs = e.target.closest("[data-reset]");

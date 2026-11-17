@@ -298,3 +298,62 @@ def test_updater_pulls_new_version(rt, tmp_path):
     _t.sleep(1.3)
     assert ok and (laptop / "a.txt").read_text() == "v2" and exits == [1]
     assert (laptop / "data" / "moa.db").read_text() == "keep"
+
+
+class _Resp:
+    def __init__(self, data, headers=None):
+        import json as _j
+        self._d, self.status_code, self.headers = data, 200, headers or {}
+        self.content = _j.dumps(data).encode()
+
+    def json(self):
+        return self._d
+
+
+class _FakeKiwoom:
+    """키움 서버 흉내: 토큰, kt00018(2페이지), kt00001. 주문 api-id가 오면 기록."""
+    def __init__(self):
+        self.calls = []
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        if url.endswith("/oauth2/token"):
+            return _Resp({"token": "T", "expires_dt": "20991231235959", "return_code": 0})
+        api = headers["api-id"]
+        self.calls.append(api)
+        if api == "kt00018":
+            if headers.get("next-key") == "P2":
+                return _Resp({"return_code": 0, "acnt_evlt_remn_indv_tot": [
+                    {"stk_cd": "A000660", "stk_nm": "SK하이닉스", "rmnd_qty": "000000000002", "trde_able_qty": "2",
+                     "pur_pric": "200000", "cur_prc": "-198000", "pur_amt": "400000", "evlt_amt": "396000",
+                     "evltv_prft": "-4000", "prft_rt": "-1.00"}]}, {"cont-yn": "N"})
+            return _Resp({"return_code": 0, "tot_pur_amt": "1170000", "tot_evlt_amt": "1166000",
+                          "tot_evlt_pl": "-4,000", "tot_prft_rt": "-0.34", "prsm_dpst_aset_amt": "6166000",
+                          "acnt_evlt_remn_indv_tot": [
+                              {"stk_cd": "A005930", "stk_nm": "삼성전자", "rmnd_qty": "10", "trde_able_qty": "10",
+                               "pur_pric": "77000", "cur_prc": "+77000", "pur_amt": "770000", "evlt_amt": "770000",
+                               "evltv_prft": "0", "prft_rt": "0.00"}]}, {"cont-yn": "Y", "next-key": "P2"})
+        if api == "kt00001":
+            return _Resp({"return_code": 0, "entr": "5000000", "d2_entra": "5000000", "ord_alow_amt": "4900000"})
+        return _Resp({"return_code": 0, "ord_no": "1"})
+
+
+def test_myaccount_read_only(rt):
+    from moa.broker.kiwoom import KiwoomError
+    rt.settings.update({"kiwoom_view": {"appkey": "k", "secretkey": "s", "mock": False}})
+    fake = _FakeKiwoom()
+    cl = rt.account.client()
+    cl.session = fake
+    snap = rt.account.snapshot(force=True)
+    assert snap["ok"] and snap["server"] == "실전"
+    assert snap["total"] == 6166000 and snap["pnl"] == -4000 and snap["cash"] == 5000000
+    assert [h["code"] for h in snap["holdings"]] == ["005930", "000660"]  # 2페이지까지, 평가금 순
+    assert snap["holdings"][1]["pnl_pct"] == -1.0 and snap["holdings"][1]["price"] == 198000
+    with pytest.raises(KiwoomError):
+        cl.order("buy", "005930", 1)
+    assert not any(a.startswith("kt100") for a in fake.calls)  # 주문 요청이 한 번도 안 나감
+    # 자산 탭 연결
+    c = create_app(rt).test_client()
+    c.post("/api/accounts", json={"name": "키움 계좌", "type": "stock", "linked": "kiwoom"})
+    assert c.get("/api/assets").get_json()["net"] == 6166000
+    assert c.get("/api/myaccount").get_json()["total"] == 6166000
+    assert c.get("/api/settings").get_json()["kiwoom_view"]["secretkey"] == "********"

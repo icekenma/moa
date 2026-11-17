@@ -10,6 +10,7 @@ from .broker.brokers import KiwoomBroker, PaperBroker
 from .broker.demo import DemoFeed
 from .broker.kiwoom import KiwoomClient, KiwoomFeed
 from .ledger import Ledger
+from .myaccount import AccountView
 from .settings import Settings
 from .trading.dca import DcaEngine
 from .trading.scalp import ScalpEngine
@@ -20,6 +21,7 @@ class Runtime:
         self.db = db
         self.settings = Settings(db)
         self.ledger = Ledger(db)
+        self.account = AccountView(self.settings)
         self.assets = Assets(db, self.value_of)
         self.feed = None
         self.brokers = {}
@@ -77,6 +79,8 @@ class Runtime:
             self.brokers = brokers
 
     def value_of(self, engine):
+        if engine == "kiwoom":
+            return self.account.total()
         b = self.brokers.get(engine)
         if b is None:
             raise RuntimeError(self.errors.get(engine) or "계좌가 준비되지 않았어요")

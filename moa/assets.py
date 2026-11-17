@@ -18,7 +18,7 @@ class Assets:
         rows = self.db.q("SELECT * FROM accounts ORDER BY sort, id")
         for r in rows:
             r["type_label"] = TYPES.get(r["type"], r["type"])
-            if r["linked"] in ("scalp", "dca"):
+            if r["linked"] in ("scalp", "dca", "kiwoom"):
                 try:
                     r["balance"] = int(self.value_of_engine(r["linked"]))
                     r["synced"] = True
@@ -38,7 +38,7 @@ class Assets:
         except ValueError:
             raise AssetError("잔액은 숫자로 넣어 주세요")
         bal = abs(bal)
-        linked = d.get("linked") if d.get("linked") in ("scalp", "dca") else None
+        linked = d.get("linked") if d.get("linked") in ("scalp", "dca", "kiwoom") else None
         note = (d.get("note") or "").strip()[:60]
         if d.get("id"):
             self.db.x("UPDATE accounts SET name=?,type=?,balance=?,note=?,linked=? WHERE id=?",

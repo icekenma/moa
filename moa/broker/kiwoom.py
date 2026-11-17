@@ -26,6 +26,25 @@ class KiwoomError(RuntimeError):
     pass
 
 
+def snum(v):
+    """부호를 살린 숫자. '-1,234' -> -1234.0"""
+    if v is None:
+        return 0.0
+    t = str(v).replace(",", "").strip()
+    if not t:
+        return 0.0
+    try:
+        return float(t)
+    except ValueError:
+        return 0.0
+
+
+def code6(v):
+    """'A005930' 같은 접두어를 떼고 6자리 코드만."""
+    d = "".join(ch for ch in str(v) if ch.isalnum())
+    return d[-6:] if len(d) > 6 else d
+
+
 def num(v):
     """'+70100', '-1,234', '' 같은 값을 숫자로."""
     if v is None:
@@ -40,11 +59,13 @@ def num(v):
 
 
 class KiwoomClient:
-    def __init__(self, appkey, secretkey, mock=True, timeout=8):
+    def __init__(self, appkey, secretkey, mock=True, timeout=8, read_only=False):
         if not appkey or not secretkey:
             raise KiwoomError("키움 앱키와 시크릿키를 설정에서 넣어 주세요")
         self.appkey, self.secretkey, self.mock = appkey, secretkey, bool(mock)
         self.base = BASE[self.mock]
+        self.read_only = read_only  # True면 주문 함수가 아예 동작하지 않는다(조회 전용)
+        self.last_headers = {}
         self.timeout = timeout
         self._token, self._exp = None, 0.0
         self._lock = threading.Lock()
@@ -79,6 +100,7 @@ class KiwoomClient:
                 headers.update({"cont-yn": "Y", "next-key": cont_key})
             r = self.session.post(self.base + path, json=body, headers=headers, timeout=self.timeout)
             self._last = time.time()
+            self.last_headers = {k.lower(): v for k, v in getattr(r, "headers", {}).items()}
         data = r.json() if r.content else {}
         if r.status_code != 200 or str(data.get("return_code", "0")) not in ("0", ""):
             raise KiwoomError(f"{api_id} 실패: {data.get('return_msg') or r.status_code}")
@@ -109,22 +131,62 @@ class KiwoomClient:
 
     # ---- 계좌 ----
     def order(self, side, code, qty, price=None):
+        if self.read_only:
+            raise KiwoomError("조회 전용 연결이라 주문할 수 없어요")
         body = {"dmst_stex_tp": "KRX", "stk_cd": code, "ord_qty": str(int(qty)),
                 "ord_uv": "" if price is None else str(int(price)),
                 "trde_tp": "3" if price is None else "0", "cond_uv": ""}
         d = self.call(side, body)
         return d.get("ord_no", "")
 
+    def balance_pages(self, max_pages=10):
+        """kt00018 전체(연속조회 포함). 첫 페이지의 계좌 요약과 모든 종목 행을 돌려준다."""
+        first, rows, key = None, [], None
+        for _ in range(max_pages):
+            d = self.call("balance", {"qry_tp": "1", "dmst_stex_tp": "KRX"}, cont_key=key)
+            first = first or d
+            rows += d.get("acnt_evlt_remn_indv_tot") or []
+            if self.last_headers.get("cont-yn") != "Y" or not self.last_headers.get("next-key"):
+                break
+            key = self.last_headers["next-key"]
+        return first or {}, rows
+
     def holdings(self):
-        d = self.call("balance", {"qry_tp": "1", "dmst_stex_tp": "KRX"})
+        _, rows = self.balance_pages()
         out = []
-        for r in d.get("acnt_evlt_remn_indv_tot") or []:
+        for r in rows:
             qty = int(num(r.get("rmnd_qty")))
             if qty <= 0:
                 continue
-            out.append({"code": str(r.get("stk_cd", "")).lstrip("A"), "name": r.get("stk_nm", ""),
+            out.append({"code": code6(r.get("stk_cd", "")), "name": r.get("stk_nm", ""),
                         "qty": qty, "avg_price": num(r.get("pur_pric")), "price": num(r.get("cur_prc"))})
         return out
+
+    def account_summary(self):
+        """계좌 전체 요약 + 종목별 상세(조회만)."""
+        top, rows = self.balance_pages()
+        dep = self.call("deposit", {"qry_tp": "3"})
+        items = []
+        for r in rows:
+            qty = int(num(r.get("rmnd_qty")))
+            if qty <= 0:
+                continue
+            items.append({
+                "code": code6(r.get("stk_cd", "")), "name": r.get("stk_nm", ""), "qty": qty,
+                "sellable": int(num(r.get("trde_able_qty"))),
+                "avg_price": num(r.get("pur_pric")), "price": num(r.get("cur_prc")),
+                "buy_amt": num(r.get("pur_amt")), "value": num(r.get("evlt_amt")),
+                "pnl": snum(r.get("evltv_prft")), "pnl_pct": snum(r.get("prft_rt")),
+            })
+        items.sort(key=lambda x: -x["value"])
+        cash = num(dep.get("entr"))
+        return {
+            "total": num(top.get("prsm_dpst_aset_amt")) or (num(top.get("tot_evlt_amt")) + cash),
+            "eval": num(top.get("tot_evlt_amt")), "buy": num(top.get("tot_pur_amt")),
+            "pnl": snum(top.get("tot_evlt_pl")), "pnl_pct": snum(top.get("tot_prft_rt")),
+            "cash": cash, "cash_d2": num(dep.get("d2_entra")), "orderable": num(dep.get("ord_alow_amt")),
+            "holdings": items,
+        }
 
     def cash(self):
         d = self.call("deposit", {"qry_tp": "3"})

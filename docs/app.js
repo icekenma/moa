@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.0622";
+const UI_VERSION = "261118.0636";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -3329,8 +3329,17 @@ function showUpdateDialog(u) {
   $("#updOk").onclick = async () => {
     $("#updOk").disabled = true; $("#updOk").textContent = "반영하는 중";
     if (u.kind === "ui") {
-      try { const reg = await navigator.serviceWorker?.getRegistration(); await reg?.update(); } catch (e) { /* 무시 */ }
-      location.reload();
+      // 새 서비스워커가 자리 잡은 뒤에 넘어간다(도중에 새로 고치면 아이폰에서 빈 화면이 될 수 있음)
+      try {
+        const reg = await navigator.serviceWorker?.getRegistration();
+        if (reg) {
+          await Promise.race([reg.update(), new Promise((r) => setTimeout(r, 4000))]);
+          const w = reg.installing || reg.waiting;
+          if (w) await Promise.race([new Promise((r) => { w.addEventListener("statechange", () => { if (w.state === "activated" || w.state === "redundant") r(); }); }), new Promise((r) => setTimeout(r, 5000))]);
+        }
+      } catch (e) { /* 무시 */ }
+      await new Promise((r) => setTimeout(r, 300));
+      location.replace(`${location.pathname}?u=${Date.now()}${location.hash}`);
     } else {
       upd.server = u.build;
       dlg.close(); upd.shown = false; route();
@@ -3348,3 +3357,6 @@ if ("serviceWorker" in navigator && location.protocol === "https:") {
 }
 if (ON_PAGES && !store.get("server") && !location.hash.startsWith("#connect")) location.hash = "#connect";
 route();
+window.__moaReady = true;
+try { sessionStorage.removeItem("moa.retry"); } catch (e) { /* 무시 */ }
+if (/[?&]u=\d+/.test(location.search)) history.replaceState(null, "", location.pathname + location.hash);  // 주소의 임시 꼬리표 지우기

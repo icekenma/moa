@@ -1450,3 +1450,6 @@ html.dark-theme .mk-svg .ln{filter:drop-shadow(0 0 6px rgba(255,84,112,.55))}
 @keyframes tickDn{0%{transform:translateY(-160%);opacity:0}25%{opacity:1}100%{transform:translateY(90%);opacity:0}}
 @media (prefers-reduced-motion:reduce){.lv-ring,.arr,.fl-up::after,.fl-dn::after{animation:none!important}.fl-up::after,.fl-dn::after{display:none}}
 html.dark-theme .hl{-webkit-background-clip:text!important;background-clip:text!important;-webkit-text-fill-color:transparent}
+
+.ap-statbtn{width:100%;min-height:38px;text-decoration:none;font-weight:800;background:rgba(255,255,255,.12)!important;border:1px solid rgba(255,255,255,.2)!important;color:#fff!important;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+.ih-quick{grid-template-columns:repeat(4,1fr)}.ih-quick .btn{padding:0 4px;font-size:11px}

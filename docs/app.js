@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2341";
+const UI_VERSION = "261117.2342";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1243,7 +1243,7 @@ pages.invest = {
       ${(d.alerts || []).length ? `<div class="sec-title">가격 알림 ${d.alerts.length}</div><section class="card tight"><div class="list">${d.alerts.slice(0, 5).map((x) => `<a class="item" href="#invest/stock?m=${x.mkt}&s=${encodeURIComponent(x.sym)}">
           <span class="ico y">${x.cond === "above" ? "이상" : "이하"}</span><span class="main"><b>${esc(x.name)}</b><span class="sub">${x.mkt === "us" ? usd(x.price) : won(x.price) + "원"} 닿으면 알림</span></span></a>`).join("")}</div></section>` : ""}
       <div class="ih-quick">
-        <a class="btn" href="#invest/discover">실시간 순위</a><a class="btn" href="#invest/market">관심종목</a><button type="button" class="btn" id="ihFind">종목 검색</button></div>
+        <a class="btn" href="#invest/aistat">AI 성적</a><a class="btn" href="#invest/discover">실시간 순위</a><a class="btn" href="#invest/market">관심종목</a><button type="button" class="btn" id="ihFind">종목 검색</button></div>
       ${a && a.total != null ? AI_BTN("portfolio", "AI 포트폴리오 점검") : ""}
       <a class="tiny" href="#invest/account" style="padding:0 3px">계좌 자세히 보기 ›</a>`;
     bindSeg(box, "정렬", (v) => { S.sort = v; this.homeRender(box, d); });
@@ -1262,7 +1262,9 @@ pages.invest = {
           <div class="ap-h2">누르는 순간의 실시간 순위·분봉 흐름·호가·뉴스를 Claude가 보고 최대 3종목을 골라요. 매수는 직접 고르고, 산 뒤에는 AI가 정한 값으로 자동 익절·손절해요.</div>
           ${seg("AI시장", [["kr", "국내장"], ["us", "미국장"]], A.m, "ap-mkt")}
           <div class="ap-sess" id="apSess"></div>
+          <a class="btn ap-statbtn" href="#invest/aistat">📊 AI 추천 전체 성적 · 자체 학습 보기 ›</a>
         </section>
+        <a class="card ap-score" id="apScore" href="#invest/aistat"><div class="empty small loading">추천 성적 불러오는 중</div></a>
         <section class="card"><div class="card-head"><h2>추천 엔진</h2><span class="tiny" id="apFx"></span></div>
           <div class="ap-models" id="apModels"><div class="empty small loading">불러오는 중</div></div>
           <label class="ap-web"><input type="checkbox" id="apWeb" ${A.web ? "checked" : ""}><span><b>오늘 뉴스·공시 확인</b><small>웹 검색 최대 3회 · 재료 확인으로 정확도↑ · 비용↑</small></span></label>
@@ -1271,7 +1273,6 @@ pages.invest = {
           <div class="tiny" id="apWarn"></div>
         </section>
         <div id="apOut"></div>
-        <a class="card ap-score" id="apScore" href="#invest/aistat"><div class="empty small loading">추천 성적 불러오는 중</div></a>
         <div id="apGuards"></div>
         <div id="apHist"></div>
         <div class="tiny" style="padding:0 3px 6px">AI 추천은 실시간 자료로 낸 추정이라 틀릴 수 있어요. 승률은 AI가 매긴 추정치예요. 매수 여부는 직접 결정하고, 자동 매도는 켜 둔 종목만 정해진 값으로 실행돼요.</div>

@@ -42,6 +42,8 @@ DEFAULTS = {
     "allowed_origins": ["https://icekenma.github.io"],
     "public_url": "",
     "auto_update": True,
+    # 문자·알림톡 자동 기록: 카드 승인은 바로 넣고, 입금·출금은 확인 후 넣는 것이 기본
+    "inbox_auto": {"card": True, "income": False, "outflow": False},
     # 내 계좌 보기(조회 전용): 주문은 절대 나가지 않는다
     "kiwoom_view": {"appkey": "", "secretkey": "", "mock": False},            # GitHub에 새 버전이 올라오면 노트북 서버가 알아서 받아 다시 시작
 }

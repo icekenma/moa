@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1036";
+const UI_VERSION = "261117.1040";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -167,7 +167,7 @@ function pnlBars(values, labels, h = 96) {
 // ---------- 메뉴(1뎁스 탭 → 2뎁스) ----------
 const MENU = {
   home: { title: "홈", subs: [["summary", "요약"], ["activity", "최근 활동"]] },
-  ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["analysis", "분석"], ["budget", "예산"]] },
+  ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["analysis", "분석"], ["budget", "예산"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
   invest: { title: "투자", subs: [["account", "내 계좌"], ["trade", "매매"], ["scalp", "단타"], ["dca", "적립"]], extra: { backtest: "scalp", rules: "scalp" } },
   settings: { title: "설정", subs: [["connect", "연결"], ["kiwoom", "키움"], ["trading", "매매"], ["theme", "색상"], ["app", "앱 정보"]] },
@@ -455,6 +455,7 @@ pages.ledger = {
     catCache = d.categories;
     this.d = d;
     const addFab = () => fab("기록", () => txSheet({ kind: S.kind === "in" ? "in" : "out", date: S.month === thisMonth() ? localToday() : S.month + "-01" }, (b) => { if (b && b.date.slice(0, 7) !== S.month) S.month = b.date.slice(0, 7); route(); }));
+    if (h.sub === "auto") return this.auto();
     if (h.sub === "calendar") { this.calendar(d); addFab(); }
     else if (h.sub === "analysis") await this.analysis(d);
     else if (h.sub === "budget") this.budget(d);
@@ -541,6 +542,87 @@ pages.ledger = {
         <div class="list">${top5.length ? top5.map((t) => txItem(t, false)).join("") : `<div class="empty">이 달 지출이 없어요</div>`}</div>
       </section>`;
     view.onclick = null;
+  },
+  async auto() {
+    const d = await GET("/api/inbox");
+    const cats = (catCache || []).filter((c) => c.kind === "out");
+    const label = { spend: "카드 결제", cancel: "결제 취소", income: "입금", outflow: "출금" };
+    const st = { added: ["기록됨", "g"], pending: ["확인 필요", "warn"], ignored: ["무시함", ""] };
+    const serverUrl = (ON_PAGES ? store.get("server") : location.origin).replace(/\/+$/, "");
+    let token = store.get("token");
+    if (!token && !ON_PAGES) token = (await GET("/api/connect-info").catch(() => ({}))).token || "";
+    const item = (x) => `<button type="button" class="item" data-inbox="${x.id}">
+      <span class="ico ${x.status === "pending" ? "warn" : x.kind === "card" ? "" : "y"}">${esc((x.issuer || (x.kind === "card" ? "카드" : "은행")).slice(0, 2))}</span>
+      <span class="main"><b>${esc(x.merchant || label[x.action])}</b><span class="sub">${esc(label[x.action])} · ${esc(x.date.slice(5).replace("-", "."))} ${esc(x.time || "")}${x.note ? " · " + esc(x.note) : ""}</span></span>
+      <span class="end"><b class="${x.action === "income" || x.action === "cancel" ? "inc" : ""}">${x.action === "income" || x.action === "cancel" ? "+" : "-"}${won(x.amount)}</b><span class="tag ${st[x.status][1]}">${st[x.status][0]}</span></span></button>`;
+    const pend = d.items.filter((x) => x.status === "pending"), rest = d.items.filter((x) => x.status !== "pending");
+    view.innerHTML = `
+      <section class="card">
+        <h2>문자·카톡 자동 기록</h2>
+        <div class="small muted">카드 승인·취소, 은행 입출금 알림을 읽어 가계부에 넣고, 잔액이 오면 자산 계좌도 맞춰요. 금융 알림이 아닌 메시지는 저장하지 않아요.</div>
+        <div class="kv"><div>확인 필요<b class="${d.pending ? "up" : ""}">${d.pending}건</b></div><div>자동 기록<b>${d.added}건</b></div><div>무시<b>${d.ignored}건</b></div></div>
+      </section>
+      ${pend.length ? `<div class="sec-title">확인 필요 · 눌러서 넣거나 무시해요</div><section class="card tight"><div class="list">${pend.map(item).join("")}</div></section>` : ""}
+      <div class="sec-title">최근 처리</div>
+      <section class="card tight"><div class="list">${rest.length ? rest.slice(0, 30).map(item).join("") : `<div class="empty">아직 받은 알림이 없어요. 아래에서 단축어를 설정하거나 지난 알림을 가져와 보세요</div>`}</div></section>
+      <section class="card"><h2>바로 넣을 알림</h2>
+        ${[["card", "카드 승인·취소", "결제하자마자 지출로 기록"], ["income", "입금", "월급·이체 받은 돈. 내 계좌끼리 옮긴 돈도 있어 기본은 확인 후 기록"], ["outflow", "출금", "카드값 자동이체와 겹칠 수 있어 기본은 확인 후 기록"]].map(([k, t, desc]) => `
+          <div class="card-head" style="min-height:52px"><div><b style="font-size:15px">${t}</b><div class="tiny">${desc}</div></div>
+          <button class="switch" role="switch" data-auto="${k}" aria-checked="${!!d.auto[k]}" aria-label="${t} 바로 기록"><span></span></button></div>`).join("")}
+      </section>
+      <section class="card"><h2>지난 알림 가져오기</h2>
+        <div class="small muted">카카오톡 카드사·은행 알림 대화방의 <b>대화 내용 내보내기</b> 파일이나, 복사한 문자들을 넣으면 한꺼번에 기록해요. 이미 들어온 알림은 다시 넣지 않아요.</div>
+        <label class="field">카톡 내보내기 파일(.txt)<input type="file" id="ibFile" accept=".txt,text/plain" style="padding:12px"></label>
+        <label class="field">또는 문자 붙여넣기(메시지 사이는 빈 줄)<textarea id="ibText" rows="5" placeholder="[Web발신]&#10;신한카드(1234)승인&#10;12,000원 일시불&#10;11/17 12:30 스타벅스"></textarea></label>
+        <button class="btn dark wide" id="ibImport">분석해서 가져오기</button>
+      </section>
+      <details class="card"><summary>아이폰 단축어로 문자 자동 보내기</summary>
+        <div class="small" style="line-height:1.75">
+          <b>1.</b> 단축어 앱 → 아래 <b>자동화</b> → 오른쪽 위 <b>＋</b> → <b>메시지</b><br>
+          <b>2.</b> <b>메시지에 다음이 포함됨</b>에 <span class="code" style="padding:1px 6px">원</span> 입력(보낸 사람은 비워 두기)<br>
+          <b>3.</b> <b>즉시 실행</b> 선택(실행 전 확인 끄기) → 다음 → <b>새로운 빈 단축어</b><br>
+          <b>4.</b> 동작 추가: <b>URL 콘텐츠 가져오기</b><br>
+          &nbsp;&nbsp;· URL: 아래 주소 · 방법: <b>POST</b><br>
+          &nbsp;&nbsp;· 헤더: <b>Authorization</b> = 아래 값<br>
+          &nbsp;&nbsp;· 본문 요청: <b>JSON</b>, 키 <b>text</b>, 값은 변수 <b>단축어 입력</b>(메시지 내용)<br>
+          <b>5.</b> 완료. 이제 카드 문자가 오면 몇 초 안에 가계부에 들어가요.</div>
+        <div class="field">URL<div class="code">${esc(serverUrl)}/api/inbox</div></div>
+        <div class="field">Authorization 값<div class="code">Bearer ${esc(token || "(설정 → 연결의 접속 토큰)")}</div></div>
+        <div class="tiny">휴대폰 Tailscale이 켜져 있어야 보내져요. 메뉴 이름은 iOS 버전에 따라 조금 다를 수 있어요. 카카오톡 알림톡은 아이폰에서 자동으로 읽을 수 없어서, 카드사 앱에서 승인 알림을 <b>문자(SMS)</b>로 받도록 바꾸면 자동 기록이 돼요.</div>
+      </details>`;
+    view.onclick = async (e) => {
+      const a = e.target.closest("[data-auto]"), it = e.target.closest("[data-inbox]");
+      if (a) {
+        const on = a.getAttribute("aria-checked") !== "true";
+        await run(() => api("PUT", "/api/inbox/auto", { [a.dataset.auto]: on }), on ? "바로 기록하게 했어요" : "확인 후 기록하게 했어요");
+        return this.auto();
+      }
+      if (e.target.id === "ibImport") {
+        const f = $("#ibFile").files[0];
+        let r;
+        if (f) { const fd = new FormData(); fd.append("file", f); r = await run(() => api("POST", "/api/inbox/import", fd, true)); }
+        else r = await run(() => api("POST", "/api/inbox/import", { text: $("#ibText").value }));
+        toast(`메시지 ${r.total}개 중 금융 알림 ${r.financial}개: 기록 ${r.added} · 확인 필요 ${r.pending} · 이미 있음 ${r.duplicate}`);
+        return this.auto();
+      }
+      if (it) {
+        const x = d.items.find((y) => y.id == it.dataset.inbox);
+        let cat = x.category || (x.action === "income" ? "" : "기타지출");
+        openSheet(label[x.action], `
+          <div class="big" style="font-size:26px">${x.action === "income" || x.action === "cancel" ? "+" : "-"}${won(x.amount)}원</div>
+          <div class="small muted">${esc(x.merchant || "")} · ${esc(x.date)} ${esc(x.time || "")} · ${esc(x.issuer || "")}</div>
+          <div class="code" style="white-space:pre-wrap;user-select:text">${esc(x.raw)}</div>
+          ${x.action === "spend" || x.action === "outflow" ? `<div class="field">분류<div class="chips">${cats.map((c) => `<button type="button" class="chip" data-c="${esc(c.name)}" aria-pressed="${c.name === cat}">${esc(c.name)}</button>`).join("")}</div></div>` : ""}
+          ${x.status === "added" ? `<div class="notice">이미 가계부에 들어갔어요. 고치려면 가계부 내역에서 눌러 주세요.</div>` : `<div class="btns"><button class="btn soft" id="ibIgnore">무시</button><button class="btn dark" id="ibApply">가계부에 넣기</button></div>`}`, (box) => {
+          box.onclick = async (ev) => {
+            const c = ev.target.closest("[data-c]");
+            if (c) { cat = c.dataset.c; $$("[data-c]", box).forEach((z) => z.setAttribute("aria-pressed", String(z === c))); }
+            if (ev.target.id === "ibApply") { await run(() => api("POST", `/api/inbox/${x.id}/apply`, { category: cat }), "가계부에 넣었어요"); closeSheet(); this.auto(); }
+            if (ev.target.id === "ibIgnore") { await run(() => api("POST", `/api/inbox/${x.id}/ignore`)); closeSheet(); this.auto(); }
+          };
+        });
+      }
+    };
   },
   budget(d) {
     const sum = d.summary;

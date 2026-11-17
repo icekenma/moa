@@ -393,3 +393,57 @@ def test_update_api_with_updater(rt, tmp_path):
     r = c.get("/api/update")
     assert r.status_code == 200 and r.get_json()["available"] is False and "version" in r.get_json()
     assert c.post("/api/update/check", json={}).status_code == 200
+
+
+SMS_SAMPLES = {
+    "shinhan": "[Web발신]\n신한카드(1234)승인\n안*석\n12,000원(일시불)\n11/17 12:30\n스타벅스 세종점\n누적1,234,567원",
+    "kb": "[Web발신]\nKB국민카드1234승인\n안*석님\n45,000원 일시불\n11/16 19:20\n이마트세종점\n누적567,000원",
+    "oneline": "현대카드 승인 안*석 8,900원 일시불 11/15 08:30 GS25 나성점 누적 100,000원",
+    "cancel": "[Web발신]\n신한카드(1234)승인취소\n안*석\n12,000원(일시불)\n11/17 12:40\n스타벅스 세종점",
+    "salary": "[Web발신]\n신한 11/10 09:00\n110-***-123456\n입금 3,900,000\n잔액 4,123,456\n인사혁신처",
+    "outflow": "[Web발신]\n신한 11/12 10:00\n110-***-123456\n출금 50,000\n잔액 4,073,456\n관리비",
+    "chat": "오늘 저녁에 치킨 먹을래? 2만원 정도면 될 듯",
+}
+
+
+def test_parse_sms_formats():
+    from moa.inbox import parse
+    now = datetime(2026, 11, 17, 13, 0)
+    a = parse(SMS_SAMPLES["shinhan"], now)
+    assert (a["kind"], a["action"], a["amount"], a["merchant"], a["issuer"], a["date"], a["category"]) == \
+        ("card", "spend", 12000, "스타벅스 세종점", "신한", "2026-11-17", "외식")
+    b = parse(SMS_SAMPLES["kb"], now)
+    assert b["amount"] == 45000 and b["merchant"] == "이마트세종점" and b["category"] == "식비" and b["issuer"] == "KB국민"
+    c = parse(SMS_SAMPLES["oneline"], now)
+    assert c["amount"] == 8900 and c["merchant"].startswith("GS25") and c["date"] == "2026-11-15"
+    assert parse(SMS_SAMPLES["cancel"], now)["action"] == "cancel"
+    s = parse(SMS_SAMPLES["salary"], now)
+    assert (s["kind"], s["action"], s["amount"], s["balance"], s["acct_tail"]) == ("bank", "income", 3900000, 4123456, "3456")
+    assert parse(SMS_SAMPLES["outflow"], now)["action"] == "outflow"
+    assert parse(SMS_SAMPLES["chat"], now) is None
+
+
+def test_inbox_flow(rt):
+    c = create_app(rt).test_client()
+    rt.assets.save({"name": "신한 월급통장", "type": "cash", "balance": 0, "note": "110-xxx-123456"})
+    r = c.post("/api/inbox", json={"text": SMS_SAMPLES["shinhan"]}).get_json()
+    assert r["financial"] and r["item"]["status"] == "added"
+    assert c.post("/api/inbox", json={"text": SMS_SAMPLES["shinhan"]}).get_json()["item"]["status"] == "duplicate"
+    assert c.post("/api/inbox", json={"text": SMS_SAMPLES["chat"]}).get_json()["financial"] is False
+    assert rt.db.one("SELECT COUNT(*) AS n FROM inbox")["n"] == 1  # 일반 대화는 저장 안 함
+    sal = c.post("/api/inbox", json={"text": SMS_SAMPLES["salary"]}).get_json()["item"]
+    assert sal["status"] == "pending" and "잔액" in sal["note"]
+    assert rt.db.one("SELECT balance FROM accounts WHERE name='신한 월급통장'")["balance"] == 4123456
+    c.post(f"/api/inbox/{sal['id']}/apply", json={})
+    month = rt.ledger.summary("2026-11")
+    assert month["income"] == 3900000 and month["expense"] == 12000
+    c.post("/api/inbox", json={"text": SMS_SAMPLES["cancel"]})
+    assert rt.ledger.summary("2026-11")["expense"] == 0  # 취소 → 승인 기록 삭제
+    # 카카오톡 내보내기 형식 가져오기
+    kakao = ("신한카드 님과 카카오톡 대화\n저장한 날짜 : 2026-11-17 13:00\n\n"
+             "2026년 11월 16일 오후 7:20, 신한카드 : [신한카드] 승인\n안*석\n33,000원 일시불\n11/16 19:20\n배달의민족\n"
+             "2026년 11월 16일 오후 8:00, 신한카드 : 이벤트 안내입니다\n")
+    res = c.post("/api/inbox/import", json={"text": kakao}).get_json()
+    assert res["financial"] == 1 and res["added"] == 1
+    items = c.get("/api/inbox").get_json()
+    assert items["added"] >= 3

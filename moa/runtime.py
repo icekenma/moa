@@ -9,6 +9,7 @@ from .assets import Assets
 from .broker.brokers import KiwoomBroker, PaperBroker
 from .broker.demo import DemoFeed
 from .broker.kiwoom import KiwoomClient, KiwoomFeed
+from .inbox import Inbox
 from .ledger import Ledger
 from .myaccount import AccountView
 from .settings import Settings
@@ -22,6 +23,7 @@ class Runtime:
         self.settings = Settings(db)
         self.ledger = Ledger(db)
         self.account = AccountView(self.settings)
+        self.inbox = Inbox(db, self.ledger, self.settings)
         self.assets = Assets(db, self.value_of)
         self.feed = None
         self.brokers = {}

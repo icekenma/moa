@@ -309,6 +309,53 @@ def create_app(rt, updater=None):
                      res["status"], res["fill_price"], res.get("broker_no", ""), "직접 주문"))
         return jsonify(res)
 
+    # ---------- 문자·알림톡 자동 기록 ----------
+    @app.post("/api/inbox")
+    def inbox_in():
+        """아이폰 단축어가 문자를 받는 순간 보내는 곳. 금융 알림이 아니면 저장하지 않는다."""
+        d = request.get_json(silent=True)
+        if d is None:  # 단축어가 본문을 그냥 텍스트로 보낸 경우
+            d = {"text": request.get_data(as_text=True)}
+        text = str(d.get("text") or d.get("message") or "")[:2000]
+        if not text.strip():
+            raise ValueError("메시지 내용이 비어 있어요")
+        r = rt.inbox.ingest(text, (d.get("source") or "sms")[:20])
+        if not r:
+            return jsonify(ok=True, financial=False)
+        if r.get("status") == "added":
+            sign = "+" if r["action"] in ("income", "cancel") else "-"
+            rt.notify(f"[가계부] {r['merchant'] or r['issuer']} {sign}{r['amount']:,}원 자동 기록")
+        return jsonify(ok=True, financial=True, item=r)
+
+    @app.get("/api/inbox")
+    def inbox_list():
+        return jsonify(rt.inbox.list())
+
+    @app.post("/api/inbox/<int:iid>/apply")
+    def inbox_apply(iid):
+        return jsonify(rt.inbox.apply(iid, body().get("category")))
+
+    @app.post("/api/inbox/<int:iid>/ignore")
+    def inbox_ignore(iid):
+        rt.inbox.ignore(iid)
+        return jsonify(ok=True)
+
+    @app.post("/api/inbox/import")
+    def inbox_import():
+        if request.files.get("file"):
+            text = request.files["file"].read().decode("utf-8-sig", errors="replace")
+        else:
+            text = str(body().get("text") or "")
+        if not text.strip():
+            raise ValueError("가져올 내용이 없어요")
+        return jsonify(rt.inbox.import_bulk(text[:5_000_000]))
+
+    @app.put("/api/inbox/auto")
+    def inbox_auto():
+        d = body()
+        rt.settings.update({"inbox_auto": {k: bool(d[k]) for k in ("card", "income", "outflow") if k in d}})
+        return jsonify(ok=True)
+
     # ---------- 내 계좌(조회 전용) ----------
     @app.get("/api/myaccount")
     def myaccount():

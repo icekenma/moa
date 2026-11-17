@@ -1526,3 +1526,39 @@ html.dark-theme .ai-btn::after,html.dark-theme .ap-go::after{opacity:.5}
 .ds-grid span{font-size:9.5px;font-weight:700;color:var(--ink3)}.ds-grid b{font-size:13px;font-weight:800;letter-spacing:-0.02em}
 .ds-row{display:flex;flex-wrap:wrap;gap:3px 12px;font-size:10.5px;color:var(--ink3);font-weight:600}
 .ds-row b{color:var(--ink);font-weight:800}
+
+/* ===== 주문: 종목 고르기 → 수량·가격 → 주문 ===== */
+.o-steps{display:flex;align-items:center;gap:6px;font-size:10px;font-weight:700;color:var(--ink3)}
+.o-steps b{padding:3px 9px;border-radius:10px;background:color-mix(in srgb,var(--ink) 6%,transparent);font-weight:700;white-space:nowrap}
+.o-steps b.on{background:var(--sec);color:#fff}.o-steps b.done{color:var(--sec-i);background:var(--sec-s)}
+.o-steps i{flex:1;height:1.5px;background:var(--line);border-radius:1px}
+.op-top{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.op-search{display:flex;align-items:center;gap:8px;height:46px;padding:0 13px;border-radius:14px;border:1.5px solid color-mix(in srgb,var(--sec) 45%,var(--line2));background:color-mix(in srgb,var(--ink) 4%,transparent)}
+.op-search svg{width:18px;height:18px;fill:none;stroke:var(--sec-i);stroke-width:2.4;stroke-linecap:round;flex:0 0 auto}
+.op-search input{flex:1;min-width:0;border:0!important;background:none!important;outline:none;font-size:14px;font-weight:600;color:var(--ink);height:100%;padding:0;box-shadow:none!important}
+.op-search:focus-within{border-color:var(--sec);box-shadow:0 0 0 3px color-mix(in srgb,var(--sec) 22%,transparent)}
+#opRes{display:flex;flex-direction:column;gap:10px}
+.op-h{display:flex;justify-content:space-between;align-items:baseline;font-size:11.5px;font-weight:800;color:var(--ink2);padding:0 2px 2px}
+.op-h span{font-size:9.5px;font-weight:600;color:var(--ink3)}
+.op-sec .list{border-radius:14px;background:color-mix(in srgb,var(--ink) 4%,transparent);padding:0 11px}
+.op-row{width:100%;text-align:left;background:none;border-left:0;border-right:0;border-bottom:0}
+.op-row .end{display:flex;flex-direction:column;align-items:flex-end}
+.o-stock{display:grid;grid-template-columns:1fr auto;gap:2px 10px;align-items:center;padding:11px 13px;border-radius:15px;background:color-mix(in srgb,var(--sec) 10%,transparent);border:1px solid color-mix(in srgb,var(--sec) 28%,transparent)}
+.o-sn{display:flex;flex-direction:column;min-width:0}.o-sn b{font-size:16px;font-weight:800;letter-spacing:-0.03em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.o-sn span{font-size:10px;color:var(--ink3);font-weight:600}
+.o-sp{display:flex;flex-direction:column;align-items:flex-end}.o-sp b{font-size:19px;font-weight:900;letter-spacing:-0.03em}.o-sp em{font-style:normal;font-size:10.5px;font-weight:700}
+.o-stock .btn{grid-column:1/-1;justify-self:start;margin-top:5px}
+.o-mini{display:flex;flex-wrap:wrap;gap:3px 11px;font-size:10.5px;color:var(--ink3);font-weight:600;padding:0 3px}
+.o-mini b{font-weight:800}.o-mini a{margin-left:auto;color:var(--sec-i);font-weight:700;text-decoration:none}
+.o-sec{display:flex;flex-direction:column;gap:7px;padding:11px 12px;border-radius:15px;background:color-mix(in srgb,var(--ink) 4%,transparent)}
+.o-lab{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;font-weight:800}
+.o-lab .o-avail{font-size:10.5px;font-weight:600;min-height:0}
+.o-pct .chip{font-size:10.5px;white-space:nowrap;min-height:30px}
+.o-sum{display:flex;flex-direction:column;gap:2px;padding:10px 13px;border-radius:13px;border:1px dashed var(--line2)}
+.o-sum>div:first-child{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:var(--ink3);font-weight:700}
+.o-sum b{font-size:17px;font-weight:900;color:var(--ink);letter-spacing:-0.03em}
+.o-sum.bad{border-color:var(--up)}.o-sum.bad .tiny{color:var(--up);font-weight:700}
+.o-send{min-height:48px;font-size:15px}
+.o-acct summary{cursor:pointer;padding:4px 2px;text-align:center}
+.o-acct .seg{margin-top:6px}
+html.dark-theme .op-search input,html.dark-theme .sheet .op-search input{background:none!important;border:0!important}

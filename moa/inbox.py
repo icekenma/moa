@@ -169,6 +169,9 @@ class Inbox:
             kind TEXT, action TEXT, amount INTEGER, merchant TEXT, issuer TEXT, date TEXT, time TEXT,
             balance INTEGER, acct_tail TEXT, category TEXT, raw TEXT,
             status TEXT NOT NULL, tx_id INTEGER, asset_id INTEGER, note TEXT NOT NULL DEFAULT '')""")
+        cols = {r["name"] for r in db.q("PRAGMA table_info(inbox)")}
+        if "prev_balance" not in cols:
+            db.x("ALTER TABLE inbox ADD COLUMN prev_balance INTEGER")
 
     def _cat_id(self, name, kind):
         if not name:
@@ -204,7 +207,7 @@ class Inbox:
         if p["balance"] is not None:
             a = self._update_asset(p)
             if a:
-                self.db.x("UPDATE inbox SET asset_id=? WHERE id=?", (a["id"], iid))
+                self.db.x("UPDATE inbox SET asset_id=?, prev_balance=? WHERE id=?", (a["id"], a["balance"], iid))
                 note.append(f"{a['name']} 잔액 {p['balance']:,}원으로 갱신")
         if note:
             self.db.x("UPDATE inbox SET note=? WHERE id=?", (" · ".join(note), iid))
@@ -226,11 +229,8 @@ class Inbox:
                 score += 1
             if score > best_score:
                 best, best_score = a, score
-        if best_score == 1:  # 계좌번호는 못 맞췄고 은행만 맞음 → 그 은행 계좌가 하나뿐일 때만
-            same = [a for a in accts if a.get("bank") and (issuer in a["bank"] or a["bank"] in issuer)]
-            if len(same) != 1:
-                best = None
-        if best and best_score:
+        # 계좌번호 끝자리가 맞을 때만 잔액을 바꾼다(은행 이름만 맞는 경우는 바꾸지 않음)
+        if best and best_score >= 2:
             self.db.x("UPDATE accounts SET balance=? WHERE id=?", (p["balance"], best["id"]))
             return best
         return None
@@ -272,7 +272,16 @@ class Inbox:
         return self.get(iid)
 
     def ignore(self, iid):
+        """무시: 가계부에 넣지 않고, 이 알림이 바꾼 계좌 잔액도 되돌린다(그 뒤에 다른 알림이 잔액을 바꾸지 않았을 때)."""
+        it = self.get(iid)
         self.db.x("UPDATE inbox SET status='ignored' WHERE id=?", (iid,))
+        if it and it.get("asset_id") and it.get("prev_balance") is not None:
+            later = self.db.one("SELECT 1 AS x FROM inbox WHERE asset_id=? AND id>? AND status!='ignored'",
+                                (it["asset_id"], iid))
+            cur = self.db.one("SELECT balance FROM accounts WHERE id=?", (it["asset_id"],))
+            if not later and cur and cur["balance"] == it["balance"]:
+                self.db.x("UPDATE accounts SET balance=? WHERE id=?", (it["prev_balance"], it["asset_id"]))
+                self.db.x("UPDATE inbox SET note=? WHERE id=?", ("무시해서 계좌 잔액을 되돌렸어요", iid))
 
     def get(self, iid):
         return self.db.one("SELECT * FROM inbox WHERE id=?", (iid,))

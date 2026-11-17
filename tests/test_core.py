@@ -461,3 +461,16 @@ def test_hana_nh_bank_alerts_update_assets(rt):
     assert [b["bank"] for b in con["banks"]] == ["하나", "NH농협"]
     assert con["banks"][1]["last_alert"]["action"] == "outflow"
     assert con["kiwoom"]["configured"] is False
+
+
+def test_balance_needs_account_number_and_ignore_restores(rt):
+    c = create_app(rt).test_client()
+    c.post("/api/accounts", json={"name": "하나 급여통장", "type": "cash", "bank": "하나", "acct_no": "123-456789-12345", "balance": 2000000})
+    # 계좌번호 없는 시험 문자 → 잔액을 바꾸지 않음
+    c.post("/api/inbox", json={"text": "[Web발신] 하나 11/17 09:00 입금1,000원 잔액1,000원 테스트"})
+    assert rt.db.one("SELECT balance FROM accounts")["balance"] == 2000000
+    # 계좌번호 있는 알림 → 바꾸고, 무시하면 되돌림
+    r = c.post("/api/inbox", json={"text": "[Web발신]\n하나,11/17 10:00\n123-******-12345\n입금5,000원\n잔액2,005,000원\n홍길동"}).get_json()
+    assert rt.db.one("SELECT balance FROM accounts")["balance"] == 2005000
+    c.post(f"/api/inbox/{r['item']['id']}/ignore")
+    assert rt.db.one("SELECT balance FROM accounts")["balance"] == 2000000

@@ -671,3 +671,23 @@ def _init(self, rt):
 
 
 AIPick.__init__ = _init
+
+
+def detail(self, pid):
+    """추천 한 번의 전체 내용 + 종목별 추적 결과."""
+    p = self.rt.db.one("SELECT * FROM ai_picks WHERE id=?", (pid,))
+    if not p:
+        raise ValueError("추천 기록을 찾지 못했어요")
+    evaluate(self, force=True)
+    p["picks"] = json.loads(p["picks"] or "[]")
+    oc = {r["idx"]: r for r in self.rt.db.q("SELECT * FROM ai_outcomes WHERE pick_id=?", (pid,))}
+    guards = {g["sym"]: g for g in self.guards(live=False) if g.get("pick_id") == pid}
+    for i, x in enumerate(p["picks"]):
+        x["outcome"] = oc.get(i)
+        x["guard"] = guards.get(x["sym"])
+        q = self.quote(p["mkt"], x["sym"])
+        x["now"] = q.get("price")
+    return p
+
+
+AIPick.detail = detail

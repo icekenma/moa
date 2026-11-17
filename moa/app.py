@@ -200,16 +200,19 @@ def create_app(rt, updater=None):
                          "ON c.id=t.category_id ORDER BY t.id DESC LIMIT 20"):
             items.append({"ts": t["created_at"], "kind": "ledger", "title": t["memo"] or t["category"] or "내역",
                           "sub": f"{t['category'] or '분류 없음'} · {t['date'][5:].replace('-', '.')}",
-                          "amount": None if t.get("transfer") else (t["amount"] if t["kind"] == "in" else -t["amount"])})
-        eng_name = {"scalp": "단타", "dca": "적립"}
+                          "amount": None if t.get("transfer") else (t["amount"] if t["kind"] == "in" else -t["amount"]),
+                          "tx": {k: t.get(k) for k in ("id", "date", "kind", "amount", "memo", "category", "method", "transfer")}})
+        eng_name = {"scalp": "기본 계좌", "dca": "적립"}
         for o in rt.db.q("SELECT * FROM orders ORDER BY id DESC LIMIT 20"):
             items.append({"ts": o["ts"], "kind": "order", "title": f"{o['name'] or o['code']} {'매수' if o['side'] == 'buy' else '매도'}",
                           "sub": f"{eng_name.get(o['engine'], o['engine'])} · {o['qty']}주 · {o['msg']}",
-                          "side": o["side"], "price": o["fill_price"]})
+                          "side": o["side"], "price": o["fill_price"],
+                          "order": {k: o.get(k) for k in ("ts", "engine", "mode", "code", "name", "side", "qty", "price", "status",
+                                                           "fill_price", "broker_no", "msg")}})
         for r in rt.db.q("SELECT r.*, p.name FROM dca_runs r LEFT JOIN dca_plans p ON p.id=r.plan_id "
                          "WHERE r.status != 'done' ORDER BY r.id DESC LIMIT 10"):
             items.append({"ts": r["run_ts"], "kind": "warn", "title": f"{r['name'] or '적립'} 매수 {'건너뜀' if r['status'] == 'skipped' else '실패'}",
-                          "sub": r["msg"]})
+                          "sub": r["msg"], "href": "#invest/dca"})
         for l in rt.db.q("SELECT * FROM engine_log WHERE level != 'info' OR engine='system' ORDER BY id DESC LIMIT 20"):
             items.append({"ts": l["ts"], "kind": "update" if l["engine"] == "system" and l["level"] == "info" else "warn",
                           "title": {"system": "시스템", "scalp": "단타 엔진", "dca": "적립"}.get(l["engine"], l["engine"]),
@@ -882,6 +885,10 @@ def create_app(rt, updater=None):
     @app.get("/api/ai/picks")
     def ai_picks():
         return jsonify(rt.aipick.history())
+
+    @app.get("/api/ai/picks/<int:pid>")
+    def ai_pick_one(pid):
+        return jsonify(rt.aipick.detail(pid))
 
     @app.get("/api/ai/guards")
     def ai_guards():

@@ -1562,3 +1562,7 @@ html.dark-theme .ai-btn::after,html.dark-theme .ap-go::after{opacity:.5}
 .o-acct summary{cursor:pointer;padding:4px 2px;text-align:center}
 .o-acct .seg{margin-top:6px}
 html.dark-theme .op-search input,html.dark-theme .sheet .op-search input{background:none!important;border:0!important}
+
+.st-row{text-decoration:none;color:inherit;min-height:56px}
+.st-row .ico svg{width:17px;height:17px}
+.st-row .main b{font-size:13.5px}

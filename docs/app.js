@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.0739";
+const UI_VERSION = "261118.0745";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -298,10 +298,11 @@ function pnlBars(values, labels, h = 96) {
 // ---------- 메뉴(1뎁스 탭 → 2뎁스) ----------
 const MENU = {
   home: { title: "홈", subs: [["summary", "요약"], ["activity", "최근 활동"]] },
-  ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["fixed", "고정비"], ["cards", "카드"], ["analysis", "분석"], ["budget", "예산"], ["auto", "자동"]] },
+  ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["analysis", "분석"], ["budget", "예산"], ["fixed", "고정비"], ["cards", "카드"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
   invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["dca", "적립"]], extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
-  settings: { title: "설정", subs: [["connect", "서버"], ["accounts", "계좌 연결"], ["trading", "매매"], ["ai", "AI"], ["theme", "화면"], ["app", "앱 정보"]] },
+  // 설정: 자주 바꾸는 것부터. 한 번만 맞추면 되는 서버 연결은 뒤로.
+  settings: { title: "설정", subs: [["all", "전체"], ["theme", "화면"], ["ai", "AI"], ["accounts", "계좌"], ["trading", "주문·알림"], ["connect", "서버"], ["app", "앱 정보"]] },
 };
 const lastSub = {};
 function resolveSub(h) {
@@ -3218,6 +3219,40 @@ pages.settings = {
     const d = await kwFetch();
     if (d.configured && $("#kwCard") === box) { box.innerHTML = kwCardHtml(d); bindKwCard(box); }
   },
+  // 설정 첫 화면: 항목마다 지금 상태를 보여 주고, 누르면 그 설정으로
+  async hub() {
+    const I = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+    const row = (id, ico, cls, title, state, tag = "") => `<a class="item st-row" href="#settings/${id}"><span class="ico ${cls}">${I(ico)}</span>
+      <span class="main"><b>${title}</b><span class="sub">${state}</span></span>${tag}</a>`;
+    const th = THEMES[store.get("theme") || "neon"] || THEMES.neon, fs = (FONT_SIZES.find((x) => x[0] === (store.get("fontSize") || "s")) || FONT_SIZES[0])[1];
+    const draw = (s, st, ping, up) => {
+      const tm = s ? s.trade_mode : null, kw = s ? s.kiwoom : null;
+      const acct = (k) => !tm ? "" : tm[k] === "kiwoom" ? (kw[k].mock ? "키움 모의투자" : "키움 실전") : "앱 내 모의";
+      const cr = st && st.credit;
+      view.innerHTML = `
+        <div class="sec-title">자주 쓰는 설정</div>
+        <section class="card tight"><div class="list">
+          ${row("theme", '<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/>', "h-pink", "화면", `${esc(th.name)} 테마 · 글자 ${esc(fs)}`)}
+          ${row("ai", '<path d="M12 3l1.9 5.3L19 10l-5.1 1.7L12 17l-1.9-5.3L5 10l5.1-1.7z"/><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>', "h-violet", "AI",
+            !st ? "상태를 못 받았어요" : !st.configured ? "Claude API 키를 넣으면 쓸 수 있어요" : `${cr && cr.set ? `잔액 $${Number(cr.left).toFixed(2)} · ` : ""}이번 달 $${Number(st.month_usd || 0).toFixed(2)} 사용`,
+            st && !st.configured ? `<span class="tag warn">키 필요</span>` : cr && cr.set && cr.left_pct < 15 ? `<span class="tag warn">잔액 적음</span>` : "")}
+        </div></section>
+        <div class="sec-title">계좌와 주문</div>
+        <section class="card tight"><div class="list">
+          ${row("accounts", '<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><path d="M7 15h4"/>', "h-indigo", "계좌 연결", s ? `기본 ${acct("scalp")} · 장기투자 ${acct("dca")}` : "서버에 연결하면 보여요")}
+          ${row("trading", '<path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>', "h-amber", "주문·알림", s ? `시세 ${s.data_source === "kiwoom" ? "키움 실시간" : s.data_source === "demo" ? "가상 시세" : esc(s.data_source || "-")} · 휴대폰 알림 ${s.ntfy_topic ? "켜짐" : "꺼짐"}` : "시세 출처, 거래 비용, 적립 매수 시간, 알림")}
+        </div></section>
+        <div class="sec-title">처음 한 번만</div>
+        <section class="card tight"><div class="list">
+          ${row("connect", '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>', "h-teal", "서버 연결", ping && ping.ok ? `노트북과 연결됨 · v${esc(ping.version || "")}` : "노트북 서버에 연결되지 않았어요", ping && ping.ok ? `<span class="tag g">연결됨</span>` : `<span class="tag warn">끊김</span>`)}
+          ${row("app", '<circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/>', "h-slate", "앱 정보", `${ping && ping.version ? "v" + esc(ping.version) : "버전 확인"}${up && up.available ? " · 새 버전이 있어요" : ""}`, up && up.available ? `<span class="tag y">업데이트</span>` : "")}
+        </div></section>
+        <div class="tiny" style="padding:0 3px">아래 메뉴는 자주 쓰는 순서예요. 서버 연결은 처음 한 번만 맞추면 돼서 뒤에 뒀어요.</div>`;
+    };
+    draw(null, null, null, null);
+    const [s, st, ping, up] = await Promise.all([GET("/api/settings").catch(() => null), GET("/api/ai/status").catch(() => null), GET("/api/ping").catch(() => null), GET("/api/update").catch(() => null)]);
+    if (location.hash.replace(/^#/, "").startsWith("settings/all") || location.hash === "#settings") draw(s, st, ping, up);
+  },
   async ai() {
     const st = await GET("/api/ai/status");
     const s = await GET("/api/settings");
@@ -3304,6 +3339,7 @@ pages.settings = {
   },
   async mount(h) {
     setTop("설정", { menu: "settings", sub: h.sub });
+    if (h.sub === "all") return this.hub();
     if (h.sub === "theme") return this.theme();  // 색상은 서버 연결 없이도 바꿀 수 있게
     if (h.sub === "ai") return this.ai();
     if (h.sub === "kiwoom") h.sub = "accounts";

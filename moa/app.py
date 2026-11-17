@@ -16,7 +16,7 @@ from .trading.strategy import STRATEGIES
 WEB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs")
 FORWARD_HEADERS = ("X-Forwarded-For", "X-Forwarded-Host", "Forwarded", "Tailscale-User-Login",
                    "CF-Connecting-IP", "X-Real-IP", "Ngrok-Trace-Id")
-VERSION = "2026.11.16"
+VERSION = "0.1"
 
 
 def access_token(db):
@@ -106,20 +106,25 @@ def create_app(rt, updater=None):
 
     # ---------- 연결 ----------
     def version():
-        if updater and updater.state.get("current"):
-            return updater.state["current"]
-        return VERSION
+        try:
+            with open(os.path.join(os.path.dirname(WEB), "VERSION"), encoding="utf-8") as f:
+                return f.read().strip()
+        except OSError:
+            return VERSION
+
+    def build():
+        return (updater.state.get("current") if updater else "") or ""
 
     @app.get("/api/ping")
     def ping():
-        return jsonify(ok=True, app="moa", version=version(), local=is_local_direct())
+        return jsonify(ok=True, app="moa", version=version(), build=build(), local=is_local_direct())
 
     # ---------- 업데이트 ----------
     @app.get("/api/update")
     def update_status():
         if not updater:
-            return jsonify(available=False, message="업데이트 기능이 꺼져 있어요")
-        return jsonify(updater.status())
+            return jsonify(available=False, message="업데이트 기능이 꺼져 있어요", version=version())
+        return jsonify(updater.status(), version=version())
 
     @app.post("/api/update/check")
     def update_check():
@@ -128,8 +133,8 @@ def create_app(rt, updater=None):
         d = body()
         if d.get("apply"):
             ok, msg = updater.apply()
-            return jsonify(updater.status(), applied=ok, msg=msg)
-        return jsonify(updater.check())
+            return jsonify(updater.status(), applied=ok, msg=msg, version=version())
+        return jsonify(updater.check(), version=version())
 
     @app.put("/api/update/auto")
     def update_auto():

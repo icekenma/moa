@@ -31,7 +31,8 @@ def main():
     print(f"moa 실행 중: {url}  (끄려면 이 창을 닫으세요)")
     print(f"휴대폰 접속 토큰: {access_token(db)}")
     if updater.available:
-        print(f"버전 {updater.state['current']} · GitHub 자동 업데이트 {'켜짐' if rt.settings.get('auto_update') else '꺼짐'}")
+        ver = open(os.path.join(BASE, "VERSION"), encoding="utf-8").read().strip() if os.path.exists(os.path.join(BASE, "VERSION")) else "?"
+        print(f"버전 v{ver} · GitHub 자동 업데이트 {'켜짐' if rt.settings.get('auto_update') else '꺼짐'}")
     else:
         print("자동 업데이트 꺼짐: Git 또는 GitHub 연결이 없어요")
     pub = rt.settings.get("public_url")

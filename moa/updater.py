@@ -92,7 +92,12 @@ class Updater:
             self.state["checked_at"] = datetime.now().isoformat(timespec="seconds")
             if self.state["behind"]:
                 self.state["latest_subject"] = self._git("log", "-1", "--format=%s", "origin/main").strip()
-                self.state["message"] = f"새 버전 {self.state['behind']}개가 있어요"
+                try:
+                    nv = self._git("show", "origin/main:VERSION").strip()
+                except Exception:
+                    nv = ""
+                self.state["latest_version"] = nv
+                self.state["message"] = f"새 버전 v{nv}이 있어요" if nv else "새 버전이 있어요"
             else:
                 self.state["message"] = "최신 버전이에요"
         return self.status()
@@ -118,7 +123,8 @@ class Updater:
                 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", req], cwd=self.base,
                                timeout=600)
             new = self._rev("HEAD")
-        msg = f"{self.state['current']} → {new} 업데이트, 다시 시작해요"
+        nv = self.state.get("latest_version") or new
+        msg = f"v{nv}로 업데이트했어요. 다시 시작해요"
         self.rt.db.log("system", "info", msg, datetime.now().isoformat(timespec="seconds"))
         self.state["message"] = msg
         self.rt.stop()

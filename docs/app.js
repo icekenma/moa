@@ -2,6 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
+const UI_VERSION = "261117.0954";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -223,7 +224,7 @@ async function categories() { if (!catCache) catCache = (await GET(`/api/ledger?
 pages.home = {
   async mount() {
     const [d, ping] = await Promise.all([GET("/api/home"), GET("/api/ping").catch(() => ({}))]);
-    setTop("홈", { badge: ping.version ? "v " + ping.version : "", right: `<span class="tiny">${korDate(localToday())}</span>` });
+    setTop("홈", { badge: ping.version ? "v" + ping.version : "", right: `<span class="tiny">${korDate(localToday())}</span>` });
     const L = d.ledger, A = d.assets, S = d.scalp, D = d.dca;
     const m = Number(L.month.slice(5));
     const hero = L.budget > 0
@@ -879,7 +880,7 @@ pages.settings = {
         <div class="tiny">ntfy 앱에서 같은 토픽을 구독하면 매수·매도·적립 결과를 받아요.</div></details>
       <div id="setErr"></div>
       <button class="btn dark wide" id="saveSet">설정 저장</button>
-      <div class="tiny" style="text-align:center">moa ${esc(ping.version || "")}</div>`;
+      <div class="tiny" style="text-align:center">moa v${esc(ping.version || "")}</div>`;
     const errs = (e) => { $("#setErr").innerHTML = Object.entries(e || {}).map(([k, v]) => `<div class="notice warn">${esc({ scalp: "단타 계좌", dca: "장기투자 계좌", feed: "시세" }[k] || k)}: ${esc(v)}</div>`).join(""); };
     const collect = () => {
       const kiwoom = { scalp: {}, dca: {} };
@@ -962,19 +963,58 @@ pages.settings = {
 function updateCard(u) {
   if (!u.available) return `<h2>업데이트</h2><div class="small muted">${esc(u.message || "자동 업데이트를 쓸 수 없어요")}</div>`;
   const when = u.checked_at ? u.checked_at.slice(5, 16).replace("T", " ") : "-";
-  return `<div class="card-head"><div><h2>업데이트</h2><div class="tiny">버전 ${esc(u.current)} · 확인 ${esc(when)}</div></div>
+  return `<div class="card-head"><div><h2>업데이트</h2><div class="tiny">버전 v${esc(u.version)} · 확인 ${esc(when)}</div></div>
       <button class="switch" role="switch" id="upAuto" aria-checked="${!!u.auto}" aria-label="GitHub 자동 업데이트"><span></span></button></div>
     <div class="small muted">${esc(u.message || "")}${u.behind && u.latest_subject ? `<br>새 버전: ${esc(u.latest_subject)}` : ""}</div>
     <div class="tiny">켜 두면 ${u.interval_min}분마다 GitHub를 확인해, 종목을 들고 있지 않을 때 노트북 서버가 스스로 새 버전으로 바뀌어요. 가계부 데이터는 그대로예요.</div>
     <div class="btns"><button class="btn sm" id="upCheck">지금 확인</button>${u.behind ? `<button class="btn sm dark" id="upApply">지금 업데이트</button>` : ""}</div>`;
 }
 
+// ---------- 새 버전 알림 ----------
+// 앱을 켜 둔 동안 1분마다(그리고 다시 앱으로 돌아올 때) 화면과 노트북 서버의 새 버전을 확인한다.
+const upd = { server: null, shown: false };
+async function checkNewVersion() {
+  if (upd.shown || document.hidden) return;
+  const found = [];
+  try {
+    const r = await fetch(`version.json?t=${Date.now()}`, { cache: "no-store" });
+    if (r.ok) {
+      const v = await r.json();
+      if (v.build && v.build !== UI_VERSION && UI_VERSION !== "0") found.push({ kind: "ui", text: v.note || "화면이 새 버전으로 바뀌었어요", v: v.version });
+    }
+  } catch (e) { /* 오프라인 */ }
+  try {
+    const p = await GET("/api/ping");
+    if (upd.server && p.build && p.build !== upd.server) found.push({ kind: "server", text: "노트북 서버가 새 버전으로 바뀌었어요", v: p.version, b: p.build });
+    if (!upd.server && p.build) upd.server = p.build;
+  } catch (e) { /* 연결 안 됨 */ }
+  if (found.length) showUpdateDialog(found);
+}
+function showUpdateDialog(found) {
+  if (sheet.open) { setTimeout(() => checkNewVersion(), 5000); return; }
+  upd.shown = true;
+  const dlg = $("#updDlg");
+  $("#updBody").innerHTML = found.map((f) => `<div class="upd-row"><span class="tag ${f.kind === "ui" ? "y" : "g"}">${f.kind === "ui" ? "화면" : "서버"}</span><span>${esc(f.text)}<br><span class="tiny">v${esc(f.v)}</span></span></div>`).join("");
+  dlg.showModal();
+  $("#updOk").onclick = async () => {
+    $("#updOk").disabled = true; $("#updOk").textContent = "반영하는 중";
+    if (found.some((f) => f.kind === "ui")) {
+      try { const reg = await navigator.serviceWorker?.getRegistration(); await reg?.update(); } catch (e) { /* 무시 */ }
+      location.reload();
+    } else {
+      upd.server = found.find((f) => f.kind === "server").b;
+      dlg.close(); upd.shown = false; route(); toast("새 버전을 반영했어요");
+    }
+  };
+  $("#updLater").onclick = () => { dlg.close(); setTimeout(() => (upd.shown = false), 10 * 60 * 1000); };
+}
+setInterval(checkNewVersion, 60 * 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkNewVersion(); });
+setTimeout(checkNewVersion, 4000);
+
 // ---------- 시작 ----------
 if ("serviceWorker" in navigator && location.protocol === "https:") {
   navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((reg) => reg.update()).catch(() => {});
-  // 새 버전 화면이 설치되면 한 번 새로고침
-  let reloaded = false;
-  navigator.serviceWorker.addEventListener("controllerchange", () => { if (!reloaded) { reloaded = true; location.reload(); } });
 }
 if (ON_PAGES && !store.get("server") && !location.hash.startsWith("#connect")) location.hash = "#connect";
 route();

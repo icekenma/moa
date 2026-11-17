@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1030";
+const UI_VERSION = "261117.1036";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -83,6 +83,43 @@ function confirmTap(btn, label) {
   return false;
 }
 
+// ---------- 색상 테마(이 기기에만 저장) ----------
+const THEMES = {
+  navy: { name: "남색", deep: "#111A2B", deep2: "#1C2840", bg: "#EEF1F7", accent: "yellow" },
+  black: { name: "블랙", deep: "#0E0E10", deep2: "#1F1F23", bg: "#F0F0F2", accent: "lime" },
+  forest: { name: "숲", deep: "#0E2A22", deep2: "#173B31", bg: "#EDF3F0", accent: "mint" },
+  ocean: { name: "바다", deep: "#082A3A", deep2: "#0F3D52", bg: "#EBF3F6", accent: "aqua" },
+  wine: { name: "와인", deep: "#2A0F19", deep2: "#3D1726", bg: "#F5EEF0", accent: "peach" },
+  purple: { name: "보라", deep: "#1C1436", deep2: "#2B2050", bg: "#F0EEF7", accent: "lavender" },
+  brown: { name: "커피", deep: "#2A1E16", deep2: "#3B2B20", bg: "#F4F0EC", accent: "apricot" },
+  light: { name: "화이트", deep: "#FFFFFF", deep2: "#232C3D", bg: "#F2F4F8", accent: "yellow", light: true },
+};
+const ACCENTS = {
+  yellow: ["노랑", "#FFD84D"], lime: ["라임", "#C8F560"], mint: ["민트", "#7BE0B0"], aqua: ["하늘", "#7FD6F2"],
+  peach: ["복숭아", "#FFB38A"], pink: ["핑크", "#FF9EC7"], lavender: ["라벤더", "#C3B1FF"], apricot: ["살구", "#FFC56B"],
+};
+function themeVars(id, accentId) {
+  const t = THEMES[id] || THEMES.navy;
+  const a = (ACCENTS[accentId] || ACCENTS[t.accent])[1];
+  return t.light ? {
+    "--deep": t.deep, "--deep2": t.deep2, "--bg": t.bg, "--hl": a, "--solid": "#172033",
+    "--on-deep": "#172033", "--on-deep2": "#5A6578", "--on-deep-strong": "#172033", "--sub-bg": "#EEF1F6",
+  } : {
+    "--deep": t.deep, "--deep2": t.deep2, "--bg": t.bg, "--hl": a, "--solid": t.deep,
+    "--on-deep": "#E9EDF5", "--on-deep2": "#A3ADC2", "--on-deep-strong": "#FFFFFF", "--sub-bg": "rgba(255,255,255,.08)",
+  };
+}
+function applyTheme(id, accentId, save = true) {
+  const v = themeVars(id, accentId);
+  Object.entries(v).forEach(([k, val]) => document.documentElement.style.setProperty(k, val));
+  const mc = document.querySelector('meta[name="theme-color"]');
+  if (mc) mc.content = v["--deep"];
+  if (save) {
+    store.set("theme", id); store.set("accent", accentId || "");
+    try { localStorage.setItem("moa.themeVars", JSON.stringify(v)); } catch (e) { /* 저장 불가 */ }
+  }
+}
+
 // ---------- 바텀 시트 ----------
 const sheet = $("#sheet");
 function openSheet(title, html, mount) {
@@ -133,7 +170,7 @@ const MENU = {
   ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["analysis", "분석"], ["budget", "예산"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
   invest: { title: "투자", subs: [["account", "내 계좌"], ["trade", "매매"], ["scalp", "단타"], ["dca", "적립"]], extra: { backtest: "scalp", rules: "scalp" } },
-  settings: { title: "설정", subs: [["connect", "연결"], ["kiwoom", "키움 계좌"], ["trading", "매매 설정"], ["app", "앱 정보"]] },
+  settings: { title: "설정", subs: [["connect", "연결"], ["kiwoom", "키움"], ["trading", "매매"], ["theme", "색상"], ["app", "앱 정보"]] },
 };
 const lastSub = {};
 function resolveSub(h) {
@@ -1012,8 +1049,51 @@ function planSheet(e) {
 // 설정
 // =====================================================================
 pages.settings = {
+  theme() {
+    const cur = store.get("theme") || "navy";
+    const curA = store.get("accent") || THEMES[cur].accent;
+    const draw = (tid, aid) => {
+      view.innerHTML = `
+        <section class="card"><h2>바탕 색</h2>
+          <div class="small muted">상단·하단 메뉴와 강조 카드에 쓰이는 색이에요. 누르면 바로 바뀌어요.</div>
+          <div class="theme-grid">${Object.entries(THEMES).map(([id, t]) => {
+            const a = ACCENTS[id === tid ? aid : t.accent][1];
+            return `<button type="button" class="theme-opt" data-theme="${id}" aria-pressed="${id === tid}">
+              <span class="theme-prev" style="background:${t.bg}" aria-hidden="true">
+                <span class="tp-band" style="background:${t.deep};${t.light ? "border-bottom:1px solid #E1E5EE" : ""}"></span>
+                <span class="tp-card"></span><span class="tp-hl" style="background:${a}"></span>
+                <span class="tp-bar" style="background:${t.light ? "#FFFFFF;border-top:1px solid #E1E5EE" : t.deep}"></span></span>
+              <span class="theme-name">${esc(t.name)}${id === tid ? `<span class="tag y">사용 중</span>` : ""}</span></button>`;
+          }).join("")}</div>
+        </section>
+        <section class="card"><h2>포인트 색</h2>
+          <div class="small muted">금액 강조, 선택된 탭, ＋ 버튼에 쓰이는 색이에요.</div>
+          <div class="swatches">${Object.entries(ACCENTS).map(([id, [name, c]]) => `<button type="button" class="swatch" style="background:${c}" data-accent="${id}" aria-pressed="${id === aid}" aria-label="${name}"></button>`).join("")}</div>
+          <div class="tiny">지금: ${esc(THEMES[tid].name)} 바탕 · ${esc(ACCENTS[aid][0])} 포인트</div>
+        </section>
+        <section class="card"><h2>미리 보기</h2>
+          <div class="hero" style="font-size:20px">하루 <span class="hl">63,700원</span>씩 쓸 수 있어요</div>
+          <div class="btns"><button type="button" class="btn dark">저장</button><button type="button" class="btn">취소</button></div>
+          <div class="card dark" style="padding:16px"><div class="small muted">단타 실현손익</div><div class="mid">+38,400원</div></div>
+        </section>
+        <button class="btn soft wide" data-reset-theme>기본 색으로 되돌리기</button>
+        <div class="tiny" style="text-align:center">색상은 이 기기에만 저장돼요. 다른 기기는 따로 고를 수 있어요.</div>`;
+    };
+    let tid = cur, aid = curA;
+    draw(tid, aid);
+    view.onclick = (e) => {
+      const t = e.target.closest("[data-theme]"), a = e.target.closest("[data-accent]"), r = e.target.closest("[data-reset-theme]");
+      if (t) { tid = t.dataset.theme; aid = THEMES[tid].accent; }
+      else if (a) aid = a.dataset.accent;
+      else if (r) { tid = "navy"; aid = "yellow"; }
+      else return;
+      applyTheme(tid, aid);
+      draw(tid, aid);
+    };
+  },
   async mount(h) {
     setTop("설정", { menu: "settings", sub: h.sub });
+    if (h.sub === "theme") return this.theme();  // 색상은 서버 연결 없이도 바꿀 수 있게
     const sub = h.sub;
     const s = await GET("/api/settings");
     const ping = await GET("/api/ping").catch(() => ({}));

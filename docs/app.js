@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.0954";
+const UI_VERSION = "261117.0957";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -352,7 +352,7 @@ pages.ledger = {
         </div>
         <div class="kv"><div>수입<b class="inc">+${won(sum.income)}</b></div><div>지출<b>-${won(sum.expense)}</b></div><div>남은 돈<b>${won(sum.net)}</b></div></div>
       </section>
-      <div class="sticky-seg">${seg("내역 종류", [["all", "전체"], ["out", "지출"], ["in", "수입"]], S.kind)}</div>
+      ${seg("내역 종류", [["all", "전체"], ["out", "지출"], ["in", "수입"]], S.kind)}
       <section class="card tight">
         ${Object.keys(byDay).length ? Object.entries(byDay).map(([date, rows]) => {
           const out = rows.filter((r) => r.kind === "out").reduce((s, r) => s + r.amount, 0);

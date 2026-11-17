@@ -31,7 +31,8 @@ h1,h2,h3{margin:0;letter-spacing:-0.02em}
 .top .back{width:44px;height:44px;margin-left:-10px;border:0;background:transparent;display:inline-flex;align-items:center;justify-content:center;border-radius:10px;color:#fff}
 main{position:relative;z-index:1;max-width:var(--w);margin:0 auto;padding:4px 16px calc(96px + var(--safe-b));display:flex;flex-direction:column;gap:12px}
 .tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--deep);border-top:1px solid rgba(255,255,255,.06);
-  padding:6px 8px calc(6px + var(--safe-b));display:flex;justify-content:center}
+  border-radius:20px 20px 0 0;box-shadow:0 -8px 24px rgba(17,26,43,.18);
+  padding:8px 10px calc(6px + var(--safe-b));display:flex;flex-direction:column;align-items:center}
 .tabbar .in{display:flex;width:100%;max-width:var(--w)}
 .tab{flex:1 1 0;display:flex;flex-direction:column;align-items:center;gap:2px;min-height:52px;justify-content:center;
   text-decoration:none;color:var(--on-deep2);font-size:11px;font-weight:600;border-radius:12px}
@@ -40,12 +41,18 @@ main{position:relative;z-index:1;max-width:var(--w);margin:0 auto;padding:4px 16
 .tab.on .dot{background:var(--hl);color:var(--deep)}
 .tab .dot{display:flex;align-items:center;justify-content:center;width:52px;height:30px;border-radius:15px}
 
-/* 2뎁스 메뉴(상단 남색 영역 안) */
-.subnav{flex:0 0 100%;display:flex;gap:4px;padding:4px;margin-top:6px;background:rgba(255,255,255,.08);border-radius:12px;overflow-x:auto;scrollbar-width:none}
+/* 2뎁스 메뉴: 하단 탭 바로 위, 엄지가 닿는 곳 */
+.subdock{width:100%;max-width:var(--w)}
+.subdock:empty{display:none}
+.subnav{display:flex;gap:4px;padding:4px;margin:2px 0 8px;background:rgba(255,255,255,.07);border-radius:14px;overflow-x:auto;scrollbar-width:none}
 .subnav::-webkit-scrollbar{display:none}
-.subtab{flex:1 0 auto;min-height:38px;padding:0 12px;display:flex;align-items:center;justify-content:center;border-radius:9px;
-  color:var(--on-deep2);text-decoration:none;font-size:14px;font-weight:600;white-space:nowrap}
-.subtab[aria-current="page"]{background:#fff;color:var(--ink);font-weight:800}
+.subtab{flex:1 0 auto;min-height:42px;padding:0 12px;display:flex;align-items:center;justify-content:center;border-radius:11px;
+  color:var(--on-deep2);text-decoration:none;font-size:14px;font-weight:600;white-space:nowrap;transition:background .15s,color .15s}
+.subtab:active{background:rgba(255,255,255,.08)}
+.subtab[aria-current="page"]{background:#fff;color:var(--ink);font-weight:800;box-shadow:0 2px 8px rgba(0,0,0,.18)}
+body.has-sub main{padding-bottom:calc(150px + var(--safe-b))}
+body.has-sub .fab{bottom:calc(140px + var(--safe-b))}
+body.has-sub #toast{bottom:calc(150px + var(--safe-b))}
 /* 달력 */
 .cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
 .cal-wd span{text-align:center;font-size:12px;font-weight:700;color:var(--ink3)}

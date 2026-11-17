@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1028";
+const UI_VERSION = "261117.1030";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -161,8 +161,9 @@ function setTop(title, opt = {}) {
   $(".back", top)?.remove();
   if (opt.back) top.insertAdjacentHTML("afterbegin", `<a class="back" href="${opt.back}" aria-label="뒤로"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></a>`);
   $("#topRight").innerHTML = opt.right || "";
-  $(".subnav", top)?.remove();
-  if (opt.menu) top.insertAdjacentHTML("beforeend", subnav(opt.menu, opt.sub));
+  // 2뎁스 메뉴는 엄지가 닿는 아래쪽(하단 탭 바로 위)에 둔다
+  $("#subdock").innerHTML = opt.menu ? subnav(opt.menu, opt.sub) : "";
+  document.body.classList.toggle("has-sub", !!opt.menu);
 }
 function parseHash() {
   const raw = (location.hash || "#home").slice(1);

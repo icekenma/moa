@@ -356,6 +356,19 @@ def create_app(rt, updater=None):
         rt.settings.update({"inbox_auto": {k: bool(d[k]) for k in ("card", "income", "outflow") if k in d}})
         return jsonify(ok=True)
 
+    # ---------- 계좌 연결(한곳에서 보기) ----------
+    @app.get("/api/connections")
+    def connections():
+        acct = rt.account.snapshot() if rt.account.configured() else {"configured": False}
+        last = rt.db.one("SELECT received_at FROM inbox ORDER BY id DESC LIMIT 1")
+        s = rt.settings.all()
+        return jsonify(
+            kiwoom={k: acct.get(k) for k in ("configured", "ok", "error", "server", "total", "updated_at")},
+            banks=rt.inbox.bank_status(),
+            inbox={"last_at": last["received_at"] if last else None, **{k: v for k, v in rt.inbox.list(1).items() if k != "items"}},
+            trading={e: {"mode": s["trade_mode"][e], "label": (rt.brokers[e].label if rt.brokers.get(e) else None),
+                         "error": rt.errors.get(e)} for e in ("scalp", "dca")})
+
     # ---------- 내 계좌(조회 전용) ----------
     @app.get("/api/myaccount")
     def myaccount():

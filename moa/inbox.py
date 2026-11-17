@@ -51,7 +51,7 @@ def guess_category(merchant):
 def _issuer(text):
     for name in ISSUERS:
         if name in text:
-            return {"국민": "KB국민", "비씨": "BC", "농협": "NH농협"}.get(name, name)
+            return {"국민": "KB국민", "비씨": "BC", "농협": "NH농협", "기업": "IBK"}.get(name, name)
     return ""
 
 
@@ -106,6 +106,18 @@ def parse(text, received=None):
     junk = re.compile(r"(원|승인|취소|누적|잔액|일시불|할부|\d{1,2}/\d{1,2}|\d{1,2}:\d{2}|\*|님$|카드\(?\d*\)?$|^\[|입금$|출금$)")
     cands = [x for x in lines if not junk.search(x) and not re.fullmatch(r"[\d\s,.-]+", x)]
     merchant = cands[-1] if cands else ""
+    if not merchant:  # 한 줄에 날짜·계좌·금액·잔액이 섞인 형식(예: 농협) → 군더더기를 지우고 남은 글자
+        rest = []
+        for x in body.split("\n"):
+            y = re.sub(r"-\d+", " ", ACCT.sub(" ", x))
+            y = re.sub(r"(잔액|누적|입금|출금|이체|승인|일시불)\s*:?\s*[\d,]*\s*원?", " ", y)
+            y = re.sub(r"\d{1,2}/\d{1,2}|\d{1,2}:\d{2}|[\d,]+\s*원|[\d,]{4,}|\[[^\]]*\]|[*]", " ", y)
+            for name in ISSUERS:
+                y = re.sub(rf"^{name}(은행|카드)?[,\s]*", " ", y.strip())
+            y = re.sub(r"\s+", " ", y).strip(" ,.-")
+            if y and not re.fullmatch(r"[\d\s,.-]*", y):
+                rest.append(y)
+        merchant = rest[-1] if rest else ""
     merchant = re.sub(r"\s+", " ", merchant)[:40]
     acct = ACCT.search(body)
     return {
@@ -199,14 +211,38 @@ class Inbox:
         return self.get(iid)
 
     def _update_asset(self, p):
-        tail = p.get("acct_tail")
-        if not tail:
-            return None
-        for a in self.db.q("SELECT * FROM accounts WHERE linked IS NULL AND type IN ('cash','deposit')"):
-            if tail in (a["name"] + " " + a["note"]):
-                self.db.x("UPDATE accounts SET balance=? WHERE id=?", (p["balance"], a["id"]))
-                return a
+        """잔액이 온 은행 알림 → 계좌번호 끝자리·은행 이름이 맞는 자산 계좌의 잔액을 갱신."""
+        tail, issuer = p.get("acct_tail") or "", p.get("issuer") or ""
+        best, best_score = None, 0
+        accts = self.db.q("SELECT * FROM accounts WHERE linked IS NULL AND type IN ('cash','deposit')")
+        for a in accts:
+            digits = "".join(ch for ch in (a.get("acct_no") or "") if ch.isdigit())
+            score = 0
+            if tail and digits and tail in digits:
+                score += 2
+            elif tail and tail in (a["name"] + " " + a["note"]):
+                score += 2
+            if issuer and (issuer in (a.get("bank") or "") or (a.get("bank") or "x") in issuer):
+                score += 1
+            if score > best_score:
+                best, best_score = a, score
+        if best_score == 1:  # 계좌번호는 못 맞췄고 은행만 맞음 → 그 은행 계좌가 하나뿐일 때만
+            same = [a for a in accts if a.get("bank") and (issuer in a["bank"] or a["bank"] in issuer)]
+            if len(same) != 1:
+                best = None
+        if best and best_score:
+            self.db.x("UPDATE accounts SET balance=? WHERE id=?", (p["balance"], best["id"]))
+            return best
         return None
+
+    def bank_status(self):
+        """계좌 연결 화면용: 은행 계좌별 마지막 알림."""
+        out = []
+        for a in self.db.q("SELECT * FROM accounts WHERE bank != '' ORDER BY sort, id"):
+            last = self.db.one("SELECT received_at, action, amount FROM inbox WHERE asset_id=? ORDER BY id DESC LIMIT 1",
+                               (a["id"],))
+            out.append({**a, "last_alert": last})
+        return out
 
     def apply(self, iid, category=None):
         """확인 필요 항목을 가계부에 넣는다(취소는 같은 금액·가맹점 기록을 지운다)."""

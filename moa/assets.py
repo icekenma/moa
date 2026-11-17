@@ -40,12 +40,17 @@ class Assets:
         bal = abs(bal)
         linked = d.get("linked") if d.get("linked") in ("scalp", "dca", "kiwoom") else None
         note = (d.get("note") or "").strip()[:60]
+        bank = (d.get("bank") or "").strip()[:20]
+        acct_no = "".join(ch for ch in str(d.get("acct_no") or "") if ch.isdigit() or ch == "-")[:30]
         if d.get("id"):
-            self.db.x("UPDATE accounts SET name=?,type=?,balance=?,note=?,linked=? WHERE id=?",
-                      (name, d["type"], bal, note, linked, int(d["id"])))
+            old = self.db.one("SELECT * FROM accounts WHERE id=?", (int(d["id"]),)) or {}
+            if "bank" not in d:
+                bank, acct_no = old.get("bank", ""), old.get("acct_no", "")
+            self.db.x("UPDATE accounts SET name=?,type=?,balance=?,note=?,linked=?,bank=?,acct_no=? WHERE id=?",
+                      (name, d["type"], bal, note, linked, bank, acct_no, int(d["id"])))
             return int(d["id"])
-        return self.db.x("INSERT INTO accounts(name,type,balance,note,linked,sort) VALUES(?,?,?,?,?,?)",
-                         (name, d["type"], bal, note, linked, 100))
+        return self.db.x("INSERT INTO accounts(name,type,balance,note,linked,sort,bank,acct_no) VALUES(?,?,?,?,?,?,?,?)",
+                         (name, d["type"], bal, note, linked, 100, bank, acct_no))
 
     def delete(self, aid):
         self.db.x("DELETE FROM accounts WHERE id=?", (aid,))

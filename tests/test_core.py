@@ -447,3 +447,17 @@ def test_inbox_flow(rt):
     assert res["financial"] == 1 and res["added"] == 1
     items = c.get("/api/inbox").get_json()
     assert items["added"] >= 3
+
+
+def test_hana_nh_bank_alerts_update_assets(rt):
+    c = create_app(rt).test_client()
+    c.post("/api/accounts", json={"name": "하나 급여통장", "type": "cash", "bank": "하나", "acct_no": "123-456789-12345"})
+    c.post("/api/accounts", json={"name": "농협 생활비", "type": "cash", "bank": "NH농협", "acct_no": "351-1234-5678-56"})
+    c.post("/api/inbox", json={"text": "[Web발신]\n하나,11/17 09:00\n123-******-12345\n입금3,900,000원\n잔액4,123,456원\n인사혁신처"})
+    c.post("/api/inbox", json={"text": "[Web발신]\n농협 출금50,000원\n11/17 10:00 351-****-1234-56 관리비 잔액1,073,456원"})
+    bal = {a["name"]: a["balance"] for a in rt.db.q("SELECT name, balance FROM accounts")}
+    assert bal == {"하나 급여통장": 4123456, "농협 생활비": 1073456}
+    con = c.get("/api/connections").get_json()
+    assert [b["bank"] for b in con["banks"]] == ["하나", "NH농협"]
+    assert con["banks"][1]["last_alert"]["action"] == "outflow"
+    assert con["kiwoom"]["configured"] is False

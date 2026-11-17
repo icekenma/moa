@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1040";
+const UI_VERSION = "261117.1052";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -120,6 +120,59 @@ function applyTheme(id, accentId, save = true) {
   }
 }
 
+// ---------- 은행·단축어 ----------
+const BANKS = [["하나", "하나은행"], ["NH농협", "NH농협은행"], ["신한", "신한은행"], ["KB국민", "KB국민은행"], ["우리", "우리은행"],
+  ["IBK", "IBK기업은행"], ["카카오뱅크", "카카오뱅크"], ["토스뱅크", "토스뱅크"], ["케이뱅크", "케이뱅크"], ["기타", "기타 은행"]];
+const bankLabel = (code) => (BANKS.find((b) => b[0] === code) || [code, code])[1];
+const maskAcct = (no) => { const d = String(no || "").replace(/\D/g, ""); return d ? "····" + d.slice(-4) : "계좌번호 없음"; };
+async function shortcutGuide() {
+  const serverUrl = (ON_PAGES ? store.get("server") : location.origin).replace(/\/+$/, "");
+  let token = store.get("token");
+  if (!token && !ON_PAGES) token = (await GET("/api/connect-info").catch(() => ({}))).token || "";
+  return `<details class="card"><summary>아이폰 단축어로 문자 자동 보내기</summary>
+    <div class="small" style="line-height:1.75">
+      <b>1.</b> 단축어 앱 → 아래 <b>자동화</b> → 오른쪽 위 <b>＋</b> → <b>메시지</b><br>
+      <b>2.</b> <b>메시지에 다음이 포함됨</b>에 <span class="code" style="padding:1px 6px">원</span> 입력(보낸 사람은 비워 두기)<br>
+      <b>3.</b> <b>즉시 실행</b> 선택(실행 전 확인 끄기) → 다음 → <b>새로운 빈 단축어</b><br>
+      <b>4.</b> 동작 추가: <b>URL 콘텐츠 가져오기</b><br>
+      &nbsp;&nbsp;· URL: 아래 주소 · 방법: <b>POST</b><br>
+      &nbsp;&nbsp;· 헤더: <b>Authorization</b> = 아래 값<br>
+      &nbsp;&nbsp;· 본문 요청: <b>JSON</b>, 키 <b>text</b>, 값은 변수 <b>단축어 입력</b>(메시지 내용)<br>
+      <b>5.</b> 완료. 카드·은행 문자가 오면 몇 초 안에 가계부와 계좌 잔액에 들어가요.</div>
+    <div class="field">URL<div class="code">${esc(serverUrl)}/api/inbox</div></div>
+    <div class="field">Authorization 값<div class="code">Bearer ${esc(token || "(서버 탭의 접속 토큰)")}</div></div>
+    <div class="tiny">휴대폰 Tailscale이 켜져 있어야 보내져요. 메뉴 이름은 iOS 버전에 따라 조금 다를 수 있어요.</div>
+  </details>`;
+}
+function bankSheet(a, done) {
+  let bank = a?.bank || "하나";
+  openSheet(a ? "은행 계좌 고치기" : "은행 계좌 추가", `
+    <div class="field">은행<div class="chips">${BANKS.map(([c, l]) => `<button type="button" class="chip" data-bank="${c}" aria-pressed="${c === bank}">${esc(l)}</button>`).join("")}</div></div>
+    <label class="field">계좌 이름<input id="bkName" value="${esc(a?.name || "")}" placeholder="예: 하나 급여통장"></label>
+    <label class="field">계좌번호<input id="bkNo" inputmode="numeric" value="${esc(a?.acct_no || "")}" placeholder="123-456789-12345">
+      <span class="hint">알림 문자의 계좌번호 끝자리로 이 계좌를 찾아요. 앱에는 끝 4자리만 보여요.</span></label>
+    <div class="fields">
+      <label class="field">종류<select id="bkType"><option value="cash" ${a?.type !== "deposit" ? "selected" : ""}>입출금</option><option value="deposit" ${a?.type === "deposit" ? "selected" : ""}>예금·적금</option></select></label>
+      <label class="field">지금 잔액<input id="bkBal" class="r" inputmode="numeric" value="${a ? won(a.balance) : ""}" placeholder="0원"></label></div>
+    <button class="btn dark wide" id="bkSave">${a ? "고친 내용 저장" : "계좌 추가"}</button>
+    ${a ? `<button class="btn soft wide" id="bkDel">이 계좌 지우기</button>` : ""}`, (box) => {
+    moneyInput($("#bkBal", box));
+    box.onclick = async (ev) => {
+      const c = ev.target.closest("[data-bank]");
+      if (c) { bank = c.dataset.bank; $$("[data-bank]", box).forEach((z) => z.setAttribute("aria-pressed", String(z === c))); if (!$("#bkName").value) $("#bkName").placeholder = `예: ${bankLabel(bank).replace("은행", "")} 생활비 통장`; }
+      if (ev.target.id === "bkSave") {
+        const name = $("#bkName").value.trim() || `${bankLabel(bank)} ${maskAcct($("#bkNo").value)}`;
+        await run(() => api("POST", "/api/accounts", { id: a?.id, name, type: $("#bkType").value, balance: num($("#bkBal").value), note: a?.note || "", bank, acct_no: $("#bkNo").value, linked: "" }), "계좌를 저장했어요");
+        closeSheet(); done && done();
+      }
+      if (ev.target.id === "bkDel") {
+        if (!confirmTap(ev.target, "한 번 더 누르면 지워요")) return;
+        await run(() => api("DELETE", `/api/accounts/${a.id}`), "지웠어요"); closeSheet(); done && done();
+      }
+    };
+  });
+}
+
 // ---------- 바텀 시트 ----------
 const sheet = $("#sheet");
 function openSheet(title, html, mount) {
@@ -170,7 +223,7 @@ const MENU = {
   ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["analysis", "분석"], ["budget", "예산"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
   invest: { title: "투자", subs: [["account", "내 계좌"], ["trade", "매매"], ["scalp", "단타"], ["dca", "적립"]], extra: { backtest: "scalp", rules: "scalp" } },
-  settings: { title: "설정", subs: [["connect", "연결"], ["kiwoom", "키움"], ["trading", "매매"], ["theme", "색상"], ["app", "앱 정보"]] },
+  settings: { title: "설정", subs: [["connect", "서버"], ["accounts", "계좌 연결"], ["trading", "매매"], ["theme", "색상"], ["app", "앱 정보"]] },
 };
 const lastSub = {};
 function resolveSub(h) {
@@ -548,9 +601,6 @@ pages.ledger = {
     const cats = (catCache || []).filter((c) => c.kind === "out");
     const label = { spend: "카드 결제", cancel: "결제 취소", income: "입금", outflow: "출금" };
     const st = { added: ["기록됨", "g"], pending: ["확인 필요", "warn"], ignored: ["무시함", ""] };
-    const serverUrl = (ON_PAGES ? store.get("server") : location.origin).replace(/\/+$/, "");
-    let token = store.get("token");
-    if (!token && !ON_PAGES) token = (await GET("/api/connect-info").catch(() => ({}))).token || "";
     const item = (x) => `<button type="button" class="item" data-inbox="${x.id}">
       <span class="ico ${x.status === "pending" ? "warn" : x.kind === "card" ? "" : "y"}">${esc((x.issuer || (x.kind === "card" ? "카드" : "은행")).slice(0, 2))}</span>
       <span class="main"><b>${esc(x.merchant || label[x.action])}</b><span class="sub">${esc(label[x.action])} · ${esc(x.date.slice(5).replace("-", "."))} ${esc(x.time || "")}${x.note ? " · " + esc(x.note) : ""}</span></span>
@@ -576,20 +626,8 @@ pages.ledger = {
         <label class="field">또는 문자 붙여넣기(메시지 사이는 빈 줄)<textarea id="ibText" rows="5" placeholder="[Web발신]&#10;신한카드(1234)승인&#10;12,000원 일시불&#10;11/17 12:30 스타벅스"></textarea></label>
         <button class="btn dark wide" id="ibImport">분석해서 가져오기</button>
       </section>
-      <details class="card"><summary>아이폰 단축어로 문자 자동 보내기</summary>
-        <div class="small" style="line-height:1.75">
-          <b>1.</b> 단축어 앱 → 아래 <b>자동화</b> → 오른쪽 위 <b>＋</b> → <b>메시지</b><br>
-          <b>2.</b> <b>메시지에 다음이 포함됨</b>에 <span class="code" style="padding:1px 6px">원</span> 입력(보낸 사람은 비워 두기)<br>
-          <b>3.</b> <b>즉시 실행</b> 선택(실행 전 확인 끄기) → 다음 → <b>새로운 빈 단축어</b><br>
-          <b>4.</b> 동작 추가: <b>URL 콘텐츠 가져오기</b><br>
-          &nbsp;&nbsp;· URL: 아래 주소 · 방법: <b>POST</b><br>
-          &nbsp;&nbsp;· 헤더: <b>Authorization</b> = 아래 값<br>
-          &nbsp;&nbsp;· 본문 요청: <b>JSON</b>, 키 <b>text</b>, 값은 변수 <b>단축어 입력</b>(메시지 내용)<br>
-          <b>5.</b> 완료. 이제 카드 문자가 오면 몇 초 안에 가계부에 들어가요.</div>
-        <div class="field">URL<div class="code">${esc(serverUrl)}/api/inbox</div></div>
-        <div class="field">Authorization 값<div class="code">Bearer ${esc(token || "(설정 → 연결의 접속 토큰)")}</div></div>
-        <div class="tiny">휴대폰 Tailscale이 켜져 있어야 보내져요. 메뉴 이름은 iOS 버전에 따라 조금 다를 수 있어요. 카카오톡 알림톡은 아이폰에서 자동으로 읽을 수 없어서, 카드사 앱에서 승인 알림을 <b>문자(SMS)</b>로 받도록 바꾸면 자동 기록이 돼요.</div>
-      </details>`;
+      <section class="card"><div class="card-head"><h2>문자 자동 보내기 설정</h2><a href="#settings/accounts">계좌 연결에서 설정</a></div>
+        <div class="tiny">아이폰 단축어 설정과 은행 계좌 연결은 설정 → 계좌 연결에 모아 두었어요.</div></section>`;
     view.onclick = async (e) => {
       const a = e.target.closest("[data-auto]"), it = e.target.closest("[data-inbox]");
       if (a) {
@@ -777,7 +815,7 @@ pages.invest = {
         <div class="small muted" style="line-height:1.7">조회 전용 연결이라 이 키로는 주문이 나가지 않아요.<br>
           1. 키움 REST API 홈페이지에서 앱키·시크릿키를 받아요(노트북 IP 등록 필요)<br>
           2. 설정 → 내 계좌 연결에 넣고 연결 확인을 눌러요</div>
-        <a class="btn dark" href="#settings/kiwoom">설정으로 가기</a></section>`;
+        <a class="btn dark" href="#settings/accounts">설정으로 가기</a></section>`;
       return;
     }
     const err = d.error ? `<div class="notice warn">${esc(d.error)}${/8010/.test(d.error) ? "<br>노트북 인터넷 주소(IP)가 바뀐 것 같아요. 키움 REST API 홈페이지 → 계좌 App Key 관리에서 현재 IP를 추가해 주세요." : ""}</div>` : "";
@@ -1176,6 +1214,7 @@ pages.settings = {
   async mount(h) {
     setTop("설정", { menu: "settings", sub: h.sub });
     if (h.sub === "theme") return this.theme();  // 색상은 서버 연결 없이도 바꿀 수 있게
+    if (h.sub === "kiwoom") h.sub = "accounts";
     const sub = h.sub;
     const s = await GET("/api/settings");
     const ping = await GET("/api/ping").catch(() => ({}));
@@ -1183,7 +1222,7 @@ pages.settings = {
     const up = await GET("/api/update").catch(() => ({ available: false, message: "" }));
     const acct = (k, label) => {
       const kw = s.kiwoom[k];
-      return `<details class="card"><summary>${label} 주문 계좌 <span class="tiny" style="margin-left:auto;margin-right:12px">${s.trade_mode[k] === "kiwoom" ? (kw.mock ? "키움 모의투자" : "키움 실전") : "앱 내 모의"}</span></summary>
+      return `<details class="card"><summary>${label} 계좌 <span class="tiny" style="margin-left:auto;margin-right:12px">${s.trade_mode[k] === "kiwoom" ? (kw.mock ? "키움 모의투자" : "키움 실전") : "앱 내 모의"}</span></summary>
         ${seg(label + " 주문 방식", [["paper", "앱 내 모의"], ["kiwoom", "키움으로 주문"]], s.trade_mode[k], "on-card")}
         <div class="tiny">앱 내 모의는 시세만 받아 앱 안에서 체결을 흉내 내요. 키움으로 주문하면 아래 키의 계좌로 주문이 나가요.</div>
         <label class="field">앱키<input data-kw="${k}" data-k="appkey" value="${esc(kw.appkey)}" autocomplete="off" autocapitalize="off"></label>
@@ -1208,24 +1247,52 @@ pages.settings = {
           <div class="btns"><button class="btn sm" id="copyLink">링크 복사</button><button class="btn sm soft" id="rotate">토큰 새로 만들기</button></div>`
         : `<div class="small muted">이 서버에 직접 연결돼 있어요.</div>`}
       </section>`;
-    const kiwoomHtml = `
-      <section class="card"><h2>내 계좌 연결(조회 전용) <span class="tag ${s.kiwoom_view.appkey ? "g" : "warn"}" style="vertical-align:2px">${s.kiwoom_view.appkey ? (s.kiwoom_view.mock ? "모의투자" : "실전") : "연결 안 됨"}</span></h2>
+    const con = sub === "accounts" ? await GET("/api/connections").catch(() => null) : null;
+    const kw = con ? con.kiwoom : {};
+    const kwState = !kw.configured ? ["연결 안 됨", "warn"] : kw.ok ? ["연결됨", "g"] : ["확인 필요", "warn"];
+    const accountsHtml = con ? `
+      <section class="card">
+        <div class="card-head"><h2>연결된 계좌</h2><span class="tiny">${(con.banks.length + (kw.configured ? 1 : 0))}개</span></div>
+        <div class="list">
+          <a class="item" href="#invest/account" style="text-decoration:none">
+            <span class="ico y">키움</span>
+            <span class="main"><b>키움증권</b><span class="sub">조회 전용 · ${kw.configured ? `${esc(kw.server || "")} · ${kw.updated_at ? esc(kw.updated_at.slice(11, 16)) + " 갱신" : ""}` : "아래에서 앱키를 넣어 연결"}</span></span>
+            <span class="end">${kw.total != null ? `<b>${won(kw.total)}</b>` : ""}<span class="tag ${kwState[1]}">${kwState[0]}</span></span></a>
+          ${con.banks.map((b) => `<button type="button" class="item" data-bk="${b.id}">
+            <span class="ico">${esc(bankLabel(b.bank).slice(0, 2))}</span>
+            <span class="main"><b>${esc(b.name)}</b><span class="sub">${esc(bankLabel(b.bank))} ${esc(maskAcct(b.acct_no))} · ${b.last_alert ? `${esc(b.last_alert.received_at.slice(5, 16).replace("T", " "))} ${b.last_alert.action === "income" ? "입금" : "출금"} 알림` : "알림 기다리는 중"}</span></span>
+            <span class="end"><b>${won(b.balance)}</b><span class="tag ${b.last_alert ? "g" : ""}">${b.last_alert ? "알림 연결" : "대기"}</span></span></button>`).join("")}
+        </div>
+        <button class="btn wide" id="bkAdd">＋ 은행 계좌 추가</button>
+      </section>
+      <section class="card"><h2>은행 계좌는 이렇게 연결돼요</h2>
+        <div class="small muted" style="line-height:1.7">은행은 개인이 직접 쓸 수 있는 공개 연동(API)이 없어서, <b>입출금 알림 문자</b>로 받은 금액과 잔액을 읽어 이 계좌들에 반영해요.<br>
+          <b>1.</b> 은행 앱에서 입출금 알림을 <b>문자(SMS)</b>로 받도록 신청해요. 하나은행은 하나원큐, NH농협은 NH올원뱅크·콕뱅크에서 신청할 수 있고, 은행에 따라 유료일 수 있어요.<br>
+          <b>2.</b> 위에서 계좌를 추가하고 계좌번호를 넣어요(문자 속 계좌번호 끝자리로 찾아요).<br>
+          <b>3.</b> 아래 단축어 자동화를 한 번 설정해요.<br>
+          지난 알림은 가계부 → 자동에서 카톡 내보내기 파일이나 복사한 문자로 넣을 수 있어요.</div>
+        <div class="tiny">마지막으로 받은 알림: ${con.inbox.last_at ? esc(con.inbox.last_at.slice(0, 16).replace("T", " ")) : "아직 없음"} · 확인 필요 ${con.inbox.pending}건</div>
+      </section>
+      ${await shortcutGuide()}
+      <section class="card"><h2>키움증권(조회 전용) <span class="tag ${kwState[1]}" style="vertical-align:2px">${kwState[0]}</span></h2>
         <div class="small muted">보유액·예수금·종목을 보기만 해요. 이 키로는 주문 기능이 아예 꺼져 있어요.</div>
+        ${kw.error ? `<div class="notice warn">${esc(kw.error)}</div>` : ""}
         <label class="field">앱키<input data-kv="appkey" value="${esc(s.kiwoom_view.appkey)}" autocomplete="off" autocapitalize="off"></label>
         <label class="field">시크릿키<input data-kv="secretkey" type="password" value="${esc(s.kiwoom_view.secretkey)}" autocomplete="off"></label>
         <label class="check"><input type="checkbox" data-kv="mock" ${s.kiwoom_view.mock ? "checked" : ""}> 모의투자 계좌 키예요</label>
         <button class="btn sm" id="kvTest">저장하고 연결 확인</button>
       </section>
+      <div class="sec-title">자동매매 주문 계좌</div>
+      ${acct("scalp", "단타")}
+      ${acct("dca", "장기투자")}
+      <div id="setErr"></div>
+      <button class="btn dark wide" id="saveSet">주문 계좌 설정 저장</button>` : `<div class="notice warn">서버에 연결되지 않아 계좌 정보를 불러오지 못했어요.</div>`;
+    const tradingHtml = `
       <section class="card"><h2>시세</h2>
         ${seg("시세 출처", [["demo", "가상 시세"], ["kiwoom", "키움 시세"]], s.data_source, "on-card")}
-        <div class="tiny">가상 시세는 장 시간이 아니어도 시험할 수 있게 빠르게 흐르는 무작위 가격이에요. 실제 검증은 <b>키움 시세 + 앱 내 모의</b>로 하세요.</div>
+        <div class="tiny">가상 시세는 장 시간이 아니어도 시험할 수 있게 빠르게 흐르는 무작위 가격이에요. 실제 검증은 <b>키움 시세 + 앱 내 모의</b>로 하세요. 키움 시세는 계좌 연결의 주문 계좌 키를 써요.</div>
         <label class="field">가상 시세 속도(1분 = 몇 초)<input class="r" id="demoSpeed" inputmode="decimal" value="${s.demo_speed}"></label>
       </section>
-      ${acct("scalp", "단타 계좌")}
-      ${acct("dca", "장기투자 계좌")}
-      <div id="setErr"></div>
-      <button class="btn dark wide" id="saveSet">설정 저장</button>`;
-    const tradingHtml = `
       <section class="card"><h2>거래 비용</h2>
         <div class="fields"><label class="field">수수료(%, 한쪽)<input class="r" id="cCom" inputmode="decimal" value="${+(s.costs.commission * 100).toFixed(4)}"></label>
           <label class="field">매도 거래세(%)<input class="r" id="cTax" inputmode="decimal" value="${+(s.costs.tax * 100).toFixed(4)}"></label>
@@ -1247,7 +1314,9 @@ pages.settings = {
         <div style="display:flex;justify-content:space-between;font-size:14px"><span class="muted">화면 빌드</span><span class="muted">${esc(UI_VERSION)}</span></div>
         <div style="display:flex;justify-content:space-between;font-size:14px"><span class="muted">서버 빌드</span><span class="muted">${esc(ping.build || "-")}</span></div>
       </section>`;
-    view.innerHTML = sub === "kiwoom" ? kiwoomHtml : sub === "trading" ? tradingHtml : sub === "app" ? appHtml : connectCard;
+    view.innerHTML = sub === "accounts" ? accountsHtml : sub === "trading" ? tradingHtml : sub === "app" ? appHtml : connectCard;
+    $("#bkAdd")?.addEventListener("click", () => bankSheet(null, route));
+    $$("[data-bk]").forEach((el) => el.addEventListener("click", () => bankSheet(con.banks.find((b) => b.id == el.dataset.bk), route)));
     const errs = (e) => { $("#setErr").innerHTML = Object.entries(e || {}).map(([k, v]) => `<div class="notice warn">${esc({ scalp: "단타 계좌", dca: "장기투자 계좌", feed: "시세" }[k] || k)}: ${esc(v)}</div>`).join(""); };
     // 지금 화면에 있는 입력란만 모아서 저장한다(다른 2뎁스 화면의 값은 건드리지 않음)
     const collect = () => {
@@ -1258,7 +1327,7 @@ pages.settings = {
         const real = {}; $$("[data-real]").forEach((i) => (real[i.dataset.real] = i.checked));
         const cash = {}; $$("[data-cash]").forEach((i) => (cash[i.dataset.cash] = num(i.value)));
         out.kiwoom = kiwoom; out.real_orders_allowed = real; out.paper_start_cash = cash;
-        out.trade_mode = { scalp: segVal(view, "단타 계좌 주문 방식"), dca: segVal(view, "장기투자 계좌 주문 방식") };
+        out.trade_mode = { scalp: segVal(view, "단타 주문 방식"), dca: segVal(view, "장기투자 주문 방식") };
       }
       if ($("[data-kv]")) { const kv = {}; $$("[data-kv]").forEach((i) => (kv[i.dataset.kv] = i.type === "checkbox" ? i.checked : i.value.trim())); out.kiwoom_view = kv; }
       if (segVal(view, "시세 출처")) { out.data_source = segVal(view, "시세 출처"); out.demo_speed = num($("#demoSpeed").value) || 2; }
@@ -1271,7 +1340,7 @@ pages.settings = {
       if ($("#pubUrl")) out.public_url = $("#pubUrl").value.trim().replace(/\/+$/, "");
       return out;
     };
-    ["시세 출처", "단타 계좌 주문 방식", "장기투자 계좌 주문 방식"].forEach((n) => bindSeg(view, n, () => {}));
+    ["시세 출처", "단타 주문 방식", "장기투자 주문 방식"].forEach((n) => bindSeg(view, n, () => {}));
     $$("[data-cash]").forEach(moneyInput);
     const link = () => {
       if (!info) return "";

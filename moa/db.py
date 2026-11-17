@@ -88,7 +88,15 @@ class DB:
                     self.x("INSERT INTO categories(name,kind,budget,sort) VALUES(?,?,?,?)",
                            (name, kind, budget, i))
             self.conn.commit()
+            self._migrate()
             self._clear_sample_budgets()
+
+    def _migrate(self):
+        """기존 DB에 새 열을 더한다(데이터는 그대로)."""
+        cols = {r["name"] for r in self.q("PRAGMA table_info(accounts)")}
+        for name in ("bank", "acct_no"):
+            if name not in cols:
+                self.x(f"ALTER TABLE accounts ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
 
     # v0.4: 처음 버전에 예시로 넣었던 예산(합계 167만 원)이 그대로면 0으로 지운다. 사용자가 바꾼 값은 두지 않는다.
     SAMPLE_BUDGETS = {"식비": 450000, "외식": 200000, "교통": 150000, "주거·통신": 520000,

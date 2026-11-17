@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2327";
+const UI_VERSION = "261117.2341";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -98,6 +98,7 @@ function confirmTap(btn, label) {
 
 // ---------- 색상 테마(이 기기에만 저장) ----------
 const THEMES = {
+  neon: { name: "네온", deep: "#0B0710", deep2: "#1D1229", bg: "#0B0710", accent: "magenta", dark: true },
   navy: { name: "남색", deep: "#111A2B", deep2: "#1C2840", bg: "#EEF1F7", accent: "yellow" },
   black: { name: "블랙", deep: "#0E0E10", deep2: "#1F1F23", bg: "#F0F0F2", accent: "lime" },
   forest: { name: "숲", deep: "#0E2A22", deep2: "#173B31", bg: "#EDF3F0", accent: "mint" },
@@ -108,11 +109,12 @@ const THEMES = {
   light: { name: "화이트", deep: "#FFFFFF", deep2: "#232C3D", bg: "#F2F4F8", accent: "yellow", light: true },
 };
 const ACCENTS = {
+  magenta: ["마젠타", "#FF3DAE"],
   yellow: ["노랑", "#FFD84D"], lime: ["라임", "#C8F560"], mint: ["민트", "#7BE0B0"], aqua: ["하늘", "#7FD6F2"],
   peach: ["복숭아", "#FFB38A"], pink: ["핑크", "#FF9EC7"], lavender: ["라벤더", "#C3B1FF"], apricot: ["살구", "#FFC56B"],
 };
 function themeVars(id, accentId) {
-  const t = THEMES[id] || THEMES.navy;
+  const t = THEMES[id] || THEMES.neon;
   const a = (ACCENTS[accentId] || ACCENTS[t.accent])[1];
   return t.light ? {
     "--deep": t.deep, "--deep2": t.deep2, "--bg": t.bg, "--hl": a, "--solid": "#172033",
@@ -124,6 +126,9 @@ function themeVars(id, accentId) {
 }
 function applyTheme(id, accentId, save = true) {
   const v = themeVars(id, accentId);
+  const dark = !!(THEMES[id] || THEMES.neon).dark;
+  document.documentElement.classList.toggle("dark-theme", dark);
+  try { localStorage.setItem("moa.dark", dark ? "1" : "0"); } catch (e) { /* 저장 불가 */ }
   Object.entries(v).forEach(([k, val]) => document.documentElement.style.setProperty(k, val));
   const mc = document.querySelector('meta[name="theme-color"]');
   if (mc) mc.content = v["--deep"];
@@ -132,6 +137,10 @@ function applyTheme(id, accentId, save = true) {
     try { localStorage.setItem("moa.themeVars", JSON.stringify(v)); } catch (e) { /* 저장 불가 */ }
   }
 }
+
+// v4.12: 새 기본 테마(네온)로 한 번 옮긴다. 설정 → 화면에서 예전 테마로 되돌릴 수 있다.
+if (store.get("themeV") !== "5") { store.set("themeV", "5"); applyTheme("neon", "magenta"); }
+else document.documentElement.classList.toggle("dark-theme", !!(THEMES[store.get("theme") || "neon"] || {}).dark);
 
 // ---------- 은행·단축어 ----------
 const BANKS = [["하나", "하나은행"], ["NH농협", "NH농협은행"], ["신한", "신한은행"], ["KB국민", "KB국민은행"], ["우리", "우리은행"],
@@ -2292,6 +2301,7 @@ const mkt = {
         : GET(`/api/invest/candles/${D.m}/${encodeURIComponent(D.sym)}?tf=${D.range}`)).catch((e) => ({ points: [], bars: [], error: e.message })) : null]);
     if (this.d !== D) return;
     D.q = q; this.qmemo[D.m + D.sym] = q;
+    if (D.cd && D.cd.bars && D.cd.bars.length && q.price) { const b = D.cd.bars[D.cd.bars.length - 1]; b.c = q.price; b.h = Math.max(b.h, q.price); b.l = Math.min(b.l, q.price); }
     if (ch) { if (line) { D.chart = ch; this.cmemo[D.m + D.sym + "1d"] = ch; } else D.cd = ch; }
     this.drawDetail(full || !$("#mkPrice"));
     if (D.tab !== "chart") this.loadTab();
@@ -2405,7 +2415,7 @@ const mkt = {
     pEl.textContent = P(q.price); pEl.dataset.v = q.price;
     if (old && Number(old) !== q.price) { pEl.classList.remove("fl-up", "fl-dn"); void pEl.offsetWidth; pEl.classList.add(q.price > Number(old) ? "fl-up" : "fl-dn"); }
     $("#mkDelta").className = "mk-delta " + tone(q.change);
-    $("#mkDelta").innerHTML = `${q.change > 0 ? "▲" : q.change < 0 ? "▼" : ""} ${this.money(Math.abs(q.change), cur)} (${pct(q.change_pct, 2)})${usd && q.fx ? `<span class="mk-krw">약 ${won(q.price * q.fx)}원</span>` : ""}`;
+    $("#mkDelta").innerHTML = `${q.change > 0 ? `<i class="arr up"></i>` : q.change < 0 ? `<i class="arr dn"></i>` : ""} ${this.money(Math.abs(q.change), cur)} (${pct(q.change_pct, 2)})${usd && q.fx ? `<span class="mk-krw">약 ${won(q.price * q.fx)}원</span>` : ""}`;
     { const S = marketSession(m); $("#mkSessH").innerHTML = `<span class="ss-chip ss-${S.phase}"><i></i>${esc(S.label)}</span><span>${esc(S.sub)}</span>`; }
     $("#mkMini").innerHTML = `<span>시가 ${this.money(q.open, cur)}</span><span>고가 <b class="up">${this.money(q.high, cur)}</b></span><span>저가 <b class="down">${this.money(q.low, cur)}</b></span><span>거래량 ${q.volume != null ? bigNum(q.volume) : "-"}</span>`;
     $("#mkHold").innerHTML = hd ? `<section class="card"><div class="card-head"><h2>내 보유</h2><span class="tiny">키움 계좌</span></div>
@@ -2417,7 +2427,8 @@ const mkt = {
     const D = this.d, el = $("#mkChart");
     if (!el) return;
     if (D.range !== "1d") { const a0 = !$("svg", el); el.innerHTML = candleChart(D.cd, D.q.currency, (n) => this.money(n, D.q.currency)); bindCandle(el, D.cd, (n) => this.money(n, D.q.currency)); if (a0) $("svg", el)?.classList.add("anim"); return; }
-    const c = D.chart || {}, pts = (c.points || []).filter((p) => p.c != null);
+    const c = D.chart || {}, pts = (c.points || []).filter((p) => p.c != null).slice();
+    if (pts.length && D.q.price && pts[pts.length - 1].c !== D.q.price) pts.push({ t: "지금", c: D.q.price });
     if (pts.length < 2) { el.innerHTML = `<div class="empty small">${esc(c.error || "차트 자료가 아직 없어요")}</div>`; return; }
     const base = D.range === "1d" && c.prev ? c.prev : pts[0].c;
     const last = pts[pts.length - 1].c, up = last >= base, col = up ? "var(--up)" : "var(--down)";
@@ -2431,13 +2442,15 @@ const mkt = {
     const lab = (i, v, below) => { const x = X(i), anchor = x < 50 ? "start" : x > W - 50 ? "end" : "middle"; return `<text x="${x.toFixed(1)}" y="${(Y(v) + (below ? 14 : -6)).toFixed(1)}" text-anchor="${anchor}" class="mk-lab">${below ? "최저" : "최고"} ${this.money(v, cur)}</text>`; };
     const anim = !$("svg", el);
     el.innerHTML = `<svg viewBox="0 -14 ${W} ${H + 28}" class="mk-svg ${anim ? "anim" : ""}" role="img" aria-label="가격 차트">
-      <defs><linearGradient id="mkG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${up ? "#D0342C" : "#2557D6"}" stop-opacity=".16"/><stop offset="1" stop-color="${up ? "#D0342C" : "#2557D6"}" stop-opacity="0"/></linearGradient></defs>
+      <defs><linearGradient id="mkG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".28"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>
       ${D.range === "1d" && c.prev ? `<line x1="0" x2="${W}" y1="${Y(c.prev).toFixed(1)}" y2="${Y(c.prev).toFixed(1)}" stroke="var(--line2)" stroke-dasharray="3 4"/>` : ""}
       <path d="${line}L${W},${H}L0,${H}Z" fill="url(#mkG)"/>
       <path class="ln" pathLength="1" d="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
       ${lab(hiI, pts[hiI].c, false)}${lab(loI, pts[loI].c, true)}
+      <line class="lv-line" x1="0" x2="${W}" y1="${Y(last).toFixed(1)}" y2="${Y(last).toFixed(1)}" stroke="${col}"/>
+      <circle class="lv-ring" cx="${W}" cy="${Y(last).toFixed(1)}" r="5" fill="${col}"/><circle cx="${W - 0.5}" cy="${Y(last).toFixed(1)}" r="3.6" fill="${col}" stroke="var(--card)" stroke-width="1.5"/>
       <g id="mkCur" visibility="hidden"><line y1="0" y2="${H}" stroke="var(--ink3)" stroke-width="1"/><circle r="4.5" fill="${col}" stroke="#fff" stroke-width="2"/></g>
-    </svg><div class="mk-tip" id="mkTip" hidden></div>`;
+    </svg><div class="mk-tip" id="mkTip" hidden></div><div class="lv-badge"><i></i>실시간</div>`;
     const svg = $("svg", el), g = $("#mkCur", el), tip = $("#mkTip", el);
     const at = (ev) => {
       const r = svg.getBoundingClientRect(), x = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left) / r.width;
@@ -2484,6 +2497,8 @@ function candleChart(cd, cur, fmt) {
     <path d="${maLine(bars, 20, X, Y)}" fill="none" stroke="#8E44AD" stroke-width="1.2"/>
     ${lab(hiI, hi, false)}${lab(loI, lo, true)}
     <line x1="0" x2="${W}" y1="${PH + G / 2}" y2="${PH + G / 2}" stroke="var(--line2)" stroke-width=".5"/>
+    <line class="lv-line" x1="0" x2="${W}" y1="${Y(bars[n - 1].c).toFixed(1)}" y2="${Y(bars[n - 1].c).toFixed(1)}" stroke="${bars[n - 1].c >= bars[n - 1].o ? "var(--up)" : "var(--down)"}"/>
+    <circle class="lv-ring" cx="${X(n - 1).toFixed(1)}" cy="${Y(bars[n - 1].c).toFixed(1)}" r="4" fill="${bars[n - 1].c >= bars[n - 1].o ? "var(--up)" : "var(--down)"}"/>
     <g id="cdCur" visibility="hidden"><line y1="0" y2="${PH + G + VH}" stroke="var(--ink3)" stroke-width=".7" stroke-dasharray="2 2"/></g>
   </svg><div class="tiny cd-src">${esc(bars[0].t)} ~ ${esc(bars[bars.length - 1].t)} · ${esc(cd.source || "")}</div>`;
 }
@@ -2998,7 +3013,7 @@ pages.settings = {
     };
   },
   theme() {
-    const cur = store.get("theme") || "navy";
+    const cur = store.get("theme") || "neon";
     const curA = store.get("accent") || THEMES[cur].accent;
     const draw = (tid, aid) => {
       view.innerHTML = `
@@ -3041,7 +3056,7 @@ pages.settings = {
       const t = e.target.closest("[data-theme]"), a = e.target.closest("[data-accent]"), r = e.target.closest("[data-reset-theme]");
       if (t) { tid = t.dataset.theme; aid = THEMES[tid].accent; }
       else if (a) aid = a.dataset.accent;
-      else if (r) { tid = "navy"; aid = "yellow"; }
+      else if (r) { tid = "neon"; aid = "magenta"; }
       else return;
       applyTheme(tid, aid);
       draw(tid, aid);

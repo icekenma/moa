@@ -14,6 +14,9 @@ API = {
     "token": "/oauth2/token",
     "quote": ("/api/dostk/stkinfo", "ka10001"),     # 주식기본정보요청
     "minute": ("/api/dostk/chart", "ka10080"),      # 주식분봉차트조회요청
+    "daily": ("/api/dostk/chart", "ka10081"),       # 주식일봉차트조회요청
+    "index": ("/api/dostk/sect", "ka20001"),        # 업종현재가요청(코스피 001, 코스닥 101)
+    "stocklist": ("/api/dostk/stkinfo", "ka10099"), # 종목정보 리스트(코스피 0, 코스닥 10, ETF 8)
     "buy": ("/api/dostk/ordr", "kt10000"),          # 주식 매수주문
     "sell": ("/api/dostk/ordr", "kt10001"),         # 주식 매도주문
     "balance": ("/api/dostk/acnt", "kt00018"),      # 계좌평가잔고내역요청

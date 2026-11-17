@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1110";
+const UI_VERSION = "261117.1119";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -222,7 +222,7 @@ const MENU = {
   home: { title: "홈", subs: [["summary", "요약"], ["activity", "최근 활동"]] },
   ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["analysis", "분석"], ["budget", "예산"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
-  invest: { title: "투자", subs: [["account", "내 계좌"], ["trade", "매매"], ["scalp", "단타"], ["dca", "적립"]], extra: { backtest: "scalp", rules: "scalp" } },
+  invest: { title: "투자", subs: [["market", "시세"], ["account", "내 계좌"], ["trade", "매매"], ["scalp", "단타"], ["dca", "적립"]], extra: { backtest: "scalp", rules: "scalp", stock: "market" } },
   settings: { title: "설정", subs: [["connect", "서버"], ["accounts", "계좌 연결"], ["trading", "매매"], ["theme", "색상"], ["app", "앱 정보"]] },
 };
 const lastSub = {};
@@ -779,25 +779,28 @@ pages.assets = {
 // =====================================================================
 // 투자: 매매 / 단타 / 적립 (+ 백테스트, 매매 규칙)
 // =====================================================================
-const investState = { tab: "account" };
+const investState = { tab: "market" };
 pages.invest = {
   every: 2500,
   async mount(h) {
     const sub = h.sub || investState.tab;
     if (sub === "backtest") return this.backtest();
     if (sub === "rules") return this.rules();
-    investState.tab = ["account", "trade", "scalp", "dca"].includes(sub) ? sub : "account";
+    if (sub === "stock") return mkt.detail(h);
+    investState.tab = ["market", "account", "trade", "scalp", "dca"].includes(sub) ? sub : "market";
     setTop("투자", { menu: "invest", sub: investState.tab });
     view.innerHTML = `<div id="iv" style="display:flex;flex-direction:column;gap:12px"></div>`;
     await this.fill();
   },
   async refresh(h) {
     if (["backtest", "rules"].includes(h.sub)) return;
+    if (h.sub === "stock") return mkt.refreshDetail();
     if (investState.tab !== "dca") await this.fill();
   },
   async fill() {
     const box = $("#iv");
     if (!box) return;
+    if (investState.tab === "market") return mkt.board(box);
     if (investState.tab === "account") return this.account(box);
     if (investState.tab === "trade") return this.trade(box);
     if (investState.tab === "scalp") return this.scalp(box);
@@ -1096,6 +1099,226 @@ const STRAT_DESC = {
   orb_vwap: "장 시작 후 정한 시간 동안의 고가를 거래량이 붙으며 처음 넘을 때 사요. 가격이 VWAP(당일 평균 체결가) 위일 때만 들어가요.",
   vwap_pullback: "오늘 충분히 오른 종목이 VWAP 근처까지 눌렸다가 직전 봉 고가를 넘으면 사요. 손절은 눌림 저점 바로 아래예요.",
 };
+
+
+// =====================================================================
+// 투자 → 시세: 국내·미국 관심종목, 지수, 검색, 종목 상세(차트)
+// =====================================================================
+const mkt = {
+  m: store.get("mkt") === "us" ? "us" : "kr",
+  showAmt: store.get("mktAmt") === "1",
+  last: {},          // 직전 가격(바뀐 칸 깜빡임용)
+  d: null,           // 상세 화면 상태
+
+  money(n, cur) {
+    if (n == null || isNaN(n)) return "-";
+    if (cur === "KRW" || this.m === "kr" && cur !== "USD") return won(n);
+    return Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  },
+  chg(q) {
+    if (q.price == null) return "";
+    return this.showAmt ? (q.change > 0 ? "+" : q.change < 0 ? "−" : "") + this.money(Math.abs(q.change), q.currency) : pct(q.change_pct, 2);
+  },
+  spark(pts, up) {
+    const v = (pts || []).filter((x) => x != null);
+    if (v.length < 2) return `<svg class="spark" aria-hidden="true"></svg>`;
+    const lo = Math.min(...v), hi = Math.max(...v), r = hi - lo || 1, W = 64, H = 26;
+    const d = v.map((y, i) => `${i ? "L" : "M"}${(i / (v.length - 1) * W).toFixed(1)},${(H - 2 - (y - lo) / r * (H - 4)).toFixed(1)}`).join("");
+    return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true"><path d="${d}" fill="none" stroke="${up ? "var(--up)" : "var(--down)"}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+  },
+
+  // ---------- 관심종목 보드 ----------
+  async board(box) {
+    const first = !$("#mkBoard", box);
+    if (first) {
+      $(".fab")?.remove();
+      box.innerHTML = `<div id="mkBoard" class="mk">
+        <div class="mk-idx" id="mkIdx" aria-label="지수"></div>
+        <div class="mk-bar">
+          ${seg("시장", [["kr", "국내"], ["us", "미국"]], this.m, "mk-seg")}
+          <button type="button" class="mk-find" id="mkFind" aria-label="종목 검색"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>종목 검색</button>
+        </div>
+        <div id="mkNote"></div>
+        <section class="card tight"><div class="mk-head"><span>관심종목</span><button type="button" class="link" id="mkToggle"></button></div><div class="list" id="mkList"><div class="empty">불러오는 중</div></div></section>
+        <div class="tiny" id="mkFoot" style="padding:0 4px"></div>
+      </div>`;
+      bindSeg(box, "시장", (v) => { this.m = v; store.set("mkt", v === "us" ? "us" : ""); this.last = {}; $("#mkList").innerHTML = `<div class="empty">불러오는 중</div>`; $("#mkIdx").innerHTML = ""; this.board(box); });
+      $("#mkFind").onclick = () => this.search();
+      $("#mkToggle").onclick = () => { this.showAmt = !this.showAmt; store.set("mktAmt", this.showAmt ? "1" : ""); this.board(box); };
+      $("#mkList").onclick = (e) => {
+        const r = e.target.closest("[data-sym]");
+        if (r) location.hash = `#invest/stock?m=${this.m}&s=${encodeURIComponent(r.dataset.sym)}`;
+      };
+    }
+    const m = this.m;
+    const d = await GET(`/api/market/overview?mkt=${m}`);
+    if (investState.tab !== "market" || m !== this.m || !$("#mkList")) return;
+    $("#mkToggle").textContent = this.showAmt ? "등락폭" : "등락률";
+    $("#mkIdx").innerHTML = d.indices.map((x) => `<div class="mk-i"><span>${esc(x.name)}</span>
+      <b>${x.price == null ? "-" : x.name.includes("환율") ? won(x.price) : Number(x.price).toLocaleString("en-US", { maximumFractionDigits: 2 })}</b>
+      <em class="${tone(x.change_pct)}">${x.price == null ? "" : pct(x.change_pct, 2)}</em></div>`).join("");
+    const delayed = m === "kr" && !d.kiwoom;
+    $("#mkNote").innerHTML = delayed ? `<div class="notice">키움을 연결하면 국내 시세가 실시간으로 바뀌어요. 지금은 지연 시세예요. <a href="#settings/accounts">연결하기</a></div>` : "";
+    const L = d.items;
+    $("#mkList").innerHTML = L.length ? L.map((q) => {
+      const key = m + q.sym, prev = this.last[key];
+      const flash = prev != null && q.price != null && prev !== q.price ? (q.price > prev ? "fl-up" : "fl-dn") : "";
+      if (q.price != null) this.last[key] = q.price;
+      const sub = m === "us" && d.fx && q.price != null ? `${esc(q.sym)} · ${won(q.price * d.fx)}원` : `${esc(q.sym)}${q.exchange ? " · " + esc(q.exchange) : ""}`;
+      return `<button type="button" class="item mk-row" data-sym="${esc(q.sym)}">
+        <span class="main"><b>${esc(q.name || q.sym)}</b><span class="sub">${q.error ? "시세를 받지 못했어요" : sub}</span></span>
+        ${this.spark(q.spark, (q.change || 0) >= 0)}
+        <span class="end"><b class="mk-p ${flash}">${m === "us" && q.price != null ? "$" : ""}${this.money(q.price, q.currency)}</b>
+          <span class="mk-c ${tone(q.change)}">${this.chg(q)}</span></span></button>`;
+    }).join("") : `<div class="empty">관심종목이 없어요. 종목 검색에서 별을 눌러 추가하세요.</div>`;
+    $("#mkFoot").textContent = `${(d.updated_at || "").slice(11, 19)} 기준 · ${m === "kr" ? (d.kiwoom ? "키움 실시간" : "지연 시세") : "미국 시세는 공개 시세(최대 15분 지연)"} · 종목을 누르면 차트와 상세가 보여요`;
+  },
+
+  // ---------- 검색 ----------
+  search() {
+    const m = this.m;
+    openSheet(m === "kr" ? "국내 종목 검색" : "미국 종목 검색", `
+      <label class="field">${m === "kr" ? "종목명 또는 6자리 코드" : "회사 이름 또는 기호(AAPL)"}<input id="mkQ" type="search" autocomplete="off" enterkeyhint="search" placeholder="${m === "kr" ? "삼성전자" : "apple"}"></label>
+      <div class="list" id="mkRes"><div class="empty small">${m === "kr" ? "이름 일부만 넣어도 찾아요" : "영문으로 넣어 주세요"}</div></div>`, (box) => {
+      const q = $("#mkQ", box);
+      let t = null, seq = 0;
+      const go = async () => {
+        const v = q.value.trim(), my = ++seq;
+        if (!v) { $("#mkRes").innerHTML = ""; return; }
+        $("#mkRes").innerHTML = `<div class="empty small">찾는 중</div>`;
+        try {
+          const [res, w] = await Promise.all([GET(`/api/market/search?mkt=${m}&q=${encodeURIComponent(v)}`), GET(`/api/market/overview?mkt=${m}`).catch(() => ({ items: [] }))]);
+          if (my !== seq) return;
+          const on = new Set((w.items || []).map((x) => x.sym));
+          $("#mkRes").innerHTML = res.length ? res.map((x) => `<div class="item">
+            <a class="main" href="#invest/stock?m=${m}&s=${encodeURIComponent(x.sym)}" style="text-decoration:none"><b>${esc(x.name)}</b><span class="sub">${esc(x.sym)}${x.exchange ? " · " + esc(x.exchange) : ""}</span></a>
+            <button type="button" class="star" data-star="${esc(x.sym)}" aria-pressed="${on.has(x.sym)}" aria-label="${esc(x.name)} 관심종목">${STAR}</button></div>`).join("")
+            : `<div class="empty small">찾는 종목이 없어요</div>`;
+        } catch (e) { if (my === seq) $("#mkRes").innerHTML = `<div class="notice warn">${esc(e.message)}</div>`; }
+      };
+      q.oninput = () => { clearTimeout(t); t = setTimeout(go, 300); };
+      $("#mkRes").onclick = async (e) => {
+        const b = e.target.closest("[data-star]");
+        if (!b) { if (e.target.closest("a")) closeSheet(); return; }
+        const on = b.getAttribute("aria-pressed") !== "true";
+        await run(() => api("POST", "/api/market/watch", { mkt: m, sym: b.dataset.star, on }), on ? "관심종목에 넣었어요" : "관심종목에서 뺐어요");
+        b.setAttribute("aria-pressed", String(on));
+        if ($("#mkList")) this.board($("#iv"));
+      };
+      setTimeout(() => q.focus(), 50);
+    });
+  },
+
+  // ---------- 종목 상세 ----------
+  async detail(h) {
+    const m = h.params.get("m") === "us" ? "us" : "kr", sym = (h.params.get("s") || "").toUpperCase();
+    this.d = { m, sym, range: "1d", q: null, chart: null };
+    setTop("시세", { back: "#invest/market", menu: "invest", sub: "stock", right: `<button type="button" class="star on-deep" id="mkStar" aria-pressed="false" aria-label="관심종목">${STAR}</button>` });
+    view.innerHTML = `<div class="mk-d" id="mkD"><div class="empty">불러오는 중</div></div>`;
+    await this.refreshDetail(true);
+  },
+  async refreshDetail(full) {
+    const D = this.d;
+    if (!D || !$("#mkD")) return;
+    const q = await GET(`/api/market/quote/${D.m}/${encodeURIComponent(D.sym)}`);
+    if (this.d !== D) return;
+    D.q = q;
+    if (full || !D.chart || D.range === "1d") {
+      try { D.chart = await GET(`/api/market/chart/${D.m}/${encodeURIComponent(D.sym)}?range=${D.range}`); } catch (e) { D.chart = { points: [], error: e.message }; }
+      if (this.d !== D) return;
+    }
+    this.drawDetail(full);
+  },
+  drawDetail(full) {
+    const D = this.d, q = D.q, m = D.m, cur = q.currency, usd = m === "us";
+    const P = (n) => (usd ? "$" : "") + this.money(n, cur) + (usd ? "" : "원");
+    $("#mkStar").setAttribute("aria-pressed", String(!!q.watched));
+    $("#mkStar").onclick = async () => {
+      const on = !q.watched;
+      await run(() => api("POST", "/api/market/watch", { mkt: m, sym: D.sym, on }), on ? "관심종목에 넣었어요" : "관심종목에서 뺐어요");
+      q.watched = on; $("#mkStar").setAttribute("aria-pressed", String(on));
+    };
+    const r52 = q.high52 && q.low52 && q.high52 > q.low52 ? Math.min(100, Math.max(0, (q.price - q.low52) / (q.high52 - q.low52) * 100)) : null;
+    const hd = q.holding;
+    const box = $("#mkD");
+    if (full || !$("#mkPrice")) {
+      box.innerHTML = `
+        <section class="mk-hero">
+          <div class="mk-name"><b>${esc(q.name)}</b><span>${esc(D.sym)}${q.exchange ? " · " + esc(q.exchange) : ""}${q.delayed ? " · 지연" : ""}</span></div>
+          <div class="mk-price" id="mkPrice"></div>
+          <div class="mk-delta" id="mkDelta"></div>
+        </section>
+        <section class="card mk-chart-card">
+          <div class="mk-chart" id="mkChart"></div>
+          ${seg("기간", [["1d", "1일"], ["1m", "1개월"], ["3m", "3개월"], ["1y", "1년"]], D.range, "on-card mk-range")}
+        </section>
+        <section class="card"><div class="mk-grid" id="mkGrid"></div>
+          <div id="mk52"></div></section>
+        <div id="mkHold"></div>
+        ${usd ? `<div class="tiny" style="padding:0 4px">미국 주식 주문은 아직 지원하지 않아요. 시세는 공개 시세(최대 15분 지연)예요.</div>` : ""}
+        ${usd ? "" : `<div class="mk-act"><button type="button" class="btn blue" data-o="sell">매도</button><button type="button" class="btn red" data-o="buy">매수</button></div>`}`;
+      bindSeg(box, "기간", async (v) => {
+        D.range = v; $("#mkChart").innerHTML = `<div class="empty small">불러오는 중</div>`;
+        try { D.chart = await GET(`/api/market/chart/${m}/${encodeURIComponent(D.sym)}?range=${v}`); } catch (e) { D.chart = { points: [], error: e.message }; }
+        if (this.d === D) this.drawChart();
+      });
+      $$("[data-o]", box).forEach((b) => b.onclick = () => orderSheet({ code: D.sym, side: b.dataset.o, qty: b.dataset.o === "sell" && hd ? hd.qty : 1 }));
+    }
+    const pEl = $("#mkPrice"), old = pEl.dataset.v;
+    pEl.textContent = P(q.price); pEl.dataset.v = q.price;
+    if (old && Number(old) !== q.price) { pEl.classList.remove("fl-up", "fl-dn"); void pEl.offsetWidth; pEl.classList.add(q.price > Number(old) ? "fl-up" : "fl-dn"); }
+    $("#mkDelta").className = "mk-delta " + tone(q.change);
+    $("#mkDelta").innerHTML = `${q.change > 0 ? "▲" : q.change < 0 ? "▼" : ""} ${this.money(Math.abs(q.change), cur)} (${pct(q.change_pct, 2)})${usd && q.fx ? `<span class="mk-krw">약 ${won(q.price * q.fx)}원</span>` : ""}`;
+    const vol = q.volume != null ? Number(q.volume).toLocaleString("ko-KR") : "-";
+    $("#mkGrid").innerHTML = [["시가", q.open], ["고가", q.high], ["저가", q.low], ["전일 종가", q.prev]]
+      .map(([k, v]) => `<div><span>${k}</span><b class="${k === "고가" ? "up" : k === "저가" ? "down" : ""}">${v == null ? "-" : this.money(v, cur)}</b></div>`).join("") + `<div><span>거래량</span><b>${vol}</b></div>`;
+    $("#mk52").innerHTML = r52 == null ? "" : `<div class="mk-52"><div class="tiny">52주 범위</div>
+      <div class="mk-52bar"><i style="left:${r52}%"></i></div>
+      <div class="mk-52lbl"><span>최저 ${this.money(q.low52, cur)}</span><span>최고 ${this.money(q.high52, cur)}</span></div></div>`;
+    $("#mkHold").innerHTML = hd ? `<section class="card"><div class="card-head"><h2>내 보유</h2><span class="tiny">키움 계좌</span></div>
+      <div class="kv"><div>보유 수량<b>${won(hd.qty)}주</b></div><div>평균 단가<b>${won(hd.avg_price)}</b></div><div>평가 금액<b>${won(hd.value)}</b></div></div>
+      <div class="small ${tone(hd.pnl)}" style="font-weight:700">평가손익 ${signed(hd.pnl)}원 (${pct(hd.pnl_pct, 2)})</div></section>` : "";
+    this.drawChart();
+  },
+  drawChart() {
+    const D = this.d, el = $("#mkChart");
+    if (!el) return;
+    const c = D.chart || {}, pts = (c.points || []).filter((p) => p.c != null);
+    if (pts.length < 2) { el.innerHTML = `<div class="empty small">${esc(c.error || "차트 자료가 아직 없어요")}</div>`; return; }
+    const base = D.range === "1d" && c.prev ? c.prev : pts[0].c;
+    const last = pts[pts.length - 1].c, up = last >= base, col = up ? "var(--up)" : "var(--down)";
+    const vals = pts.map((p) => p.c).concat(D.range === "1d" && c.prev ? [c.prev] : []);
+    const lo = Math.min(...vals), hi = Math.max(...vals), rr = hi - lo || 1;
+    const W = 340, H = 180, pad = 8;
+    const X = (i) => (i / (pts.length - 1)) * W, Y = (v) => pad + (1 - (v - lo) / rr) * (H - pad * 2);
+    const line = pts.map((p, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(p.c).toFixed(1)}`).join("");
+    const hiI = pts.findIndex((p) => p.c === Math.max(...pts.map((x) => x.c))), loI = pts.findIndex((p) => p.c === Math.min(...pts.map((x) => x.c)));
+    const cur = D.q.currency;
+    const lab = (i, v, below) => { const x = X(i), anchor = x < 50 ? "start" : x > W - 50 ? "end" : "middle"; return `<text x="${x.toFixed(1)}" y="${(Y(v) + (below ? 14 : -6)).toFixed(1)}" text-anchor="${anchor}" class="mk-lab">${below ? "최저" : "최고"} ${this.money(v, cur)}</text>`; };
+    el.innerHTML = `<svg viewBox="0 -14 ${W} ${H + 28}" class="mk-svg" role="img" aria-label="가격 차트">
+      <defs><linearGradient id="mkG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${up ? "#D0342C" : "#2557D6"}" stop-opacity=".16"/><stop offset="1" stop-color="${up ? "#D0342C" : "#2557D6"}" stop-opacity="0"/></linearGradient></defs>
+      ${D.range === "1d" && c.prev ? `<line x1="0" x2="${W}" y1="${Y(c.prev).toFixed(1)}" y2="${Y(c.prev).toFixed(1)}" stroke="var(--line2)" stroke-dasharray="3 4"/>` : ""}
+      <path d="${line}L${W},${H}L0,${H}Z" fill="url(#mkG)"/>
+      <path d="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+      ${lab(hiI, pts[hiI].c, false)}${lab(loI, pts[loI].c, true)}
+      <g id="mkCur" visibility="hidden"><line y1="0" y2="${H}" stroke="var(--ink3)" stroke-width="1"/><circle r="4.5" fill="${col}" stroke="#fff" stroke-width="2"/></g>
+    </svg><div class="mk-tip" id="mkTip" hidden></div>`;
+    const svg = $("svg", el), g = $("#mkCur", el), tip = $("#mkTip", el);
+    const at = (ev) => {
+      const r = svg.getBoundingClientRect(), x = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left) / r.width;
+      const i = Math.max(0, Math.min(pts.length - 1, Math.round(x * (pts.length - 1))));
+      g.setAttribute("visibility", "visible");
+      $("line", g).setAttribute("x1", X(i)); $("line", g).setAttribute("x2", X(i));
+      $("circle", g).setAttribute("cx", X(i)); $("circle", g).setAttribute("cy", Y(pts[i].c));
+      const ch = (pts[i].c - base) / base * 100;
+      tip.hidden = false; tip.innerHTML = `<b>${this.money(pts[i].c, cur)}</b> <span class="${tone(ch)}">${pct(ch, 2)}</span> <span>${esc(pts[i].t)}</span>`;
+    };
+    const off = () => { g.setAttribute("visibility", "hidden"); tip.hidden = true; };
+    svg.addEventListener("pointerdown", at); svg.addEventListener("pointermove", at);
+    svg.addEventListener("pointerleave", off); svg.addEventListener("pointerup", (e) => { if (e.pointerType !== "mouse") setTimeout(off, 1200); });
+  },
+};
+const STAR = `<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 17l-5.4 2.9 1.1-6.1L3.2 9.6l6.1-.8z" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
 
 // ---------- 주문 시트 ----------
 function orderSheet(o) {

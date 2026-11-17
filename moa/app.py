@@ -1,5 +1,6 @@
 """웹 서버와 API."""
 import hmac
+import json
 import os
 import secrets
 from datetime import date
@@ -368,6 +369,66 @@ def create_app(rt, updater=None):
             inbox={"last_at": last["received_at"] if last else None, **{k: v for k, v in rt.inbox.list(1).items() if k != "items"}},
             trading={e: {"mode": s["trade_mode"][e], "label": (rt.brokers[e].label if rt.brokers.get(e) else None),
                          "error": rt.errors.get(e)} for e in ("scalp", "dca")})
+
+    # ---------- 시세(국내·미국) ----------
+    def mkt_arg(m):
+        if m not in ("kr", "us"):
+            raise ValueError("시장은 kr 또는 us예요")
+        return m
+
+    def sym_arg(m, s):
+        s = (s or "").strip().upper()
+        if m == "kr":
+            s = "".join(ch for ch in s if ch.isalnum())
+            if len(s) != 6:
+                raise ValueError("국내 종목코드는 6자리예요")
+        elif not s or len(s) > 12 or not all(ch.isalnum() or ch in ".-^=" for ch in s):
+            raise ValueError("미국 종목 기호를 확인해 주세요")
+        return s
+
+    @app.get("/api/market/overview")
+    def market_overview():
+        return jsonify(rt.market.overview(mkt_arg(request.args.get("mkt", "kr"))))
+
+    @app.get("/api/market/quote/<m>/<sym>")
+    def market_quote(m, sym):
+        m = mkt_arg(m); sym = sym_arg(m, sym)
+        q = dict(rt.market.kr_quote(sym) if m == "kr" else rt.market.yh_quote(sym))
+        q["watched"] = sym in rt.market.watch()[m]
+        q["holding"] = rt.market.holding(sym) if m == "kr" else None
+        if m == "us":
+            try:
+                q["fx"] = rt.market.yh_quote("USDKRW=X")["price"]
+            except Exception:
+                q["fx"] = None
+        return jsonify(q)
+
+    @app.get("/api/market/chart/<m>/<sym>")
+    def market_chart(m, sym):
+        m = mkt_arg(m); sym = sym_arg(m, sym)
+        rng = request.args.get("range", "1d")
+        if rng not in ("1d", "1m", "3m", "1y"):
+            raise ValueError("기간을 골라 주세요")
+        return jsonify(rt.market.kr_chart(sym, rng) if m == "kr" else rt.market.yh_chart(sym, rng))
+
+    @app.get("/api/market/search")
+    def market_search():
+        m = mkt_arg(request.args.get("mkt", "kr"))
+        q = (request.args.get("q") or "").strip()[:30]
+        if not q:
+            return jsonify([])
+        return jsonify(rt.market.kr_search(q) if m == "kr" else rt.market.us_search(q))
+
+    @app.post("/api/market/watch")
+    def market_watch():
+        d = body()
+        m = mkt_arg(d.get("mkt")); sym = sym_arg(m, d.get("sym"))
+        return jsonify(rt.market.set_watch(m, sym, bool(d.get("on"))))
+
+    @app.get("/api/market/diag")
+    def market_diag():
+        return app.response_class(json.dumps(rt.market.diag(), ensure_ascii=False, default=str, indent=1),
+                                  mimetype="application/json")
 
     # ---------- 내 계좌(조회 전용) ----------
     @app.get("/api/myaccount")

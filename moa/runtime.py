@@ -11,6 +11,7 @@ from .broker.demo import DemoFeed
 from .broker.kiwoom import KiwoomClient, KiwoomFeed
 from .inbox import Inbox
 from .ledger import Ledger
+from .market import Market
 from .myaccount import AccountView
 from .settings import Settings
 from .trading.dca import DcaEngine
@@ -18,12 +19,13 @@ from .trading.scalp import ScalpEngine
 
 
 class Runtime:
-    def __init__(self, db, start_thread=True):
+    def __init__(self, db, start_thread=True, data_dir=None):
         self.db = db
         self.settings = Settings(db)
         self.ledger = Ledger(db)
         self.account = AccountView(self.settings)
         self.inbox = Inbox(db, self.ledger, self.settings)
+        self.market = Market(self, data_dir or ".")
         self.assets = Assets(db, self.value_of)
         self.feed = None
         self.brokers = {}

@@ -474,3 +474,91 @@ def test_balance_needs_account_number_and_ignore_restores(rt):
     assert rt.db.one("SELECT balance FROM accounts")["balance"] == 2005000
     c.post(f"/api/inbox/{r['item']['id']}/ignore")
     assert rt.db.one("SELECT balance FROM accounts")["balance"] == 2000000
+
+
+class _FakeMarketKiwoom(_FakeKiwoom):
+    """시세 TR 흉내: ka10001, ka20001, ka10080, ka10081, ka10099(2페이지)."""
+    def post(self, url, json=None, headers=None, timeout=None):
+        if url.endswith("/oauth2/token"):
+            return _Resp({"token": "T", "expires_dt": "20991231235959", "return_code": 0})
+        api = headers["api-id"]
+        self.calls.append(api)
+        if api == "ka10001":
+            return _Resp({"return_code": 0, "stk_nm": "삼성전자", "cur_prc": "-70100", "pred_pre": "-900",
+                          "flu_rt": "-1.27", "base_pric": "71000", "open_pric": "+71200", "high_pric": "+71500",
+                          "low_pric": "-69900", "trde_qty": "1234567", "250hgst": "+88000", "250lwst": "-49900"})
+        if api == "ka20001":
+            return _Resp({"return_code": 0, "cur_prc": "-2394.49", "pred_pre": "-12.30", "flu_rt": "-0.51"})
+        if api == "ka10080":
+            return _Resp({"return_code": 0, "stk_min_pole_chart_qry": [
+                {"cntr_tm": "20261113153000", "cur_prc": "-70100"}, {"cntr_tm": "20261113090100", "cur_prc": "71200"},
+                {"cntr_tm": "20261112153000", "cur_prc": "71000"}]})
+        if api == "ka10081":
+            today = datetime.now()
+            return _Resp({"return_code": 0, "stk_dt_pole_chart_qry": [
+                {"dt": today.strftime("%Y%m%d"), "cur_prc": "70100"},
+                {"dt": (today - __import__("datetime").timedelta(days=3)).strftime("%Y%m%d"), "cur_prc": "71000"},
+                {"dt": "20200101", "cur_prc": "50000"}]})
+        if api == "ka10099":
+            if headers.get("next-key") == "K2":
+                return _Resp({"return_code": 0, "list": [{"code": "000660", "name": "SK하이닉스"}]}, {"cont-yn": "N"})
+            if json["mrkt_tp"] == "0":
+                return _Resp({"return_code": 0, "list": [{"code": "005930", "name": "삼성전자"},
+                                                         {"code": "005935", "name": "삼성전자우"}]},
+                             {"cont-yn": "Y", "next-key": "K2"})
+            return _Resp({"return_code": 0, "list": []}, {"cont-yn": "N"})
+        return _Resp({"return_code": 0})
+
+
+def test_market_kr_with_kiwoom(rt, tmp_path):
+    rt.market.data_dir = str(tmp_path)
+    rt.settings.update({"kiwoom_view": {"appkey": "k", "secretkey": "s", "mock": False}})
+    fake = _FakeMarketKiwoom()
+    rt.account.client().session = fake
+    q = rt.market.kr_quote("005930")
+    assert q["price"] == 70100 and q["change"] == -900 and q["change_pct"] == -1.27 and q["high52"] == 88000
+    idx = rt.market.kr_indices()
+    assert idx[0]["name"] == "코스피" and idx[0]["price"] == 2394.49 and idx[0]["change_pct"] == -0.51
+    ch = rt.market.kr_chart("005930", "1d")
+    assert [p["t"] for p in ch["points"]] == ["09:01", "15:30"]  # 가장 최근 거래일만, 오래된 순
+    ch = rt.market.kr_chart("005930", "1m")
+    assert len(ch["points"]) == 2 and ch["points"][0]["c"] == 71000
+    hits = rt.market.kr_search("삼성")
+    assert [h["sym"] for h in hits] == ["005930", "005935"]
+    assert rt.market.kr_search("하이닉스")[0]["sym"] == "000660"  # 연속조회 2페이지
+    assert os.path.exists(os.path.join(str(tmp_path), "kr_master.json"))
+    assert not any(a.startswith("kt100") for a in fake.calls)
+    c = create_app(rt).test_client()
+    rt.market.yh_quote = lambda s: (_ for _ in ()).throw(RuntimeError("offline"))
+    ov = c.get("/api/market/overview?mkt=kr").get_json()
+    assert ov["kiwoom"] and ov["items"][0]["price"] == 70100
+    assert c.get("/api/market/quote/kr/005930").get_json()["watched"] is True
+    assert c.post("/api/market/watch", json={"mkt": "kr", "sym": "005930", "on": False}).get_json()["kr"][0] == "000660"
+    assert c.get("/api/market/quote/kr/12").status_code == 400
+    assert c.get("/api/market/chart/kr/005930?range=9y").status_code == 400
+    assert c.get("/api/market/overview?mkt=jp").status_code == 400
+
+
+def test_market_us_parsing(rt):
+    class R:
+        status_code = 200
+        def __init__(self, d): self.d = d
+        def json(self): return self.d
+
+    def fake_get(url, params=None, timeout=None):
+        if "/search" in url:
+            return R({"quotes": [{"symbol": "AAPL", "shortname": "Apple Inc.", "quoteType": "EQUITY", "exchange": "NMS", "exchDisp": "NASDAQ"},
+                                 {"symbol": "APC.F", "quoteType": "EQUITY", "exchange": "FRA"},
+                                 {"symbol": "AAPL240119C", "quoteType": "OPTION"}]})
+        return R({"chart": {"result": [{"meta": {"regularMarketPrice": 190.5, "chartPreviousClose": 188.0, "currency": "USD",
+                                                   "shortName": "Apple Inc.", "fiftyTwoWeekHigh": 199.6, "fiftyTwoWeekLow": 164.1},
+                                          "timestamp": [1700000000, 1700000300],
+                                          "indicators": {"quote": [{"close": [189.0, None]}]}}]}})
+    rt.market.http.get = fake_get
+    q = rt.market.yh_quote("AAPL")
+    assert q["price"] == 190.5 and round(q["change"], 2) == 2.5 and round(q["change_pct"], 2) == 1.33
+    assert rt.market.yh_chart("AAPL", "1m")["points"] == [{"t": "2023-11-14", "c": 189.0}]
+    assert [x["sym"] for x in rt.market.us_search("apple")] == ["AAPL"]
+    c = create_app(rt).test_client()
+    d = c.get("/api/market/quote/us/aapl").get_json()
+    assert d["sym"] == "AAPL" and d["fx"] == 190.5 and d["watched"] is True

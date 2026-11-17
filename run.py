@@ -23,7 +23,7 @@ def main():
     a = ap.parse_args()
     os.makedirs(os.path.join(BASE, "data"), exist_ok=True)
     db = DB(os.path.join(BASE, "data", "moa.db"))
-    rt = Runtime(db)
+    rt = Runtime(db, data_dir=os.path.join(BASE, "data"))
     updater = Updater(rt, BASE)
     app = create_app(rt, updater)
     updater.start()

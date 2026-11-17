@@ -42,6 +42,9 @@ DEFAULTS = {
     "allowed_origins": ["https://icekenma.github.io"],
     "public_url": "",
     "auto_update": True,
+    # 관심종목(투자 → 시세)
+    "watch": {"kr": ["005930", "000660", "035420", "005380", "069500", "360750"],
+              "us": ["AAPL", "MSFT", "NVDA", "TSLA", "SPY", "QQQ"]},
     # 문자·알림톡 자동 기록: 카드 승인은 바로 넣고, 입금·출금은 확인 후 넣는 것이 기본
     "inbox_auto": {"card": True, "income": False, "outflow": False},
     # 내 계좌 보기(조회 전용): 주문은 절대 나가지 않는다

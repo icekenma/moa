@@ -962,3 +962,39 @@ def test_ai_stream_contexts_usage_and_budget(rt):
     calls.clear()
     out = c.post("/api/ai/ask", json={"kind": "chat", "question": "또?"}).get_data(as_text=True)
     assert "예산" in out and not calls
+
+
+def test_ai_credit_remaining_live(rt):
+    c = create_app(rt).test_client()
+    assert c.get("/api/ai/credit").get_json() == {"set": False}
+    c.put("/api/settings", json={"ai": {"api_key": "sk-ant-test"}})
+    assert c.post("/api/ai/credit", json={"usd": "abc"}).status_code == 400
+    r = c.post("/api/ai/credit", json={"usd": 100}).get_json()
+    assert r["set"] and r["left"] == 100
+    rt.ai.session.post = lambda *a, **k: _SSE(_claude_events())
+    rt.market.yh_quote = lambda s: {"price": 1400.0}
+    out = [json.loads(x) for x in c.post("/api/ai/ask", json={"kind": "chat", "question": "hi"}).get_data(as_text=True).splitlines() if x]
+    done = out[-1]
+    assert done["t"] == "done" and abs(done["left"] - (100 - done["usd"])) < 1e-6
+    cr = c.get("/api/ai/credit").get_json()
+    assert cr["spent_moa"] == done["usd"] and cr["source"] == "moa 사용분"
+    # Admin 키가 있으면 콘솔 전체 사용액(맞춘 시점 이후)을 반영
+    c.put("/api/settings", json={"ai": {"admin_key": "sk-ant-admin-x"}})
+
+    class R:
+        def __init__(self, cents): self.status_code, self.cents = 200, cents
+        def json(self): return {"data": [{"results": [{"amount": str(self.cents), "currency": "USD"}]}]}
+    seq = iter([R(500), R(2500)])  # 맞출 때 오늘 $5, 지금 $25 → 맞춘 뒤 $20 사용
+    rt.ai.session.get = lambda *a, **k: next(seq)
+    rt.ai._admin_cache = None
+    c.post("/api/ai/credit", json={"usd": 80})
+    rt.ai._admin_cache = None
+    cr = c.get("/api/ai/credit").get_json()
+    assert cr["spent_admin"] == 20.0 and cr["left"] == 60.0 and "Admin" in cr["source"]
+    assert c.get("/api/settings").get_json()["ai"]["admin_key"] == "********"
+    # 크레딧 부족 오류를 받으면 표시
+    def low(*a, **k):
+        r = _SSE([], status=400); r.text = '{"error":{"message":"Your credit balance is too low to access the Anthropic API."}}'; return r
+    rt.ai.session.post = low
+    out = c.post("/api/ai/ask", json={"kind": "chat", "question": "hi"}).get_data(as_text=True)
+    assert "크레딧이 바닥" in out and c.get("/api/ai/credit").get_json()["exhausted"] is True

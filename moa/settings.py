@@ -49,14 +49,16 @@ DEFAULTS = {
     # 내 계좌 이체 구분: 입출금 알림에 찍히는 내 이름(예: 홍길동). 받는 분·보낸 분이 내 이름이면 이체로 본다
     "my_names": [],
     # Claude API(투자 AI 도우미). 키는 이 노트북에만 저장, 화면엔 가려서 보여 줌
-    "ai": {"api_key": "", "model": "claude-sonnet-5-5", "budget_usd": 10, "web_search": True},
+    "ai": {"api_key": "", "model": "claude-sonnet-5-5", "budget_usd": 10, "web_search": True,
+           "admin_key": "",            # 선택: Admin API 키(sk-ant-admin...)면 콘솔 전체 사용액까지 반영
+           "credit": {"usd": None, "at": None, "base_admin": 0.0}},  # 콘솔에서 본 잔액과 그 시각
     "inbox_auto": {"card": True, "income": False, "outflow": False},
     # 내 계좌 보기(조회 전용): 주문은 절대 나가지 않는다
     "kiwoom_view": {"appkey": "", "secretkey": "", "mock": False},            # GitHub에 새 버전이 올라오면 노트북 서버가 알아서 받아 다시 시작
 }
 
 SECRET_PATHS = [("kiwoom", "scalp", "secretkey"), ("kiwoom", "dca", "secretkey"), ("kiwoom_view", "secretkey"),
-                ("ai", "api_key")]
+                ("ai", "api_key"), ("ai", "admin_key")]
 MASK = "********"
 
 

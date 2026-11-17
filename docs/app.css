@@ -380,3 +380,11 @@ dialog.upd[open]{animation:pop .18s ease-out}
 .ai-ask textarea{border:1px solid var(--line2);border-radius:12px;padding:10px 12px;font:inherit;font-size:15px;resize:none;min-height:48px}
 .ai-ask .btn{min-height:48px}
 @media (prefers-reduced-motion:reduce){.ai-dot{animation:none}}
+
+/* 남은 API 크레딧 */
+.ai-cr-big{font-size:34px;font-weight:800;letter-spacing:-0.02em;line-height:1.1}
+.ai-cr-big small{font-size:15px;font-weight:600;color:var(--ink3)}
+.ai-cr-big.low{color:var(--up)}
+.ai-cr-set{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
+.ai-cr-set input{min-height:46px;border:1px solid var(--line2);border-radius:12px;padding:0 12px;font:inherit;font-size:16px}
+.ai-cr-more summary{cursor:pointer;padding:4px 0}

@@ -12,7 +12,7 @@
 - 답변은 글자가 나오는 대로 휴대폰에 흘려보낸다(스트리밍).
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 
@@ -66,12 +66,73 @@ class AI:
                            (datetime.now().strftime("%Y-%m-01"),))
         return float(r["s"]), int(r["n"])
 
+    # ---------- 남은 크레딧 ----------
+    # 콘솔 잔액을 직접 알려 주는 공개 API가 없어서: 사용자가 콘솔에서 본 잔액(기준)을 넣으면
+    # 그 뒤 moa가 쓴 금액(실시간)과, Admin 키가 있으면 콘솔 전체 사용액(약 5분 지연)을 빼서 보여 준다.
+    def _admin_cost_since_day(self, day_iso):
+        key = (self.conf().get("admin_key") or "").strip()
+        if not key:
+            return None
+        cache = getattr(self, "_admin_cache", None)
+        if cache and cache[0] == day_iso and (datetime.now() - cache[1]).total_seconds() < 60:
+            return cache[2]
+        try:
+            r = self.session.get("https://api.anthropic.com/v1/organizations/cost_report",
+                                 params={"starting_at": day_iso + "T00:00:00Z", "limit": 31},
+                                 headers={"x-api-key": key, "anthropic-version": API_VERSION}, timeout=10)
+            if r.status_code != 200:
+                self._admin_err = f"Admin API 오류({r.status_code})"
+                return None
+            total = 0.0
+            for b in r.json().get("data") or []:
+                for x in b.get("results") or []:
+                    total += float(x.get("amount") or 0) / 100  # 센트 단위 문자열
+            self._admin_err = None
+            self._admin_cache = (day_iso, datetime.now(), total)
+            return total
+        except Exception as e:
+            self._admin_err = f"Admin API 연결 실패: {e}"
+            return None
+
+    def set_credit(self, usd):
+        try:
+            usd = round(float(usd), 2)
+        except (TypeError, ValueError):
+            raise AIError("잔액은 숫자(달러)로 넣어 주세요")
+        if usd < 0:
+            raise AIError("잔액을 확인해 주세요")
+        now = datetime.now(timezone.utc)
+        base = self._admin_cost_since_day(now.strftime("%Y-%m-%d")) or 0.0
+        self.rt.settings.update({"ai": {"credit": {"usd": usd, "at": datetime.now().isoformat(timespec="seconds"),
+                                                   "utc_day": now.strftime("%Y-%m-%d"), "base_admin": base}}})
+        self.rt.db.set_setting("ai_credit_low", False)
+        return self.credit()
+
+    def credit(self):
+        cr = self.conf().get("credit") or {}
+        if cr.get("usd") is None:
+            return {"set": False}
+        moa = float(self.rt.db.one("SELECT COALESCE(SUM(usd),0) AS s FROM ai_usage WHERE ts >= ?", (cr["at"],))["s"])
+        admin = None
+        if cr.get("utc_day"):
+            tot = self._admin_cost_since_day(cr["utc_day"])
+            if tot is not None:
+                admin = max(0.0, tot - float(cr.get("base_admin") or 0))
+        spent = max(moa, admin or 0.0)  # 콘솔 집계가 늦게 잡히는 동안은 moa 실시간 사용액으로
+        left = max(0.0, float(cr["usd"]) - spent)
+        return {"set": True, "start_usd": cr["usd"], "since": cr["at"], "spent_moa": round(moa, 4),
+                "spent_admin": None if admin is None else round(admin, 4), "spent": round(spent, 4),
+                "left": round(left, 4), "left_pct": round(left / cr["usd"] * 100, 1) if cr["usd"] else 0,
+                "admin_error": getattr(self, "_admin_err", None) if self.conf().get("admin_key") else None,
+                "exhausted": bool(self.rt.db.get_setting("ai_credit_low")),
+                "source": "콘솔 전체(Admin API)" if admin is not None and admin >= moa else "moa 사용분"}
+
     def status(self):
         c = self.conf()
         used, n = self.month_usd()
         return {"configured": self.configured(), "model": c.get("model"), "budget_usd": c.get("budget_usd"),
                 "web_search": c.get("web_search", True), "month_usd": round(used, 4), "month_calls": n,
-                "models": {k: v[0] for k, v in MODELS.items()},
+                "models": {k: v[0] for k, v in MODELS.items()}, "credit": self.credit(),
                 "recent": self.rt.db.q("SELECT ts, kind, model, in_tok, out_tok, searches, usd FROM ai_usage "
                                        "ORDER BY id DESC LIMIT 10")}
 
@@ -216,8 +277,10 @@ class AI:
             fx = float(self.rt.market.yh_quote("USDKRW=X")["price"]) or FX_DEFAULT
         except Exception:
             pass
+        cr = self.credit()
         yield {"t": "done", "title": title, "usd": round(usd, 4), "krw": int(round(usd * fx)), "model": model,
-               "searches": usage["searches"], "in": usage["in"], "out": usage["out"]}
+               "searches": usage["searches"], "in": usage["in"], "out": usage["out"],
+               "left": cr.get("left") if cr.get("set") else None}
 
     def _handle(self, ev, usage, sources, seen):
         typ = ev.get("type")
@@ -271,6 +334,9 @@ class AI:
                 msg = (r.json().get("error") or {}).get("message") or r.text[:200]
             except ValueError:
                 msg = r.text[:200]
+            if "credit balance" in str(msg).lower():
+                self.rt.db.set_setting("ai_credit_low", True)
+                raise AIError("API 크레딧이 바닥났어요. 콘솔에서 충전하거나 Max 월 크레딧을 받은 뒤, 설정 → AI에서 잔액을 다시 맞춰 주세요")
             hint = {401: "API 키를 확인해 주세요", 403: "이 키로는 쓸 수 없는 기능이에요", 429: "요청이 많아요. 잠시 뒤 다시",
                     529: "Claude가 바빠요. 잠시 뒤 다시"}.get(r.status_code, "")
             raise AIError(f"Claude 오류({r.status_code}): {msg} {hint}".strip())

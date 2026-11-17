@@ -675,6 +675,18 @@ def create_app(rt, updater=None):
     def ai_status():
         return jsonify(rt.ai.status())
 
+    @app.get("/api/ai/credit")
+    def ai_credit():
+        return jsonify(rt.ai.credit())
+
+    @app.post("/api/ai/credit")
+    def ai_credit_set():
+        from .ai import AIError
+        try:
+            return jsonify(rt.ai.set_credit(body().get("usd")))
+        except AIError as e:
+            raise ValueError(str(e))
+
     @app.post("/api/ai/test")
     def ai_test():
         from .ai import AIError

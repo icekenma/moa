@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1808";
+const UI_VERSION = "261117.1824";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1626,6 +1626,26 @@ function mdLite(src) {  // 안전한 간단 마크다운: 소제목·목록·굵
   if (list) out.push("</ul>");
   return out.join("");
 }
+function creditHtml(cr) {
+  if (!cr || !cr.set) return `<h2>남은 API 크레딧</h2>
+    <div class="small muted">콘솔 결제 화면의 잔액을 한 번 넣어 두면, 그 뒤 moa가 쓴 금액을 빼서 실시간으로 보여 줘요.</div>
+    <div class="ai-cr-set"><input id="crUsd" class="r" inputmode="decimal" placeholder="예: 100.00"><button class="btn dark" id="crSave">잔액 맞추기</button></div>
+    <a class="tiny" href="https://platform.claude.com/settings/billing" target="_blank" rel="noopener">콘솔 결제 화면 열기 ↗</a>`;
+  const lowish = cr.exhausted || cr.left_pct < 10;
+  return `<div class="card-head"><h2>남은 API 크레딧</h2><span class="tiny live-dot on">실시간</span></div>
+    <div class="ai-cr-big ${lowish ? "low" : ""}">$${Number(cr.left).toFixed(2)}<small> / $${Number(cr.start_usd).toFixed(2)}</small></div>
+    <div class="bar ${lowish ? "over" : ""}"><div style="width:${Math.min(100, cr.left_pct)}%"></div></div>
+    <div class="tiny">${esc(cr.since.slice(5, 16).replace("T", " "))}에 맞춘 뒤 $${Number(cr.spent).toFixed(4)} 사용 · 기준 ${esc(cr.source)}${cr.spent_admin != null ? ` (콘솔 집계는 약 5분 늦게 반영)` : ""}</div>
+    ${cr.exhausted ? `<div class="notice warn">Claude가 크레딧 부족이라고 알려 왔어요. 충전 뒤 잔액을 다시 맞춰 주세요.</div>` : ""}
+    ${cr.admin_error ? `<div class="tiny" style="color:var(--up)">${esc(cr.admin_error)}</div>` : ""}
+    <details class="ai-cr-more"><summary class="tiny">콘솔 잔액으로 다시 맞추기</summary>
+      <div class="ai-cr-set"><input id="crUsd" class="r" inputmode="decimal" placeholder="콘솔에 보이는 잔액($)"><button class="btn" id="crSave">맞추기</button></div>
+      <a class="tiny" href="https://platform.claude.com/settings/billing" target="_blank" rel="noopener">콘솔 결제 화면 열기 ↗</a></details>`;
+}
+function bindCredit(box, after) {
+  const b = $("#crSave", box);
+  if (b) b.onclick = async () => { const v = $("#crUsd", box).value; await run(() => api("POST", "/api/ai/credit", { usd: v }), "잔액을 맞췄어요"); after && after(); };
+}
 const AI_TITLES = { stock: "AI 종목 정리", portfolio: "AI 포트폴리오 점검", review: "AI 단타 복기", sweep: "AI 훑기 해석", chat: "AI에게 묻기" };
 function aiSheet(kind, payload = {}) {
   const chat = kind === "chat";
@@ -1662,7 +1682,7 @@ function aiSheet(kind, payload = {}) {
             ans.innerHTML += `<div class="notice warn">${esc(ev.msg)}${/키를 넣어/.test(ev.msg) ? ` <a href="#settings/ai" onclick="closeSheet()">AI 설정 열기</a>` : ""}</div>`;
           } else if (ev.t === "done") {
             paint();
-            cost.textContent = `약 ${won(ev.krw)}원($${ev.usd}) · ${ev.model.replace("claude-", "")}${ev.searches ? ` · 웹 검색 ${ev.searches}회` : ""}`;
+            cost.textContent = `약 ${won(ev.krw)}원($${ev.usd}) · ${ev.model.replace("claude-", "")}${ev.searches ? ` · 웹 검색 ${ev.searches}회` : ""}${ev.left != null ? ` · 남은 크레딧 $${Number(ev.left).toFixed(2)}` : ""}`;
           }
         }, S.ctl.signal);
         if (text) S.history.push({ role: "user", content: extra.question || AI_TITLES[kind] }, { role: "assistant", content: text });
@@ -1828,6 +1848,13 @@ function planSheet(e) {
 pages.settings = {
   every: 5000,
   async refresh(h) {  // 계좌 연결 화면에서는 키움 카드만 몇 초마다 새로(입력란은 그대로)
+    if (h.sub === "ai") {
+      const cb = $("#crCard");
+      if (!cb || cb.contains(document.activeElement) || $("details[open]", cb)) return;
+      const cr = await GET("/api/ai/credit");
+      if ($("#crCard") === cb) { cb.innerHTML = creditHtml(cr); bindCredit(cb, () => this.ai()); }
+      return;
+    }
     const box = $("#kwCard");
     if (h.sub !== "accounts" || !box || box.contains(document.activeElement)) return;
     const d = await kwFetch();
@@ -1838,22 +1865,27 @@ pages.settings = {
     const s = await GET("/api/settings");
     const c = s.ai || {};
     view.innerHTML = `
+      <section class="card ai-cr" id="crCard">${creditHtml(st.credit)}</section>
       <section class="card">
         <div class="card-head"><h2>Claude AI 도우미</h2><span class="tag ${st.configured ? "g" : "warn"}">${st.configured ? "연결됨" : "키 필요"}</span></div>
         <div class="small muted">투자 화면의 ✦ 버튼에서 종목 정리, 포트폴리오 점검, 단타 복기, 훑기 해석, 자유 질문을 할 수 있어요. AI는 주문하지 않아요.</div>
         <label class="field">Claude API 키<input id="aiKey" type="password" value="${esc(c.api_key || "")}" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off"></label>
-        <div class="tiny">console.anthropic.com → API Keys에서 만들어요. 키는 노트북에만 저장하고 화면엔 가려서 보여요.</div>
+        <div class="tiny">platform.claude.com/settings/keys에서 만들어요. 키는 노트북에만 저장하고 화면엔 가려서 보여요.</div>
         <label class="field">모델<select id="aiModel">${Object.entries(st.models).map(([k, v]) => `<option value="${k}" ${k === c.model ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
         <div class="fields"><label class="field">월 예산(달러)<input id="aiBudget" class="r" inputmode="decimal" value="${esc(c.budget_usd ?? 10)}"></label>
           <label class="field">이번 달 사용<input value="$${st.month_usd} · ${st.month_calls}회" disabled></label></div>
         <label class="check"><input type="checkbox" id="aiWeb" ${c.web_search !== false ? "checked" : ""}> 웹 검색으로 최신 뉴스 찾기(검색 1회 약 14원 추가)</label>
+        <details><summary class="tiny">콘솔 전체 사용액까지 반영(선택: Admin API 키)</summary>
+          <label class="field">Admin API 키<input id="aiAdmin" type="password" value="${esc(c.admin_key || "")}" placeholder="sk-ant-admin..." autocomplete="off" autocapitalize="off"></label>
+          <div class="tiny">moa 밖(콘솔 플레이그라운드 등)에서 쓴 금액까지 빼려면 넣어요. 개인 계정은 조직을 만들어야 발급돼요. 없으면 moa 사용분만 빼요.</div></details>
         <div class="btns"><button class="btn" id="aiTest">연결 확인</button><button class="btn dark" id="aiSave">저장</button></div>
       </section>
       <section class="card tight"><div class="card-head" style="padding-top:12px"><h2>최근 사용</h2></div><div class="list">
         ${st.recent.length ? st.recent.map((r) => `<div class="item"><span class="ico">${esc({ stock: "종목", portfolio: "점검", review: "복기", sweep: "훑기", chat: "질문", test: "확인" }[r.kind] || r.kind)}</span>
           <span class="main"><b>${esc(r.ts.slice(5, 16).replace("T", " "))}</b><span class="sub">${esc(r.model.replace("claude-", ""))} · 입력 ${won(r.in_tok)} · 출력 ${won(r.out_tok)}${r.searches ? ` · 검색 ${r.searches}` : ""}</span></span>
           <span class="end"><b>$${Number(r.usd).toFixed(4)}</b></span></div>`).join("") : `<div class="empty">아직 사용 기록이 없어요</div>`}</div></section>`;
-    const body = () => ({ ai: { api_key: $("#aiKey").value.trim(), model: $("#aiModel").value, budget_usd: Number($("#aiBudget").value) || 0, web_search: $("#aiWeb").checked } });
+    const body = () => ({ ai: { api_key: $("#aiKey").value.trim(), admin_key: $("#aiAdmin").value.trim(), model: $("#aiModel").value, budget_usd: Number($("#aiBudget").value) || 0, web_search: $("#aiWeb").checked } });
+    bindCredit($("#crCard"), () => this.ai());
     $("#aiSave").onclick = async () => { await run(() => api("PUT", "/api/settings", body()), "저장했어요"); this.ai(); };
     $("#aiTest").onclick = async () => {
       await run(() => api("PUT", "/api/settings", body()));

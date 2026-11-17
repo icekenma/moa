@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1018";
+const UI_VERSION = "261117.1025";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -39,6 +39,7 @@ const GET = (u) => api("GET", u);
 // ---------- 도구 ----------
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const won = (n) => (n == null || isNaN(n) ? "-" : Math.round(n).toLocaleString("ko-KR"));
+const shortWon = (n) => { const a = Math.abs(n); return a >= 10000 ? (a / 10000).toFixed(a >= 100000 ? 0 : 1).replace(/\.0$/, "") + "만" : won(a); };
 const signed = (n) => (n > 0 ? "+" : "") + won(n);
 const pct = (n, d = 1) => (n == null ? "-" : (n > 0 ? "+" : "") + Number(n).toFixed(d) + "%");
 const tone = (n) => (n > 0 ? "up" : n < 0 ? "down" : "");
@@ -126,6 +127,29 @@ function pnlBars(values, labels, h = 96) {
   return `<svg class="chart" role="img" aria-label="날짜별 손익 막대" viewBox="0 0 ${W} ${h}" preserveAspectRatio="none" style="height:${h}px">${g}</svg>`;
 }
 
+// ---------- 메뉴(1뎁스 탭 → 2뎁스) ----------
+const MENU = {
+  home: { title: "홈", subs: [["summary", "요약"], ["activity", "최근 활동"]] },
+  ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["analysis", "분석"], ["budget", "예산"]] },
+  assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
+  invest: { title: "투자", subs: [["account", "내 계좌"], ["trade", "매매"], ["scalp", "단타"], ["dca", "적립"]], extra: { backtest: "scalp", rules: "scalp" } },
+  settings: { title: "설정", subs: [["connect", "연결"], ["kiwoom", "키움 계좌"], ["trading", "매매 설정"], ["app", "앱 정보"]] },
+};
+const lastSub = {};
+function resolveSub(h) {
+  const m = MENU[h.name];
+  if (!m) return h.sub;
+  const ok = m.subs.some(([id]) => id === h.sub) || (m.extra && m.extra[h.sub]);
+  return ok ? h.sub : lastSub[h.name] || m.subs[0][0];
+}
+function subnav(name, sub) {
+  const m = MENU[name];
+  if (!m) return "";
+  const on = (m.extra && m.extra[sub]) || sub;
+  return `<nav class="subnav" aria-label="${esc(m.title)} 세부 메뉴">${m.subs.map(([id, label]) =>
+    `<a href="#${name}/${id}" class="subtab" ${id === on ? 'aria-current="page"' : ""}>${esc(label)}</a>`).join("")}</nav>`;
+}
+
 // ---------- 라우터 ----------
 const pages = {};
 let current = null, timer = null;
@@ -137,6 +161,8 @@ function setTop(title, opt = {}) {
   $(".back", top)?.remove();
   if (opt.back) top.insertAdjacentHTML("afterbegin", `<a class="back" href="${opt.back}" aria-label="뒤로"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></a>`);
   $("#topRight").innerHTML = opt.right || "";
+  $(".subnav", top)?.remove();
+  if (opt.menu) top.insertAdjacentHTML("beforeend", subnav(opt.menu, opt.sub));
 }
 function parseHash() {
   const raw = (location.hash || "#home").slice(1);
@@ -146,8 +172,11 @@ function parseHash() {
 }
 async function route() {
   const h = parseHash();
-  const page = pages[h.name] || pages.home;
-  const tabName = pages[h.name] ? h.name : "home";
+  if (!pages[h.name]) h.name = "home";
+  h.sub = resolveSub(h);
+  if (MENU[h.name]) lastSub[h.name] = (MENU[h.name].extra && MENU[h.name].extra[h.sub]) ? lastSub[h.name] || h.sub : h.sub;
+  const page = pages[h.name];
+  const tabName = h.name;
   $$(".tab").forEach((a) => {
     const on = a.dataset.tab === tabName;
     a.classList.toggle("on", on);
@@ -167,6 +196,11 @@ async function route() {
   window.scrollTo(0, 0);
 }
 window.addEventListener("hashchange", route);
+// 가계부 월 이동(어느 2뎁스 화면이든 공통)
+view.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-mon]");
+  if (b && current === pages.ledger) { shiftMonth(ledgerState, Number(b.dataset.mon)); route(); }
+});
 function fab(label, onClick) {
   $(".fab")?.remove();
   const b = document.createElement("button");
@@ -222,16 +256,34 @@ let catCache = null;
 async function categories() { if (!catCache) catCache = (await GET(`/api/ledger?month=${thisMonth()}`)).categories; return catCache; }
 
 pages.home = {
-  async mount() {
-    const [d, ping] = await Promise.all([GET("/api/home"), GET("/api/ping").catch(() => ({}))]);
-    setTop("홈", { badge: ping.version ? "v" + ping.version : "", right: `<span class="tiny">${korDate(localToday())}</span>` });
+  async mount(h) {
+    const ping = await GET("/api/ping").catch(() => ({}));
+    setTop("홈", { menu: "home", sub: h.sub, badge: ping.version ? "v" + ping.version : "", right: `<span class="tiny">${korDate(localToday())}</span>` });
+    if (h.sub === "activity") return this.activity();
+    return this.summary();
+  },
+  async activity() {
+    const items = await GET("/api/timeline");
+    const icon = { ledger: "가계", order: "주문", warn: "확인", update: "업데" };
+    const groups = {};
+    items.forEach((x) => (groups[(x.ts || "").slice(0, 10)] = groups[(x.ts || "").slice(0, 10)] || []).push(x));
+    view.innerHTML = Object.keys(groups).length ? Object.entries(groups).map(([day, xs]) => `
+      <div class="sec-title">${day ? korDate(day) : "날짜 없음"}</div>
+      <section class="card tight"><div class="list">${xs.map((x) => `<div class="item">
+        <span class="ico ${x.kind === "warn" ? "warn" : x.kind === "order" ? "y" : ""}">${icon[x.kind] || ""}</span>
+        <span class="main"><b>${esc(x.title)}</b><span class="sub">${esc((x.ts || "").slice(11, 16))} · ${esc(x.sub || "")}</span></span>
+        <span class="end">${x.amount != null ? `<b class="${x.amount > 0 ? "inc" : ""}">${x.amount > 0 ? "+" : "-"}${won(Math.abs(x.amount))}</b>` : x.price ? `<span class="small ${x.side === "buy" ? "up" : "down"}">${won(x.price)}원</span>` : ""}</span></div>`).join("")}</div></section>`).join("")
+      : `<section class="card"><div class="empty">아직 기록이 없어요. 가계부를 쓰거나 주문하면 여기에 모여요</div></section>`;
+  },
+  async summary() {
+    const d = await GET("/api/home");
     const L = d.ledger, A = d.assets, S = d.scalp, D = d.dca;
     const m = Number(L.month.slice(5));
     const hero = L.budget > 0
       ? (L.remaining > 0 ? `${m}월은 ${L.days_left}일 남았고,<br>하루 <span class="hl">${won(L.per_day)}원</span>씩 쓸 수 있어요`
         : `${m}월 예산을 <span class="hl">${won(-L.remaining)}원</span> 넘게 썼어요`)
       : `${m}월에 <span class="hl">${won(L.expense)}원</span> 썼어요`;
-    const noBudget = L.budget > 0 ? "" : `<div class="notice" style="display:flex;align-items:center;gap:10px;justify-content:space-between"><span>한 달 예산을 정하면 하루에 쓸 수 있는 돈을 알려 드려요</span><a class="btn sm dark" href="#ledger?budget=1" style="flex:0 0 auto">예산 정하기</a></div>`;
+    const noBudget = L.budget > 0 ? "" : `<div class="notice" style="display:flex;align-items:center;gap:10px;justify-content:space-between"><span>한 달 예산을 정하면 하루에 쓸 수 있는 돈을 알려 드려요</span><a class="btn sm dark" href="#ledger/budget" style="flex:0 0 auto">예산 정하기</a></div>`;
     const used = L.budget ? Math.min(100, (L.expense / L.budget) * 100) : 0;
     const near = L.categories.filter((c) => c.budget > 0).map((c) => ({ ...c, p: c.used / c.budget })).sort((a, b) => b.p - a.p).slice(0, 3);
     view.innerHTML = `
@@ -249,7 +301,7 @@ pages.home = {
         ${d.account.total != null ? `<div class="big">${won(d.account.total)}원</div>
           <div class="small muted"><b class="${tone(d.account.pnl)}">평가손익 ${signed(d.account.pnl)}원 (${pct(d.account.pnl_pct, 2)})</b> · 예수금 ${won(d.account.cash)}원</div>`
           : `<div class="small muted">${esc(d.account.error || "")}</div>`}</a>` : ""}
-      <a class="card" href="#assets" style="text-decoration:none;color:inherit">
+      <a class="card" href="#assets/overview" style="text-decoration:none;color:inherit">
         <div class="card-head"><h2>순자산</h2><span class="tiny">자세히</span></div>
         ${A.groups.length ? `<div class="big">${won(A.net)}원</div>
           ${A.change != null ? `<div class="small ${tone(A.change)}" style="font-weight:700">지난달보다 ${won(Math.abs(A.change))}원 ${A.change >= 0 ? "늘었어요" : "줄었어요"}</div>` : ""}
@@ -263,9 +315,9 @@ pages.home = {
           <div><div class="small muted">적립 다음 매수</div>${D.schedule.length ? `<div class="mid">${korDate(D.schedule[0].date, false)}</div><div class="tiny" style="color:#C5CCD6">${won(D.schedule[0].amount)}원</div>` : `<div class="small muted">플랜 없음</div>`}</div>
         </div>
       </a>
-      ${near.length ? `<section class="card"><div class="card-head"><h2>예산 많이 쓴 분류</h2><a href="#ledger">가계부</a></div>${near.map(budgetBar).join("")}</section>` : ""}
+      ${near.length ? `<section class="card"><div class="card-head"><h2>예산 많이 쓴 분류</h2><a href="#ledger/budget">예산</a></div>${near.map(budgetBar).join("")}</section>` : ""}
       <section class="card tight">
-        <div class="card-head" style="padding-top:12px"><h2>최근 내역</h2><a href="#ledger">전체</a></div>
+        <div class="card-head" style="padding-top:12px"><h2>최근 내역</h2><a href="#ledger/list">전체</a></div>
         <div class="list">${d.recent.length ? d.recent.map((t) => txItem(t, false)).join("") : `<div class="empty">아직 내역이 없어요</div>`}</div>
       </section>`;
     view.onclick = (e) => { const b = e.target.closest("[data-add]"); if (b) txSheet({ kind: b.dataset.add }, route); };
@@ -338,76 +390,152 @@ async function txSheet(e, done) {
 // 가계부
 // =====================================================================
 const ledgerState = { month: thisMonth(), kind: "all" };
+function monthNav(S, sum) {
+  const [y, m] = S.month.split("-").map(Number);
+  return `<section class="card">
+    <div class="card-head">
+      <button class="icon-btn" style="background:var(--bg)" data-mon="-1" aria-label="이전 달">‹</button>
+      <h2 style="font-size:18px">${y}년 ${m}월</h2>
+      <button class="icon-btn" style="background:var(--bg)" data-mon="1" aria-label="다음 달">›</button>
+    </div>
+    <div class="kv"><div>수입<b class="inc">+${won(sum.income)}</b></div><div>지출<b>-${won(sum.expense)}</b></div><div>남은 돈<b>${won(sum.net)}</b></div></div>
+  </section>`;
+}
+function shiftMonth(S, by) {
+  let [yy, mm] = S.month.split("-").map(Number);
+  mm += by;
+  if (mm < 1) { mm = 12; yy--; } if (mm > 12) { mm = 1; yy++; }
+  S.month = `${yy}-${String(mm).padStart(2, "0")}`;
+}
 pages.ledger = {
   async mount(h) {
     const S = ledgerState;
-    setTop("가계부");
-    const d = await GET(`/api/ledger?month=${S.month}${S.kind !== "all" ? "&kind=" + S.kind : ""}`);
+    setTop("가계부", { menu: "ledger", sub: h.sub });
+    if (h.params.get("budget")) { history.replaceState(null, "", "#ledger/budget"); h.sub = "budget"; lastSub.ledger = "budget"; setTop("가계부", { menu: "ledger", sub: "budget" }); }
+    const kindQ = h.sub === "list" && S.kind !== "all" ? "&kind=" + S.kind : "";
+    const d = await GET(`/api/ledger?month=${S.month}${kindQ}`);
     catCache = d.categories;
-    const [y, m] = S.month.split("-").map(Number);
-    const sum = d.summary;
+    this.d = d;
+    const addFab = () => fab("기록", () => txSheet({ kind: S.kind === "in" ? "in" : "out", date: S.month === thisMonth() ? localToday() : S.month + "-01" }, (b) => { if (b && b.date.slice(0, 7) !== S.month) S.month = b.date.slice(0, 7); route(); }));
+    if (h.sub === "calendar") { this.calendar(d); addFab(); }
+    else if (h.sub === "analysis") await this.analysis(d);
+    else if (h.sub === "budget") this.budget(d);
+    else { this.list(d); addFab(); }
+  },
+  list(d) {
+    const S = ledgerState;
     const byDay = {};
     d.rows.forEach((t) => (byDay[t.date] = byDay[t.date] || []).push(t));
-    const cats = sum.categories.filter((c) => c.used > 0).sort((a, b) => b.used - a.used);
-    const maxc = Math.max(1, ...cats.map((c) => c.used));
-    view.innerHTML = `
-      <section class="card">
-        <div class="card-head">
-          <button class="icon-btn" style="background:var(--bg)" data-act="prev" aria-label="이전 달">‹</button>
-          <h2 style="font-size:18px">${y}년 ${m}월</h2>
-          <button class="icon-btn" style="background:var(--bg)" data-act="next" aria-label="다음 달">›</button>
-        </div>
-        <div class="kv"><div>수입<b class="inc">+${won(sum.income)}</b></div><div>지출<b>-${won(sum.expense)}</b></div><div>남은 돈<b>${won(sum.net)}</b></div></div>
-      </section>
+    view.innerHTML = `${monthNav(S, d.summary)}
       ${seg("내역 종류", [["all", "전체"], ["out", "지출"], ["in", "수입"]], S.kind)}
       <section class="card tight">
         ${Object.keys(byDay).length ? Object.entries(byDay).map(([date, rows]) => {
-          const out = rows.filter((r) => r.kind === "out").reduce((s, r) => s + r.amount, 0);
+          const out = rows.filter((r) => r.kind === "out").reduce((a, r) => a + r.amount, 0);
           return `<div class="day-head"><span>${korDate(date)}</span><span>${out ? "-" + won(out) : ""}</span></div><div class="list">${rows.map((t) => txItem(t)).join("")}</div>`;
         }).join("") : `<div class="empty">이 달에는 내역이 없어요</div>`}
-      </section>
-      <section class="card">
-        <div class="card-head"><h2>어디에 많이 썼나</h2><button class="link" data-act="budget">예산 관리</button></div>
-        ${cats.length ? cats.map((c) => `<div style="display:flex;flex-direction:column;gap:6px">
-          <div style="display:flex;justify-content:space-between;font-size:14px"><b>${esc(c.name)}</b><span class="muted">${won(c.used)}${c.budget ? ` / ${won(c.budget)}` : ""}</span></div>
-          <div class="bar ${c.budget && c.used > c.budget ? "over" : ""}"><div style="width:${(c.used / maxc) * 100}%"></div></div></div>`).join("") : `<div class="tiny">지출이 생기면 분류별로 보여드려요</div>`}
       </section>`;
     bindSeg(view, "내역 종류", (v) => { S.kind = v; route(); });
-    if (h && h.params && h.params.get("budget")) { history.replaceState(null, "", "#ledger"); this.budgetSheet(d); }
-    fab("기록", () => txSheet({ kind: S.kind === "in" ? "in" : "out", date: S.month === thisMonth() ? localToday() : S.month + "-01" }, (b) => { if (b && b.date.slice(0, 7) !== S.month) S.month = b.date.slice(0, 7); route(); }));
-    view.onclick = async (e) => {
-      const b = e.target.closest("[data-act],[data-edit]");
-      if (!b) return;
-      if (b.dataset.edit) { txSheet({ ...d.rows.find((r) => r.id == b.dataset.edit) }, route); return; }
-      const act = b.dataset.act;
-      if (act === "prev" || act === "next") {
-        let [yy, mm] = S.month.split("-").map(Number);
-        mm += act === "prev" ? -1 : 1;
-        if (mm < 1) { mm = 12; yy--; } if (mm > 12) { mm = 1; yy++; }
-        S.month = `${yy}-${String(mm).padStart(2, "0")}`; route();
-      } else if (act === "budget") this.budgetSheet(d);
+    view.onclick = (e) => { const b = e.target.closest("[data-edit]"); if (b) txSheet({ ...d.rows.find((r) => r.id == b.dataset.edit) }, route); };
+  },
+  calendar(d) {
+    const S = ledgerState;
+    const [y, m] = S.month.split("-").map(Number);
+    const first = new Date(y, m - 1, 1).getDay();
+    const ndays = new Date(y, m, 0).getDate();
+    const inc = {}, out = {};
+    d.rows.forEach((t) => { const k = Number(t.date.slice(8)); (t.kind === "in" ? inc : out)[k] = ((t.kind === "in" ? inc : out)[k] || 0) + t.amount; });
+    const today = localToday();
+    let cells = "";
+    for (let i = 0; i < first; i++) cells += `<div class="cal-cell empty-cell"></div>`;
+    for (let day = 1; day <= ndays; day++) {
+      const iso = `${S.month}-${String(day).padStart(2, "0")}`;
+      const wd = (first + day - 1) % 7;
+      cells += `<button type="button" class="cal-cell ${iso === today ? "today" : ""} ${wd === 0 ? "sun" : wd === 6 ? "sat" : ""}" data-day="${iso}" aria-label="${korDate(iso)} 지출 ${won(out[day] || 0)}원">
+        <span class="cal-d">${day}</span>${out[day] ? `<span class="cal-out">-${shortWon(out[day])}</span>` : ""}${inc[day] ? `<span class="cal-in">+${shortWon(inc[day])}</span>` : ""}</button>`;
+    }
+    const spentDays = Object.keys(out).length;
+    view.innerHTML = `${monthNav(S, d.summary)}
+      <section class="card cal">
+        <div class="cal-grid cal-wd">${[..."일월화수목금토"].map((w, i) => `<span class="${i === 0 ? "sun" : i === 6 ? "sat" : ""}">${w}</span>`).join("")}</div>
+        <div class="cal-grid">${cells}</div>
+        <div class="tiny">지출한 날 ${spentDays}일 · 지출 없는 날 ${Math.max(0, (S.month === thisMonth() ? Number(today.slice(8)) : ndays) - spentDays)}일 · 날짜를 누르면 그날 내역이 보여요</div>
+      </section>`;
+    view.onclick = (e) => {
+      const c = e.target.closest("[data-day]");
+      if (!c) return;
+      const iso = c.dataset.day;
+      const rows = d.rows.filter((t) => t.date === iso);
+      openSheet(korDate(iso), `<div class="list">${rows.length ? rows.map((t) => txItem(t)).join("") : `<div class="empty">이날은 내역이 없어요</div>`}</div>
+        <button class="btn dark wide" id="dayAdd">이날 기록하기</button>`, (box) => {
+        $("#dayAdd", box).onclick = () => txSheet({ kind: "out", date: iso }, route);
+        box.addEventListener("click", (ev) => { const b = ev.target.closest("[data-edit]"); if (b) txSheet({ ...rows.find((r) => r.id == b.dataset.edit) }, route); });
+      });
     };
   },
-  budgetSheet(d) {
-    openSheet("분류와 예산", `
-      <div class="small muted">분류마다 한 달에 쓸 금액을 넣어요. 매달 같은 예산을 쓰고, 0이면 예산 없이 기록만 해요.</div>
-      ${d.categories.filter((c) => c.kind === "out").map((c) => `<label class="field" style="flex-direction:row;align-items:center;justify-content:space-between;gap:12px">
-        <span style="font-size:15px;color:var(--ink)">${esc(c.name)}</span>
-        <input class="r" style="max-width:160px" inputmode="numeric" data-budget="${c.id}" data-name="${esc(c.name)}" value="${won(c.budget)}"></label>`).join("")}
-      <button class="btn dark wide" id="bSave">예산 저장</button>
-      <div class="fields"><label class="field">새 분류<input id="newCat" placeholder="예: 반려동물"></label>
-        <label class="field">종류<select id="newKind"><option value="out">지출</option><option value="in">수입</option></select></label></div>
-      <button class="btn wide" id="cAdd">분류 추가</button>`, (box) => {
-      $$("[data-budget]", box).forEach(moneyInput);
-      $("#bSave", box).onclick = async () => {
-        await run(async () => { for (const i of $$("[data-budget]", box)) await api("POST", "/api/categories", { id: i.dataset.budget, name: i.dataset.name, budget: num(i.value) }); }, "예산을 저장했어요");
-        catCache = null; closeSheet(); route();
-      };
-      $("#cAdd", box).onclick = async () => {
-        await run(() => api("POST", "/api/categories", { name: $("#newCat").value, kind: $("#newKind").value, budget: 0 }), "분류를 추가했어요");
-        catCache = null; closeSheet(); route();
-      };
-    });
+  async analysis(d) {
+    const S = ledgerState;
+    const sum = d.summary;
+    const trend = await GET("/api/ledger/trend?months=6");
+    const cats = sum.categories.filter((c) => c.used > 0).sort((a, b) => b.used - a.used);
+    const maxc = Math.max(1, ...cats.map((c) => c.used));
+    const outs = d.rows.filter((t) => t.kind === "out");
+    const byMethod = {};
+    outs.forEach((t) => (byMethod[t.method || "기타"] = (byMethod[t.method || "기타"] || 0) + t.amount));
+    const methods = Object.entries(byMethod).sort((a, b) => b[1] - a[1]);
+    const top5 = outs.slice().sort((a, b) => b.amount - a.amount).slice(0, 5);
+    const tmax = Math.max(1, ...trend.flatMap((t) => [t.income, t.expense]));
+    view.innerHTML = `${monthNav(S, sum)}
+      <section class="card"><h2>최근 6개월</h2>
+        <div class="trend" role="img" aria-label="최근 6개월 수입과 지출">${trend.map((t) => `<div class="tcol">
+          <div class="tbars"><i class="ti" style="height:${(t.income / tmax) * 100}%"></i><i class="to" style="height:${(t.expense / tmax) * 100}%"></i></div>
+          <span>${Number(t.month.slice(5))}월</span></div>`).join("")}</div>
+        <div class="legend tiny"><span><i class="sw" style="background:#0B7A55"></i>수입</span><span><i class="sw" style="background:#172033"></i>지출</span></div>
+      </section>
+      <section class="card"><h2>분류별 지출</h2>
+        ${cats.length ? cats.map((c) => `<div style="display:flex;flex-direction:column;gap:6px">
+          <div style="display:flex;justify-content:space-between;font-size:14px"><b>${esc(c.name)}</b><span class="muted">${won(c.used)} · ${Math.round((c.used / Math.max(1, sum.expense)) * 100)}%</span></div>
+          <div class="bar"><div style="width:${(c.used / maxc) * 100}%"></div></div></div>`).join("") : `<div class="tiny">이 달 지출이 없어요</div>`}
+      </section>
+      <section class="card"><h2>결제수단별</h2>
+        ${methods.length ? methods.map(([k, v]) => `<div style="display:flex;justify-content:space-between;font-size:14px"><span>${esc(k)}</span><b>${won(v)}</b></div>`).join("") : `<div class="tiny">이 달 지출이 없어요</div>`}
+      </section>
+      <section class="card tight"><div class="card-head" style="padding-top:12px"><h2>큰 지출 TOP 5</h2></div>
+        <div class="list">${top5.length ? top5.map((t) => txItem(t, false)).join("") : `<div class="empty">이 달 지출이 없어요</div>`}</div>
+      </section>`;
+    view.onclick = null;
+  },
+  budget(d) {
+    const sum = d.summary;
+    const used = Object.fromEntries(sum.categories.map((c) => [c.id, c.used]));
+    view.innerHTML = `${monthNav(ledgerState, sum)}
+      <section class="card">
+        <div class="card-head"><h2>한 달 예산</h2><b>${won(sum.budget)}원</b></div>
+        <div class="small muted">분류마다 한 달에 쓸 금액을 넣어요. 매달 같은 예산을 쓰고, 0이면 예산 없이 기록만 해요.</div>
+        ${d.categories.filter((c) => c.kind === "out").map((c) => {
+          const u = used[c.id] || 0, p = c.budget ? Math.min(100, (u / c.budget) * 100) : 0;
+          return `<div style="display:flex;flex-direction:column;gap:6px;padding:6px 0;border-top:1px solid var(--bg)">
+          <label class="field" style="flex-direction:row;align-items:center;justify-content:space-between;gap:12px">
+            <span style="font-size:15px;color:var(--ink)">${esc(c.name)}<br><span class="tiny">이번 달 ${won(u)}원 썼어요</span></span>
+            <input class="r" style="max-width:150px" inputmode="numeric" data-budget="${c.id}" data-name="${esc(c.name)}" value="${won(c.budget)}"></label>
+          ${c.budget ? `<div class="bar ${u > c.budget * 0.9 ? "over" : ""}"><div style="width:${p}%"></div></div>` : ""}</div>`;
+        }).join("")}
+        <button class="btn dark wide" id="bSave">예산 저장</button>
+      </section>
+      <section class="card"><h2>분류 추가</h2>
+        <div class="fields"><label class="field">새 분류<input id="newCat" placeholder="예: 반려동물"></label>
+          <label class="field">종류<select id="newKind"><option value="out">지출</option><option value="in">수입</option></select></label></div>
+        <button class="btn wide" id="cAdd">분류 추가</button>
+      </section>`;
+    $$("[data-budget]").forEach(moneyInput);
+    $("#bSave").onclick = async () => {
+      await run(async () => { for (const i of $$("[data-budget]")) await api("POST", "/api/categories", { id: i.dataset.budget, name: i.dataset.name, budget: num(i.value) }); }, "예산을 저장했어요");
+      catCache = null; route();
+    };
+    $("#cAdd").onclick = async () => {
+      await run(() => api("POST", "/api/categories", { name: $("#newCat").value, kind: $("#newKind").value, budget: 0 }), "분류를 추가했어요");
+      catCache = null; route();
+    };
+    view.onclick = null;
   },
 };
 
@@ -416,11 +544,11 @@ pages.ledger = {
 // =====================================================================
 const MIX = ["#1B2430", "#5B6676", "#AEB7C4", "#FFD84D", "#7A8699", "#DDE2E8"];
 pages.assets = {
-  async mount() {
-    setTop("자산");
+  async mount(h) {
+    setTop("자산", { menu: "assets", sub: h.sub });
     const d = await GET("/api/assets");
     const total = d.mix.reduce((s, x) => s + x.total, 0);
-    view.innerHTML = `
+    const summaryCard = `
       <section class="card">
         <div class="small muted" style="font-weight:700">순자산</div>
         <div class="big">${won(d.net)}원</div>
@@ -428,21 +556,29 @@ pages.assets = {
         <div class="kv" style="grid-template-columns:1fr 1fr"><div>가진 것<b>${won(d.assets)}</b></div><div>갚을 것<b>${won(d.debts)}</b></div></div>
         ${total ? `<div class="mix" role="img" aria-label="자산 구성 ${d.mix.map((x) => `${x.label} ${((x.total / total) * 100).toFixed(1)}%`).join(", ")}">${d.mix.map((x, i) => `<div style="flex:${x.total} 1 0;background:${MIX[i % 6]}"></div>`).join("")}</div>
           <div class="legend">${d.mix.map((x, i) => `<span><i class="sw" style="background:${MIX[i % 6]}"></i>${esc(x.label)} <b>${((x.total / total) * 100).toFixed(0)}%</b></span>`).join("")}</div>` : ""}
-        ${d.history.length >= 2 ? lineChart([{ values: d.history.map((h) => h.net) }], { h: 80, label: "월별 순자산" }) : ""}
-      </section>
+        ${d.history.length >= 2 ? lineChart([{ values: d.history.map((x) => x.net) }], { h: 80, label: "월별 순자산" }) : ""}
+      </section>`;
+    const goalCard = `
+      <section class="card">
+        <div class="card-head"><h2>목표까지</h2><button class="link" data-act="goal">${d.goal ? "목표 바꾸기" : "목표 정하기"}</button></div>
+        ${d.goal > 0 ? `<div class="big" style="font-size:26px">${Math.max(0, Math.round((d.net / d.goal) * 100))}%</div>
+          <div class="small muted">순자산 <b style="color:var(--ink)">${won(d.goal)}원</b>까지 ${d.net >= d.goal ? "<b style='color:var(--ink)'>도달했어요</b>" : `<b style="color:var(--ink)">${won(d.goal - d.net)}원</b> 남았어요`}</div>
+          <div class="bar thick"><div style="width:${Math.max(0, Math.min(100, (d.net / d.goal) * 100))}%;background:var(--hl);box-shadow:inset -2px 0 0 var(--ink)"></div></div>`
+        : `<div class="small muted">목표 순자산을 정하면 얼마나 왔는지 보여드려요</div>`}
+      </section>`;
+    const groupsHtml = `
       ${d.groups.map((g) => `<div class="sec-title">${esc(g.label)} · ${g.type === "debt" ? "-" : ""}${won(g.total)}원</div>
         <section class="card tight"><div class="list">${g.items.map((a) => `<button type="button" class="item" data-edit="${a.id}">
           <span class="ico ${a.linked ? "y" : ""}">${esc(g.label.slice(0, 2))}</span>
           <span class="main"><b>${esc(a.name)}</b><span class="sub">${a.linked ? ({ scalp: "단타 계좌와 연결", dca: "장기 계좌와 연결", kiwoom: "내 키움 계좌와 연결" }[a.linked]) : esc(a.note || "직접 입력")}${a.sync_error ? " · 연결 실패" : ""}</span></span>
           <span class="end"><b>${g.type === "debt" ? "-" : ""}${won(a.balance)}</b></span></button>`).join("")}</div></section>`).join("")
-        || `<section class="card"><div class="empty">통장, 예적금, 연금, 대출을 등록하면<br>순자산을 계산해요</div></section>`}
-      <section class="card">
-        <div class="card-head"><h2>목표까지</h2><button class="link" data-act="goal">${d.goal ? "목표 바꾸기" : "목표 정하기"}</button></div>
-        ${d.goal > 0 ? `<div class="small muted">순자산 <b style="color:var(--ink)">${won(d.goal)}원</b>까지 ${d.net >= d.goal ? "<b style='color:var(--ink)'>도달했어요</b>" : `<b style="color:var(--ink)">${won(d.goal - d.net)}원</b> 남았어요`}</div>
-          <div class="bar thick"><div style="width:${Math.max(0, Math.min(100, (d.net / d.goal) * 100))}%;background:var(--hl);box-shadow:inset -2px 0 0 var(--ink)"></div></div>`
-        : `<div class="small muted">목표 순자산을 정하면 얼마나 왔는지 보여드려요</div>`}
-      </section>`;
-    fab("계좌", () => this.sheet(d, null));
+        || `<section class="card"><div class="empty">통장, 예적금, 연금, 대출을 등록하면<br>순자산을 계산해요</div></section>`}`;
+    if (h.sub === "accounts") { view.innerHTML = groupsHtml; fab("계좌", () => this.sheet(d, null)); }
+    else if (h.sub === "goal") view.innerHTML = goalCard + `<section class="card"><h2>지금 순자산</h2><div class="big" style="font-size:26px">${won(d.net)}원</div>
+        ${d.history.length >= 2 ? lineChart([{ values: d.history.map((x) => x.net) }], { h: 90, label: "월별 순자산" }) + `<div class="axis"><span>${esc(d.history[0].month)}</span><span>${esc(d.history[d.history.length - 1].month)}</span></div>` : `<div class="tiny">매달 순자산을 기록해 추이를 그려요</div>`}</section>`;
+    else view.innerHTML = summaryCard + `<div class="sec-title">종류별</div><section class="card tight"><div class="list">${d.groups.map((g) => `<a class="item" href="#assets/accounts" style="text-decoration:none">
+        <span class="ico">${esc(g.label.slice(0, 2))}</span><span class="main"><b>${esc(g.label)}</b><span class="sub">${g.items.length}개 계좌</span></span>
+        <span class="end"><b>${g.type === "debt" ? "-" : ""}${won(g.total)}</b></span></a>`).join("") || `<div class="empty">계좌 탭에서 통장·예적금·대출을 등록해 보세요</div>`}</div></section>` + goalCard;
     view.onclick = (e) => {
       const b = e.target.closest("[data-edit],[data-act]");
       if (!b) return;
@@ -493,9 +629,8 @@ pages.invest = {
     if (sub === "backtest") return this.backtest();
     if (sub === "rules") return this.rules();
     investState.tab = ["account", "trade", "scalp", "dca"].includes(sub) ? sub : "account";
-    setTop("투자");
-    view.innerHTML = `<div class="sticky-seg">${seg("투자 화면", [["account", "내 계좌"], ["trade", "매매"], ["scalp", "단타"], ["dca", "적립"]], investState.tab)}</div><div id="iv" style="display:flex;flex-direction:column;gap:12px"></div>`;
-    bindSeg(view, "투자 화면", (v) => { history.replaceState(null, "", "#invest/" + v); investState.tab = v; this.mount({ sub: v }); });
+    setTop("투자", { menu: "invest", sub: investState.tab });
+    view.innerHTML = `<div id="iv" style="display:flex;flex-direction:column;gap:12px"></div>`;
     await this.fill();
   },
   async refresh(h) {
@@ -522,7 +657,7 @@ pages.invest = {
         <div class="small muted" style="line-height:1.7">조회 전용 연결이라 이 키로는 주문이 나가지 않아요.<br>
           1. 키움 REST API 홈페이지에서 앱키·시크릿키를 받아요(노트북 IP 등록 필요)<br>
           2. 설정 → 내 계좌 연결에 넣고 연결 확인을 눌러요</div>
-        <a class="btn dark" href="#settings">설정으로 가기</a></section>`;
+        <a class="btn dark" href="#settings/kiwoom">설정으로 가기</a></section>`;
       return;
     }
     const err = d.error ? `<div class="notice warn">${esc(d.error)}${/8010/.test(d.error) ? "<br>노트북 인터넷 주소(IP)가 바뀐 것 같아요. 키움 REST API 홈페이지 → 계좌 App Key 관리에서 현재 IP를 추가해 주세요." : ""}</div>` : "";
@@ -686,7 +821,7 @@ pages.invest = {
 
   // ---------- 백테스트 ----------
   async backtest() {
-    setTop("백테스트", { back: "#invest/scalp" });
+    setTop("백테스트", { back: "#invest/scalp", menu: "invest", sub: "backtest" });
     const d = await GET("/api/scalp");
     const cfg = d.config;
     const S = this.bt || (this.bt = { source: "demo", result: null });
@@ -755,7 +890,7 @@ pages.invest = {
 
   // ---------- 매매 규칙 ----------
   async rules() {
-    setTop("매매 규칙", { back: "#invest/scalp" });
+    setTop("매매 규칙", { back: "#invest/scalp", menu: "invest", sub: "rules" });
     const d = await GET("/api/scalp");
     const c = d.config;
     let strat = c.strategy.name;
@@ -876,15 +1011,16 @@ function planSheet(e) {
 // 설정
 // =====================================================================
 pages.settings = {
-  async mount() {
-    setTop("설정");
+  async mount(h) {
+    setTop("설정", { menu: "settings", sub: h.sub });
+    const sub = h.sub;
     const s = await GET("/api/settings");
     const ping = await GET("/api/ping").catch(() => ({}));
     const info = ping.local ? await GET("/api/connect-info").catch(() => null) : null;
     const up = await GET("/api/update").catch(() => ({ available: false, message: "" }));
     const acct = (k, label) => {
       const kw = s.kiwoom[k];
-      return `<details class="card"><summary>${label} <span class="tiny" style="margin-left:auto;margin-right:12px">${s.trade_mode[k] === "kiwoom" ? (kw.mock ? "키움 모의투자" : "키움 실전") : "앱 내 모의"}</span></summary>
+      return `<details class="card"><summary>${label} 주문 계좌 <span class="tiny" style="margin-left:auto;margin-right:12px">${s.trade_mode[k] === "kiwoom" ? (kw.mock ? "키움 모의투자" : "키움 실전") : "앱 내 모의"}</span></summary>
         ${seg(label + " 주문 방식", [["paper", "앱 내 모의"], ["kiwoom", "키움으로 주문"]], s.trade_mode[k], "on-card")}
         <div class="tiny">앱 내 모의는 시세만 받아 앱 안에서 체결을 흉내 내요. 키움으로 주문하면 아래 키의 계좌로 주문이 나가요.</div>
         <label class="field">앱키<input data-kw="${k}" data-k="appkey" value="${esc(kw.appkey)}" autocomplete="off" autocapitalize="off"></label>
@@ -897,7 +1033,7 @@ pages.settings = {
         <button class="btn sm soft" data-reset="${k}">앱 내 모의 계좌 초기화</button>
       </details>`;
     };
-    view.innerHTML = `
+    const connectCard = `
       <section class="card">
         <div class="card-head"><h2>연결</h2><span class="tag ${ping.ok ? "g" : "warn"}">${ping.ok ? "연결됨" : "연결 안 됨"}</span></div>
         ${ON_PAGES ? `<div class="small muted">서버 ${esc(store.get("server") || "-")}</div>
@@ -908,53 +1044,67 @@ pages.settings = {
           <div class="field">휴대폰 연결 링크<div class="code" id="linkTxt"></div><span class="hint">이 링크를 휴대폰으로 보내 한 번 열면 주소와 토큰이 저장돼요</span></div>
           <div class="btns"><button class="btn sm" id="copyLink">링크 복사</button><button class="btn sm soft" id="rotate">토큰 새로 만들기</button></div>`
         : `<div class="small muted">이 서버에 직접 연결돼 있어요.</div>`}
-      </section>
-      <section class="card" id="upCard">${updateCard(up)}</section>
-      <section class="card"><h2>시세</h2>
-        ${seg("시세 출처", [["demo", "가상 시세"], ["kiwoom", "키움 시세"]], s.data_source, "on-card")}
-        <div class="tiny">가상 시세는 장 시간이 아니어도 시험할 수 있게 빠르게 흐르는 무작위 가격이에요. 실제 검증은 <b>키움 시세 + 앱 내 모의</b>로 하세요.</div>
-        <label class="field">가상 시세 속도(1분 = 몇 초)<input class="r" id="demoSpeed" inputmode="decimal" value="${s.demo_speed}"></label>
-      </section>
-      <details class="card" ${s.kiwoom_view.appkey ? "" : "open"}><summary>내 계좌 연결(조회 전용) <span class="tiny" style="margin-left:auto;margin-right:12px">${s.kiwoom_view.appkey ? (s.kiwoom_view.mock ? "모의투자" : "실전") : "연결 안 됨"}</span></summary>
+      </section>`;
+    const kiwoomHtml = `
+      <section class="card"><h2>내 계좌 연결(조회 전용) <span class="tag ${s.kiwoom_view.appkey ? "g" : "warn"}" style="vertical-align:2px">${s.kiwoom_view.appkey ? (s.kiwoom_view.mock ? "모의투자" : "실전") : "연결 안 됨"}</span></h2>
         <div class="small muted">보유액·예수금·종목을 보기만 해요. 이 키로는 주문 기능이 아예 꺼져 있어요.</div>
         <label class="field">앱키<input data-kv="appkey" value="${esc(s.kiwoom_view.appkey)}" autocomplete="off" autocapitalize="off"></label>
         <label class="field">시크릿키<input data-kv="secretkey" type="password" value="${esc(s.kiwoom_view.secretkey)}" autocomplete="off"></label>
         <label class="check"><input type="checkbox" data-kv="mock" ${s.kiwoom_view.mock ? "checked" : ""}> 모의투자 계좌 키예요</label>
         <button class="btn sm" id="kvTest">저장하고 연결 확인</button>
-      </details>
+      </section>
+      <section class="card"><h2>시세</h2>
+        ${seg("시세 출처", [["demo", "가상 시세"], ["kiwoom", "키움 시세"]], s.data_source, "on-card")}
+        <div class="tiny">가상 시세는 장 시간이 아니어도 시험할 수 있게 빠르게 흐르는 무작위 가격이에요. 실제 검증은 <b>키움 시세 + 앱 내 모의</b>로 하세요.</div>
+        <label class="field">가상 시세 속도(1분 = 몇 초)<input class="r" id="demoSpeed" inputmode="decimal" value="${s.demo_speed}"></label>
+      </section>
       ${acct("scalp", "단타 계좌")}
       ${acct("dca", "장기투자 계좌")}
-      <details class="card"><summary>거래 비용</summary>
+      <div id="setErr"></div>
+      <button class="btn dark wide" id="saveSet">설정 저장</button>`;
+    const tradingHtml = `
+      <section class="card"><h2>거래 비용</h2>
         <div class="fields"><label class="field">수수료(%, 한쪽)<input class="r" id="cCom" inputmode="decimal" value="${+(s.costs.commission * 100).toFixed(4)}"></label>
           <label class="field">매도 거래세(%)<input class="r" id="cTax" inputmode="decimal" value="${+(s.costs.tax * 100).toFixed(4)}"></label>
           <label class="field">슬리피지(호가 수)<input class="r" id="cSlip" inputmode="numeric" value="${s.costs.slippage_ticks}"></label></div>
-        <div class="tiny">본인 증권사 수수료와 올해 거래세율로 맞춰 주세요. 단타 손익에 가장 크게 영향을 줘요.</div></details>
-      <details class="card"><summary>적립 매수 시간·휴장일</summary>
+        <div class="tiny">본인 증권사 수수료와 올해 거래세율로 맞춰 주세요. 단타 손익에 가장 크게 영향을 줘요.</div></section>
+      <section class="card"><h2>적립 매수 시간·휴장일</h2>
         <div class="fields"><label class="field">매수 시작<input id="dwS" value="${esc(s.dca_window.start)}"></label><label class="field">매수 마감<input id="dwE" value="${esc(s.dca_window.end)}"></label></div>
         <label class="field">휴장일(YYYY-MM-DD, 줄마다)<textarea id="hol" rows="4">${esc(s.holidays.join("\n"))}</textarea></label>
-        <div class="tiny">주말은 자동으로 빼요.</div></details>
-      <details class="card"><summary>휴대폰 알림</summary>
+        <div class="tiny">주말은 자동으로 빼요.</div></section>
+      <section class="card"><h2>휴대폰 알림</h2>
         <label class="field">ntfy 토픽<input id="ntfy" value="${esc(s.ntfy_topic)}" autocapitalize="off" placeholder="비우면 알림 안 보냄"></label>
-        <div class="tiny">ntfy 앱에서 같은 토픽을 구독하면 매수·매도·적립 결과를 받아요.</div></details>
+        <div class="tiny">ntfy 앱에서 같은 토픽을 구독하면 매수·매도·적립 결과를 받아요.</div></section>
       <div id="setErr"></div>
-      <button class="btn dark wide" id="saveSet">설정 저장</button>
-      <div class="tiny" style="text-align:center">moa v${esc(ping.version || "")}</div>`;
+      <button class="btn dark wide" id="saveSet">설정 저장</button>`;
+    const appHtml = `
+      <section class="card" id="upCard">${updateCard(up)}</section>
+      <section class="card"><h2>버전</h2>
+        <div style="display:flex;justify-content:space-between;font-size:14px"><span>앱</span><b>v${esc(ping.version || "-")}</b></div>
+        <div style="display:flex;justify-content:space-between;font-size:14px"><span class="muted">화면 빌드</span><span class="muted">${esc(UI_VERSION)}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:14px"><span class="muted">서버 빌드</span><span class="muted">${esc(ping.build || "-")}</span></div>
+      </section>`;
+    view.innerHTML = sub === "kiwoom" ? kiwoomHtml : sub === "trading" ? tradingHtml : sub === "app" ? appHtml : connectCard;
     const errs = (e) => { $("#setErr").innerHTML = Object.entries(e || {}).map(([k, v]) => `<div class="notice warn">${esc({ scalp: "단타 계좌", dca: "장기투자 계좌", feed: "시세" }[k] || k)}: ${esc(v)}</div>`).join(""); };
+    // 지금 화면에 있는 입력란만 모아서 저장한다(다른 2뎁스 화면의 값은 건드리지 않음)
     const collect = () => {
-      const kiwoom = { scalp: {}, dca: {} };
-      $$("[data-kw]").forEach((i) => { kiwoom[i.dataset.kw][i.dataset.k] = i.type === "checkbox" ? i.checked : i.value.trim(); });
-      const real = {}; $$("[data-real]").forEach((i) => (real[i.dataset.real] = i.checked));
-      const kv = {}; $$("[data-kv]").forEach((i) => (kv[i.dataset.kv] = i.type === "checkbox" ? i.checked : i.value.trim()));
-      const cash = {}; $$("[data-cash]").forEach((i) => (cash[i.dataset.cash] = num(i.value)));
-      const out = {
-        data_source: segVal(view, "시세 출처"), demo_speed: num($("#demoSpeed").value) || 2,
-        trade_mode: { scalp: segVal(view, "단타 계좌 주문 방식"), dca: segVal(view, "장기투자 계좌 주문 방식") },
-        kiwoom, kiwoom_view: kv, real_orders_allowed: real, paper_start_cash: cash,
-        costs: { commission: num($("#cCom").value) / 100, tax: num($("#cTax").value) / 100, slippage_ticks: num($("#cSlip").value) },
-        dca_window: { start: $("#dwS").value.trim(), end: $("#dwE").value.trim() },
-        holidays: $("#hol").value.split(/\s+/).filter((x) => /^\d{4}-\d\d-\d\d$/.test(x)),
-        ntfy_topic: $("#ntfy").value.trim(),
-      };
+      const out = {};
+      if ($("[data-kw]")) {
+        const kiwoom = { scalp: {}, dca: {} };
+        $$("[data-kw]").forEach((i) => { kiwoom[i.dataset.kw][i.dataset.k] = i.type === "checkbox" ? i.checked : i.value.trim(); });
+        const real = {}; $$("[data-real]").forEach((i) => (real[i.dataset.real] = i.checked));
+        const cash = {}; $$("[data-cash]").forEach((i) => (cash[i.dataset.cash] = num(i.value)));
+        out.kiwoom = kiwoom; out.real_orders_allowed = real; out.paper_start_cash = cash;
+        out.trade_mode = { scalp: segVal(view, "단타 계좌 주문 방식"), dca: segVal(view, "장기투자 계좌 주문 방식") };
+      }
+      if ($("[data-kv]")) { const kv = {}; $$("[data-kv]").forEach((i) => (kv[i.dataset.kv] = i.type === "checkbox" ? i.checked : i.value.trim())); out.kiwoom_view = kv; }
+      if (segVal(view, "시세 출처")) { out.data_source = segVal(view, "시세 출처"); out.demo_speed = num($("#demoSpeed").value) || 2; }
+      if ($("#cCom")) out.costs = { commission: num($("#cCom").value) / 100, tax: num($("#cTax").value) / 100, slippage_ticks: num($("#cSlip").value) };
+      if ($("#dwS")) {
+        out.dca_window = { start: $("#dwS").value.trim(), end: $("#dwE").value.trim() };
+        out.holidays = $("#hol").value.split(/\s+/).filter((x) => /^\d{4}-\d\d-\d\d$/.test(x));
+      }
+      if ($("#ntfy")) out.ntfy_topic = $("#ntfy").value.trim();
       if ($("#pubUrl")) out.public_url = $("#pubUrl").value.trim().replace(/\/+$/, "");
       return out;
     };
@@ -1001,12 +1151,12 @@ pages.settings = {
       });
     };
     bindUp();
-    $("#kvTest").onclick = async () => {
+    if ($("#kvTest")) $("#kvTest").onclick = async () => {
       await run(() => api("PUT", "/api/settings", collect()));
       const r = await run(() => api("POST", "/api/myaccount/test"));
       toast(`${r.server} 계좌 연결 성공. 총자산 ${won(r.total)}원, 보유 ${r.holdings.length}종목`);
     };
-    $("#saveSet").onclick = async () => { const r = await run(() => api("PUT", "/api/settings", collect()), "설정을 저장했어요"); errs(r.errors); };
+    if ($("#saveSet")) $("#saveSet").onclick = async () => { const r = await run(() => api("PUT", "/api/settings", collect()), "설정을 저장했어요"); errs(r.errors); };
     view.onclick = async (e) => {
       const t = e.target.closest("[data-test]"), rs = e.target.closest("[data-reset]");
       if (t) {

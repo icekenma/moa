@@ -124,7 +124,7 @@ def create_app(rt, updater=None):
     def update_status():
         if not updater:
             return jsonify(available=False, message="업데이트 기능이 꺼져 있어요", version=version())
-        return jsonify(updater.status(), version=version())
+        return jsonify({**updater.status(), "version": version()})
 
     @app.post("/api/update/check")
     def update_check():
@@ -133,8 +133,8 @@ def create_app(rt, updater=None):
         d = body()
         if d.get("apply"):
             ok, msg = updater.apply()
-            return jsonify(updater.status(), applied=ok, msg=msg, version=version())
-        return jsonify(updater.check(), version=version())
+            return jsonify({**updater.status(), "applied": ok, "msg": msg, "version": version()})
+        return jsonify({**updater.check(), "version": version()})
 
     @app.put("/api/update/auto")
     def update_auto():
@@ -180,6 +180,35 @@ def create_app(rt, updater=None):
         month = request.args.get("month") or date.today().strftime("%Y-%m")
         return jsonify(summary=rt.ledger.summary(month), rows=rt.ledger.rows(month, request.args.get("kind")),
                        categories=rt.ledger.categories())
+
+    @app.get("/api/ledger/trend")
+    def ledger_trend():
+        return jsonify(rt.ledger.trend(max(1, min(24, int(request.args.get("months") or 6)))))
+
+    @app.get("/api/timeline")
+    def timeline():
+        """홈 > 최근 활동: 가계부·주문·적립·엔진·업데이트 기록을 시간순으로."""
+        items = []
+        for t in rt.db.q("SELECT t.*, c.name AS category FROM transactions t LEFT JOIN categories c "
+                         "ON c.id=t.category_id ORDER BY t.id DESC LIMIT 20"):
+            items.append({"ts": t["created_at"], "kind": "ledger", "title": t["memo"] or t["category"] or "내역",
+                          "sub": f"{t['category'] or '분류 없음'} · {t['date'][5:].replace('-', '.')}",
+                          "amount": t["amount"] if t["kind"] == "in" else -t["amount"]})
+        eng_name = {"scalp": "단타", "dca": "적립"}
+        for o in rt.db.q("SELECT * FROM orders ORDER BY id DESC LIMIT 20"):
+            items.append({"ts": o["ts"], "kind": "order", "title": f"{o['name'] or o['code']} {'매수' if o['side'] == 'buy' else '매도'}",
+                          "sub": f"{eng_name.get(o['engine'], o['engine'])} · {o['qty']}주 · {o['msg']}",
+                          "side": o["side"], "price": o["fill_price"]})
+        for r in rt.db.q("SELECT r.*, p.name FROM dca_runs r LEFT JOIN dca_plans p ON p.id=r.plan_id "
+                         "WHERE r.status != 'done' ORDER BY r.id DESC LIMIT 10"):
+            items.append({"ts": r["run_ts"], "kind": "warn", "title": f"{r['name'] or '적립'} 매수 {'건너뜀' if r['status'] == 'skipped' else '실패'}",
+                          "sub": r["msg"]})
+        for l in rt.db.q("SELECT * FROM engine_log WHERE level != 'info' OR engine='system' ORDER BY id DESC LIMIT 20"):
+            items.append({"ts": l["ts"], "kind": "update" if l["engine"] == "system" and l["level"] == "info" else "warn",
+                          "title": {"system": "시스템", "scalp": "단타 엔진", "dca": "적립"}.get(l["engine"], l["engine"]),
+                          "sub": l["msg"]})
+        items.sort(key=lambda x: x["ts"] or "", reverse=True)
+        return jsonify(items[:60])
 
     @app.post("/api/tx")
     def tx_add():

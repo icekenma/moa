@@ -373,3 +373,23 @@ def test_sample_budgets_cleared_once(tmp_path):
     db2.x("UPDATE categories SET budget=300000 WHERE name='식비'")
     db3 = DB(p)
     assert db3.one("SELECT budget FROM categories WHERE name='식비'")["budget"] == 300000
+
+
+def test_trend_and_timeline(rt):
+    c = create_app(rt).test_client()
+    c.post("/api/tx", json={"date": "2026-11-03", "kind": "out", "amount": 5000, "category_id": 1, "memo": "커피"})
+    c.post("/api/tx", json={"date": "2026-10-10", "kind": "in", "amount": 100000, "category_id": 10, "memo": "급여"})
+    tr = rt.ledger.trend(3, today=date(2026, 11, 17))
+    assert [x["month"] for x in tr] == ["2026-09", "2026-10", "2026-11"]
+    assert tr[1]["income"] == 100000 and tr[2]["expense"] == 5000
+    tl = c.get("/api/timeline").get_json()
+    assert tl[0]["title"] == "급여" and any(x["amount"] == -5000 for x in tl)
+
+
+def test_update_api_with_updater(rt, tmp_path):
+    from moa.updater import Updater
+    up = Updater(rt, str(tmp_path))  # git 저장소가 아닌 폴더 → 사용 불가 상태
+    c = create_app(rt, up).test_client()
+    r = c.get("/api/update")
+    assert r.status_code == 200 and r.get_json()["available"] is False and "version" in r.get_json()
+    assert c.post("/api/update/check", json={}).status_code == 200

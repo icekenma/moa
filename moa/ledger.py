@@ -130,3 +130,21 @@ class Ledger:
             "per_day": per_day, "daily": daily, "today_idx": today_idx,
             "categories": cats,
         }
+
+    def trend(self, months=6, today=None):
+        """최근 n개월 수입·지출 합계(오래된 달부터)."""
+        today = today or date.today()
+        y, m = today.year, today.month
+        keys = []
+        for _ in range(months):
+            keys.append(f"{y:04d}-{m:02d}")
+            y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+        keys.reverse()
+        rows = self.db.q("SELECT substr(date,1,7) AS mon, kind, SUM(amount) AS s FROM transactions "
+                         "WHERE date >= ? GROUP BY mon, kind", (keys[0] + "-01",))
+        out = {k: {"month": k, "income": 0, "expense": 0} for k in keys}
+        for r in rows:
+            if r["mon"] in out:
+                out[r["mon"]]["income" if r["kind"] == "in" else "expense"] = r["s"]
+        return list(out.values())
+

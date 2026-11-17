@@ -202,14 +202,18 @@ class AIPick:
                 "session": session(mkt), "kiwoom": self.rt.invest.kr() is not None}
 
     # ---------- 결과 정리 ----------
-    def parse(self, text, mkt, model, usd):
-        m = re.findall(r"```json\s*(\{.*?\})\s*```", text, re.S) or re.findall(r"(\{\s*\"stance\".*\})", text, re.S)
-        if not m:
-            return None
-        try:
-            j = json.loads(m[-1])
-        except ValueError:
-            return None
+    def parse(self, text, mkt, model, usd, cut=False):
+        m = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S) or re.findall(r"(\{\s*\"stance\".*\})", text, re.S)
+        j, note = None, ""
+        if m:
+            try:
+                j = json.loads(m[-1])
+            except ValueError:
+                j = None
+        if j is None:
+            why = "AI 답이 길어 중간에 끊겼어요" if cut else "AI 답이 비어 있었어요" if not text.strip() else "AI 답에서 추천표를 읽지 못했어요"
+            j, note = {"stance": "관망", "market_view": "", "picks": []}, f"{why}. 앱이 실시간 지표로 골랐어요"
+            self.rt.db.log("system", "info", f"AI 추천 원문(끝 400자): {text[-400:]}", datetime.now().isoformat(timespec="seconds"))
         picks = []
         for p in (j.get("picks") or [])[:3]:
             try:
@@ -238,23 +242,27 @@ class AIPick:
             fb = self.fallback(mkt)
             if fb:
                 picks.append(fb)
+                note = note or "AI가 종목을 비워 와서 앱이 실시간 지표로 1종목을 골랐어요"
+            else:
+                note = note or "조건에 맞는 후보가 없었어요(등락 −3%~+15% 사이, 오늘 분봉 자료가 있는 종목)"
         body = text.split("```json")[0].strip()
         pid = self.rt.db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text) VALUES(?,?,?,?,?,?,?,?)",
                            (datetime.now().isoformat(timespec="seconds"), mkt, model, usd, j.get("stance"),
                             j.get("market_view"), json.dumps(picks, ensure_ascii=False), body))
-        return {"id": pid, "stance": j.get("stance"), "view": j.get("market_view"), "picks": picks, "mkt": mkt}
+        return {"id": pid, "stance": j.get("stance"), "view": j.get("market_view"), "picks": picks, "mkt": mkt, "note": note}
 
     def fallback(self, mkt):
         best, bs = None, -1e9
         for c in self._cands.get(mkt) or []:
             f = c.get("오늘_5분봉")
             if not isinstance(f, dict):
-                continue
+                f = {}
             cp = c.get("등락률%") or 0
-            if cp < -3 or cp > 15:
+            if cp < -5 or cp > 20:
                 continue
             sc = (f.get("VWAP대비%") or 0) * 2 + (f.get("최근30분%") or 0) * 1.5 + (f.get("고점대비%") or 0) \
-                + min(2.0, f.get("최근30분_거래량배수") or 0) + (c.get("호가_매수잔량/매도잔량") or 1) - 1
+                + min(2.0, f.get("최근30분_거래량배수") or 0) + (c.get("호가_매수잔량/매도잔량") or 1) - 1 \
+                - abs(cp - 4) * 0.15  # 너무 급등·급락한 종목보다 +4% 안팎을 선호
             if sc > bs:
                 best, bs = c, sc
         if not best:

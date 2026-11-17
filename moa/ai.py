@@ -259,7 +259,7 @@ class AI:
         pick = kind == "pick"
         if pick:
             from .aipick import PICK_SYSTEM
-        body = {"model": model, "max_tokens": 4000 if pick else 2500, "system": PICK_SYSTEM if pick else SYSTEM,
+        body = {"model": model, "max_tokens": 9000 if pick else 2500, "system": PICK_SYSTEM if pick else SYSTEM,
                 "messages": messages, "stream": True}
         web = d["web_search"] if isinstance(d.get("web_search"), bool) else c.get("web_search", True)
         if web and kind != "sweep":
@@ -298,11 +298,12 @@ class AI:
             pass
         if pick:
             try:
-                res = self.rt.aipick.parse("".join(buf), "us" if d.get("mkt") == "us" else "kr", model, usd)
+                res = self.rt.aipick.parse("".join(buf), "us" if d.get("mkt") == "us" else "kr", model, usd,
+                                           cut=usage.get("stop") == "max_tokens")
             except Exception as e:
                 res = None
                 yield {"t": "status", "msg": f"추천 결과 정리 실패: {e}"}
-            yield {"t": "picks", **(res or {"picks": [], "stance": None, "view": "추천 결과를 읽지 못했어요. 다시 받아 보세요"})}
+            yield {"t": "picks", **(res or {"picks": [], "stance": None, "view": "", "note": "AI 답이 비어 있어요. 다시 받아 보세요"})}
         cr = self.credit()
         yield {"t": "done", "title": title, "usd": round(usd, 4), "krw": int(round(usd * fx)), "model": model,
                "searches": usage["searches"], "in": usage["in"], "out": usage["out"],
@@ -337,6 +338,8 @@ class AI:
             elif dl.get("type") == "input_json_delta":
                 pass
         elif typ == "message_delta":
+            if (ev.get("delta") or {}).get("stop_reason"):
+                usage["stop"] = ev["delta"]["stop_reason"]
             u = ev.get("usage") or {}
             usage["out"] = max(usage["out"], int(u.get("output_tokens") or 0))
             if u.get("input_tokens"):

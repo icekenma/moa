@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2058";
+const UI_VERSION = "261117.2110";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1321,7 +1321,8 @@ pages.invest = {
     el.innerHTML = (A.busy || A.text || R || A.err) ? `<section class="card ap-res">
       ${A.busy ? `<div class="ai-status"><i class="ai-dot"></i><span>${esc(A.status || "")}</span></div>` : ""}
       ${R && R.stance ? `<div class="ap-stance s-${esc(R.stance)}"><b>${esc(R.stance)}</b><span>${esc(R.view || "")}</span></div>` : ""}
-      ${R && R.stance === "관망" && R.picks.length ? `<div class="notice">AI는 지금 관망을 권해요. 그래도 가장 나은 종목을 비중을 줄여 골라 뒀어요. 들어간다면 작게, 짧게.</div>` : ""}
+      ${R && R.note ? `<div class="notice">${esc(R.note)}</div>` : ""}
+      ${R && R.stance === "관망" && R.picks.length && !R.note ? `<div class="notice">AI는 지금 관망을 권해요. 그래도 가장 나은 종목을 비중을 줄여 골라 뒀어요. 들어간다면 작게, 짧게.</div>` : ""}
       ${body ? `<div class="ai-ans ap-text">${mdLite(body)}</div>` : ""}
       ${A.err ? `<div class="notice warn">${esc(A.err)}</div>` : ""}
       ${A.src.length ? `<details class="ap-src"><summary class="tiny">찾아본 뉴스·자료 ${A.src.length}건</summary>${A.src.map((x) => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>`).join("")}</details>` : ""}
@@ -1346,7 +1347,7 @@ pages.invest = {
         <ul class="ap-why">${p.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}${p.risks.map((r) => `<li class="risk">${esc(r)}</li>`).join("")}</ul>
         <button type="button" class="btn red wide" data-apbuy="${i}">매수하고 자동 익절·손절 걸기</button>
       </section>`;
-    }).join("") : `<section class="card"><div class="empty">AI가 지금은 살 만한 종목이 없다고 봤어요. 관망을 권해요.</div></section>`) : ""}` : "";
+    }).join("") : `<section class="card"><div class="empty">추천할 종목을 만들지 못했어요. ${esc(R.note || "")} 잠시 뒤 다시 받아 보세요.</div></section>`) : ""}` : "";
     if (R && R.picks.length && !A.shown) setTimeout(() => { A.shown = true; }, 50);
     $$("[data-apbuy]", el).forEach((b) => b.onclick = () => {
       const p = R.picks[Number(b.dataset.apbuy)], px = p.entry_type === "limit" && p.entry_price ? p.entry_price : p.price;

@@ -1221,7 +1221,7 @@ def test_aipick_parse_guard_and_estimate(rt, monkeypatch):
     r = ap.parse(text, "kr", "claude-sonnet-5-5", 0.05)
     assert r["stance"] == "보통" and len(r["picks"]) == 1 and r["picks"][0]["sym"] == "005930"
     assert ap.history()[0]["picks"][0]["win_prob"] == 62
-    assert ap.parse("그냥 글", "kr", "m", 0) is None
+    assert ap.parse("그냥 글", "kr", "m", 0)["note"].startswith("AI 답에서 추천표를 읽지 못했어요")
     # 관망이라 picks가 비어도 최소 1종목(지표 기반)
     ap._cands["kr"] = [{"sym": "000660", "name": "SK하이닉스", "현재가": 10000, "등락률%": 2.0,
                         "오늘_5분봉": {"VWAP대비%": 0.8, "최근30분%": 0.5, "고점대비%": -0.4, "최근30분_거래량배수": 1.6}},

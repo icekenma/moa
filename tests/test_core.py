@@ -581,3 +581,14 @@ def test_myaccount_keeps_last_snapshot_and_acct_no(rt):
     assert s2["total"] == 6166000 and s2["ok"] is False and s2["stale"] and "down" in s2["error"]
     c = create_app(rt).test_client()
     assert c.get("/api/connections").get_json()["kiwoom"]["holdings"][0]["code"] == "005930"
+
+
+def test_switching_kiwoom_account_drops_old_snapshot(rt):
+    rt.settings.update({"kiwoom_view": {"appkey": "k", "secretkey": "s", "mock": False}})
+    rt.account.client().session = _FakeKiwoom()
+    assert rt.account.snapshot(force=True)["ok"] and rt.account.last()["total"] == 6166000
+    rt.settings.update({"kiwoom_view": {"appkey": "k2", "secretkey": "s2"}})  # 다른 계좌 키
+    assert rt.account.last() is None
+    rt.account.client().session = type("Down", (), {"post": lambda *a, **k: (_ for _ in ()).throw(OSError("down"))})()
+    s = rt.account.snapshot(force=True)
+    assert s.get("total") is None and not s["ok"]  # 예전 계좌 금액을 보여 주지 않음

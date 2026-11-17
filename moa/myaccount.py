@@ -3,6 +3,7 @@
 실전 계좌 키를 넣어도 주문은 나가지 않는다(KiwoomClient read_only=True).
 키움 호출 제한을 지키려고 결과를 잠깐(기본 4초) 저장해 두고 그 안의 요청에는 저장본을 준다.
 """
+import hashlib
 import threading
 import time
 from datetime import datetime
@@ -48,13 +49,13 @@ class AccountView:
                 cl = self.client()
                 data = cl.account_summary()
                 data.update(configured=True, ok=True, server="모의투자" if cl.mock else "실전",
-                            acct_no=self._account_no(cl),
+                            acct_no=self._account_no(cl), key_fp=self._fp(),
                             updated_at=datetime.now().isoformat(timespec="seconds"))
                 self._cache, self._at, self._err = data, time.time(), None
                 self._save_last(data)
             except Exception as e:
                 self._err = str(e)
-                last = self._cache or self.last()
+                last = (self._cache if self._cache and self._cache.get("key_fp") == self._fp() else None) or self.last()
                 if last:  # 마지막 성공값을 보여 주되 오류를 함께 알린다(서버를 다시 켠 뒤에도)
                     return dict(last, ok=False, error=self._err, stale=True)
                 return {"configured": True, "ok": False, "error": self._err}
@@ -80,11 +81,17 @@ class AccountView:
         except Exception:
             pass
 
+    def _fp(self):
+        """지금 넣은 앱키의 지문. 다른 계좌 키로 바꾸면 예전 계좌의 마지막 조회값을 쓰지 않으려고."""
+        c = self._conf()
+        return hashlib.sha256(f"{c.get('appkey', '')}|{bool(c.get('mock'))}".encode()).hexdigest()[:12]
+
     def last(self):
         try:
-            return self.settings.db.get_setting("kiwoom_last")
+            d = self.settings.db.get_setting("kiwoom_last")
         except Exception:
             return None
+        return d if d and d.get("key_fp") == self._fp() else None
 
     def total(self):
         s = self.snapshot()

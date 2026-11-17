@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1127";
+const UI_VERSION = "261117.1138";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1553,8 +1553,9 @@ pages.settings = {
         <div class="tiny">마지막으로 받은 알림: ${con.inbox.last_at ? esc(con.inbox.last_at.slice(0, 16).replace("T", " ")) : "아직 없음"} · 확인 필요 ${con.inbox.pending}건</div>
       </section>
       ${await shortcutGuide()}
-      <section class="card"><h2>키움증권(조회 전용) <span class="tag ${kwState[1]}" style="vertical-align:2px">${kwState[0]}</span></h2>
-        <div class="small muted">보유액·예수금·종목을 보기만 해요. 이 키로는 주문 기능이 아예 꺼져 있어요.</div>
+      <section class="card" id="kvSec"><h2>키움증권(조회 전용) <span class="tag ${kwState[1]}" style="vertical-align:2px">${kwState[0]}</span></h2>
+        <div class="small muted">보유액·예수금·종목을 보기만 해요. 이 키로는 주문 기능이 아예 꺼져 있어요.<br>
+          <b>다른 계좌로 바꾸려면</b> 키움 REST API 홈페이지에서 그 계좌의 앱키·시크릿키를 받아 아래에 덮어쓰고 연결 확인을 누르세요. 앱키는 계좌마다 따로 발급돼요.</div>
         ${kw.error ? `<div class="notice warn">${esc(kw.error)}</div>` : ""}
         <label class="field">앱키<input data-kv="appkey" value="${esc(s.kiwoom_view.appkey)}" autocomplete="off" autocapitalize="off"></label>
         <label class="field">시크릿키<input data-kv="secretkey" type="password" value="${esc(s.kiwoom_view.secretkey)}" autocomplete="off"></label>
@@ -1665,6 +1666,8 @@ pages.settings = {
     bindUp();
     if ($("#kvTest")) $("#kvTest").onclick = async () => {
       await run(() => api("PUT", "/api/settings", collect()));
+      store.set("kwLast", "");  // 다른 계좌로 바꿨을 수 있으니 휴대폰에 남긴 예전 값은 지운다
+      $("#kwCard").innerHTML = kwCardHtml({ configured: true, error: "새 키로 연결하는 중" }); 
       const r = await run(() => api("POST", "/api/myaccount/test"));
       toast(`${r.server} 계좌 연결 성공. 총자산 ${won(r.total)}원, 보유 ${r.holdings.length}종목`);
       kwCache.save(r); $("#kwCard").innerHTML = kwCardHtml(r); bindKwCard($("#kwCard"));

@@ -191,7 +191,7 @@ class KiwoomClient:
 
     def us_exchange(self, sym):
         """종목의 거래소 구분(ND 나스닥, NY 뉴욕, NA 아멕스). usa10100으로 확인하고 하루 저장."""
-        d = self.call("us_info", {"stex_tp": "%", "stk_cd": sym})
+        d = self.call("us_info", {"stex_tp": "", "stk_cd": sym})
         ex = str(d.get("stex_tp") or "").strip().upper()
         if ex in ("ND", "NY", "NA"):
             return ex, d.get("stk_nm") or d.get("stk_enm") or sym
@@ -238,7 +238,7 @@ class KiwoomClient:
         return d.get("ord_no", "")
 
     def us_unfilled(self):
-        d = self.call("us_unfilled", {"ord_dt": "", "slby_tp": "0", "stex_tp": "%", "stk_cd": ""})
+        d = self.call("us_unfilled", {"ord_dt": "", "slby_tp": "0", "stex_tp": "", "stk_cd": ""})
         out = []
         for r in d.get("result_list") or []:
             left = int(num(r.get("ord_remnq")))
@@ -254,7 +254,7 @@ class KiwoomClient:
         return out
 
     def us_holdings(self):
-        d = self.call("us_balance", {"stex_tp": "%", "stk_cd": ""})
+        d = self.call("us_balance", {"stex_tp": "", "stk_cd": ""})
         out = []
         for r in d.get("result_list") or []:
             q = int(num(r.get("qty")))

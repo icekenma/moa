@@ -327,6 +327,50 @@ def create_app(rt, updater=None):
         stocks_cache.d.clear()
         return jsonify(res)
 
+    # ---------- 미체결 주문·취소 ----------
+    def same_account():
+        st = rt.settings.all()
+        return (st["trade_mode"]["scalp"] == st["trade_mode"]["dca"] == "kiwoom"
+                and st["kiwoom"]["scalp"].get("appkey") == st["kiwoom"]["dca"].get("appkey")
+                and bool(st["kiwoom"]["scalp"].get("mock")) == bool(st["kiwoom"]["dca"].get("mock")))
+
+    @app.get("/api/orders/open")
+    def orders_open():
+        out, errors = [], {}
+        for eng in ("scalp", "dca"):
+            if eng == "dca" and same_account():
+                continue
+            b = rt.brokers.get(eng)
+            if b is None:
+                continue
+            try:
+                out += [dict(o, engine=eng) for o in b.unfilled()]
+            except Exception as e:
+                errors[eng] = f"미체결 조회 실패: {e}"
+        return jsonify(items=out, errors=errors)
+
+    @app.post("/api/orders/cancel")
+    def orders_cancel():
+        d = body()
+        eng = d.get("engine")
+        b = rt.brokers.get(eng)
+        if b is None:
+            raise OrderError(rt.errors.get(eng) or "계좌를 골라 주세요")
+        ord_no = "".join(ch for ch in str(d.get("ord_no", "")) if ch.isalnum())
+        code = "".join(ch for ch in str(d.get("code", "")) if ch.isalnum())
+        if not ord_no or len(code) != 6:
+            raise OrderError("취소할 주문을 다시 골라 주세요")
+        with rt._lock:
+            no = b.cancel(ord_no, code)
+            rt.db.x("UPDATE orders SET status='cancelled' WHERE broker_no=? AND engine=?", (ord_no, eng))
+            rt.db.x("INSERT INTO orders(ts,engine,mode,code,name,side,qty,price,status,fill_price,broker_no,msg) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (rt.feed.now().isoformat(timespec="seconds"), eng, b.mode, code, d.get("name") or code,
+                     d.get("side") if d.get("side") in ("buy", "sell") else "buy", int(d.get("left") or 0), None,
+                     "cancel", None, no, f"주문 취소(원주문 {ord_no})"))
+        stocks_cache.d.clear()
+        return jsonify(ok=True, ord_no=no)
+
     # ---------- 문자·알림톡 자동 기록 ----------
     @app.post("/api/inbox")
     def inbox_in():

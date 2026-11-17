@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1208";
+const UI_VERSION = "261117.1211";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -926,20 +926,69 @@ pages.invest = {
         <span class="main"><b>${esc(x.name)}</b><span class="sub">${won(x.qty)}주 · 평균 ${won(x.avg_price)} · 현재 ${won(x.price)}</span></span>
         <span class="end"><b>${won(x.value)}</b><span class="small ${tone(x.pnl)}" style="font-weight:700">${signed(x.pnl)} (${pct(x.pnl_pct, 1)})</span></span></button>`).join("")
         : `<div class="empty">보유 종목이 없어요</div>`}</div></section>
+      <div id="openBox">${this.openHtml(this.openMemo)}</div>
       <div class="sec-title">최근 주문</div>
-      <section class="card tight"><div class="list">${d.orders.length ? d.orders.slice(0, 10).map((o) => `<div class="item">
-        <span class="ico" style="color:${o.side === "buy" ? "var(--up)" : "var(--down)"}">${o.side === "buy" ? "매수" : "매도"}</span>
+      <section class="card tight"><div class="list">${d.orders.length ? d.orders.slice(0, 10).map((o) => {
+        const st = { cancel: ["취소", ""], cancelled: ["취소됨", ""], accepted: ["접수", "y"], filled: ["체결", "g"] }[o.status] || [o.status, ""];
+        return `<div class="item">
+        <span class="ico" style="color:${o.status === "cancel" ? "var(--ink3)" : o.side === "buy" ? "var(--up)" : "var(--down)"}">${o.status === "cancel" ? "취소" : o.side === "buy" ? "매수" : "매도"}</span>
         <span class="main"><b>${esc(o.name || o.code)}</b><span class="sub">${o.ts.slice(5, 16).replace("T", " ")} · ${esc(o.msg)}</span></span>
-        <span class="end"><b>${won(o.qty)}주</b><span class="tiny">${won(o.fill_price)}원</span></span></div>`).join("")
+        <span class="end"><b>${won(o.qty)}주</b><span class="tiny">${o.fill_price ? won(o.fill_price) + "원 " : ""}<span class="tag ${st[1]}">${esc(st[0])}</span></span></span></div>`; }).join("")
         : `<div class="empty">아직 주문이 없어요</div>`}</div></section>`;
+    this.loadOpen();
     fab("주문", () => orderSheet({}));
-    box.onclick = (e) => {
+    box.onclick = async (e) => {
+      const cx = e.target.closest("[data-cancel]");
+      if (cx) {
+        const o = (this.openMemo?.items || [])[Number(cx.dataset.cancel)];
+        if (!o) return;
+        const sideTxt = o.side === "buy" ? "매수" : "매도";
+        openSheet("주문 취소", `
+          <div class="o-mode"><b>${esc(o.name || o.code)} ${sideTxt} ${won(o.left)}주</b>
+            ${o.price ? won(o.price) + "원" : "시장가"} · 주문번호 ${esc(o.ord_no)}</div>
+          <div class="small muted">아직 체결되지 않은 ${won(o.left)}주를 모두 취소해요. 그사이 체결된 수량은 취소되지 않아요.</div>
+          <div id="cxErr"></div>
+          <div class="btns"><button type="button" class="btn soft" id="cxNo">닫기</button><button type="button" class="btn dark" id="cxYes">주문 취소</button></div>`, (sb) => {
+          $("#cxNo", sb).onclick = closeSheet;
+          $("#cxYes", sb).onclick = async (ev) => {
+            const btn = ev.currentTarget; btn.disabled = true; btn.textContent = "취소하는 중";
+            try {
+              await api("POST", "/api/orders/cancel", o);
+              closeSheet(); toast(`${o.name || o.code} ${sideTxt} 주문을 취소했어요`);
+              this.openMemo = null; await this.fill();
+            } catch (err) {
+              btn.disabled = false; btn.textContent = "주문 취소";
+              $("#cxErr", sb).innerHTML = `<div class="notice warn">${esc(err.message)}</div>`;
+            }
+          };
+        });
+        return;
+      }
       const b = e.target.closest("[data-sell]");
       if (b) { const [eng, code, qty] = b.dataset.sell.split("|"); orderSheet({ engine: eng, code, side: "sell", qty }); }
     };
   },
 
   // ---------- 단타 ----------
+  openMemo: null,
+  async loadOpen() {
+    try {
+      const d = await GET("/api/orders/open");
+      this.openMemo = d;
+      if (investState.tab === "trade" && $("#openBox")) $("#openBox").innerHTML = this.openHtml(d);
+    } catch (e) { /* 다음 새로고침에 다시 */ }
+  },
+  openHtml(d) {
+    if (!d) return "";
+    const err = Object.values(d.errors || {}).map((m) => `<div class="notice warn">${esc(m)}</div>`).join("");
+    if (!d.items.length) return err;
+    return `${err}<div class="sec-title">미체결 주문 ${d.items.length}건</div>
+      <section class="card tight"><div class="list">${d.items.map((o, i) => `<div class="item">
+        <span class="ico" style="color:${o.side === "buy" ? "var(--up)" : "var(--down)"}">${o.side === "buy" ? "매수" : "매도"}</span>
+        <span class="main"><b>${esc(o.name || o.code)}</b><span class="sub">${o.price ? won(o.price) + "원" : "시장가"} · ${won(o.left)}/${won(o.qty)}주 남음${o.time ? " · " + esc(String(o.time).replace(/^(\d\d)(\d\d).*/, "$1:$2")) : ""}</span></span>
+        <button type="button" class="btn sm soft o-cancel" data-cancel="${i}">취소</button></div>`).join("")}</div></section>`;
+  },
+
   async scalp(box) {
     const d = await GET("/api/scalp");
     if (investState.tab !== "scalp") return;

@@ -21,12 +21,14 @@ API = {
     "stocklist": ("/api/dostk/stkinfo", "ka10099"), # 종목정보 리스트(코스피 0, 코스닥 10, ETF 8)
     "buy": ("/api/dostk/ordr", "kt10000"),          # 주식 매수주문
     "sell": ("/api/dostk/ordr", "kt10001"),         # 주식 매도주문
+    "cancel": ("/api/dostk/ordr", "kt10003"),       # 주식 취소주문
+    "unfilled": ("/api/dostk/acnt", "ka10075"),     # 미체결요청
     "balance": ("/api/dostk/acnt", "kt00018"),      # 계좌평가잔고내역요청
     "deposit": ("/api/dostk/acnt", "kt00001"),      # 예수금상세현황요청
 }
 MIN_INTERVAL = 0.21  # 같은 앱키의 호출 간 최소 간격(초). 키움 조회 한도(초당 약 5회) 대비.
-SLOW_APIS = {"kt00001": 1.1, "kt00018": 1.1}  # 계좌 조회는 같은 TR을 1초에 한 번만
-CACHE_APIS = {"kt00001": 2.5, "kt00018": 2.5}  # 여러 화면·엔진이 동시에 물어도 키움에는 한 번만
+SLOW_APIS = {"kt00001": 1.1, "kt00018": 1.1, "ka10075": 1.0}  # 계좌 조회는 같은 TR을 1초에 한 번만
+CACHE_APIS = {"kt00001": 2.5, "kt00018": 2.5, "ka10075": 2.0}  # 여러 화면·엔진이 동시에 물어도 키움에는 한 번만
 _SHARED = {}  # (앱키, 모의 여부) -> 토큰·호출 간격·응답 저장을 앱키 하나당 하나로 공유
 _SHARED_LOCK = threading.Lock()
 
@@ -137,7 +139,7 @@ class KiwoomClient:
             raise KiwoomError(f"{api_id} 실패: {msg or r.status_code}")
         if ttl:
             sh["cache"][ckey] = (time.time(), data, self.last_headers)
-        if key in ("buy", "sell"):
+        if key in ("buy", "sell", "cancel"):
             sh["cache"].clear()  # 주문 뒤에는 잔고·예수금을 새로 받는다
         return data
 
@@ -172,6 +174,33 @@ class KiwoomClient:
                 "ord_uv": "" if price is None else str(int(price)),
                 "trde_tp": "3" if price is None else "0", "cond_uv": ""}
         d = self.call(side, body)
+        return d.get("ord_no", "")
+
+    def unfilled(self):
+        """미체결 주문(ka10075). 응답 목록 이름이 문서마다 달라 주문번호가 있는 목록을 찾아 쓴다."""
+        d = self.call("unfilled", {"all_stk_tp": "0", "trde_tp": "0", "stk_cd": "", "stex_tp": "0"})
+        rows = d.get("oso")
+        if rows is None:
+            rows = next((v for v in d.values() if isinstance(v, list) and v and isinstance(v[0], dict)
+                         and "ord_no" in v[0]), [])
+        out = []
+        for r in rows or []:
+            left = int(num(r.get("oso_qty")))
+            if left <= 0:
+                continue
+            kind = f"{r.get('io_tp_nm', '')}{r.get('trde_tp', '')}{r.get('sell_tp', '')}"
+            out.append({"ord_no": str(r.get("ord_no", "")).strip(), "code": code6(r.get("stk_cd", "")),
+                        "name": r.get("stk_nm", ""), "side": "sell" if "매도" in kind else "buy",
+                        "qty": int(num(r.get("ord_qty"))), "left": left, "filled": int(num(r.get("cntr_qty"))),
+                        "price": num(r.get("ord_pric")), "time": str(r.get("tm") or r.get("ord_tm") or "")})
+        return out
+
+    def cancel(self, ord_no, code, qty=0):
+        """주문 취소(kt10003). qty 0이면 남은 수량 전부."""
+        if self.read_only:
+            raise KiwoomError("조회 전용 연결이라 주문을 취소할 수 없어요")
+        d = self.call("cancel", {"dmst_stex_tp": "KRX", "orig_ord_no": str(ord_no), "stk_cd": code,
+                                 "cncl_qty": str(int(qty))})
         return d.get("ord_no", "")
 
     def balance_pages(self, max_pages=10):

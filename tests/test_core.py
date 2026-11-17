@@ -663,3 +663,37 @@ def test_market_board_bulk_and_stale_while_revalidate(rt):
     assert c.get("x", 0.05, slow) == 1 and _t.time() - t0 < 0.1  # 지난 값은 바로, 새 값은 뒤에서
     _t.sleep(0.5)
     assert c.peek("x") == 2
+
+
+def test_unfilled_orders_and_cancel(rt):
+    class K(_FakeKiwoom):
+        def post(self, url, json=None, headers=None, timeout=None):
+            api = (headers or {}).get("api-id")
+            if api == "ka10075":
+                self.calls.append(api)
+                left = "0" if "kt10003" in self.calls else "3"
+                return _Resp({"return_code": 0, "oso": [
+                    {"ord_no": "0001234", "stk_cd": "005930", "stk_nm": "삼성전자", "ord_qty": "5", "oso_qty": left,
+                     "cntr_qty": "2", "ord_pric": "190000", "io_tp_nm": "+매수", "tm": "101530"}]})
+            if api == "kt10003":
+                self.calls.append(api)
+                self.cancel_body = json
+                return _Resp({"return_code": 0, "ord_no": "0001240"})
+            return super().post(url, json, headers, timeout)
+    rt.settings.update({"trade_mode": {"scalp": "kiwoom"}, "real_orders_allowed": {"scalp": True},
+                        "kiwoom": {"scalp": {"appkey": "ka", "secretkey": "s", "mock": False}}})
+    rt.rebuild()
+    fake = K()
+    rt.brokers["scalp"].client.session = fake
+    c = create_app(rt).test_client()
+    d = c.get("/api/orders/open").get_json()
+    o = d["items"][0]
+    assert o["side"] == "buy" and o["left"] == 3 and o["ord_no"] == "0001234" and o["engine"] == "scalp"
+    r = c.post("/api/orders/cancel", json=o)
+    assert r.status_code == 200 and fake.cancel_body == {"dmst_stex_tp": "KRX", "orig_ord_no": "0001234",
+                                                        "stk_cd": "005930", "cncl_qty": "0"}
+    assert c.get("/api/orders/open").get_json()["items"] == []  # 취소 뒤엔 새로 조회
+    assert c.get("/api/stocks").get_json()["orders"][0]["status"] == "cancel"
+    rt.settings.update({"trade_mode": {"scalp": "paper"}})
+    rt.rebuild()
+    assert c.post("/api/orders/cancel", json=o).status_code == 400

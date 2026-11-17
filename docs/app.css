@@ -339,3 +339,4 @@ dialog.upd[open]{animation:pop .18s ease-out}
 .o-mode b{display:block;font-size:14px;color:var(--ink)}
 .o-mode.real{background:#FDE7E4;color:#8C1D13}.o-mode.real b{color:#8C1D13}
 .sheet #toast{bottom:calc(24px + var(--safe-b))}
+.o-cancel{flex:0 0 auto;min-height:40px;padding:0 14px}

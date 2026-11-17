@@ -18,6 +18,12 @@ class PaperBroker:
         if not db.one("SELECT 1 AS x FROM paper_accounts WHERE engine=?", (engine,)):
             db.x("INSERT INTO paper_accounts(engine,cash) VALUES(?,?)", (engine, int(start_cash)))
 
+    def unfilled(self):
+        return []  # 앱 내 모의는 바로 체결되어 남은 주문이 없다
+
+    def cancel(self, ord_no, code):
+        raise OrderError("앱 내 모의 주문은 바로 체결되어 취소할 수 없어요")
+
     def cash(self):
         return float(self.db.one("SELECT cash FROM paper_accounts WHERE engine=?", (self.engine,))["cash"])
 
@@ -87,6 +93,12 @@ class KiwoomBroker:
 
     def positions(self):
         return self.client.holdings()
+
+    def unfilled(self):
+        return self.client.unfilled()
+
+    def cancel(self, ord_no, code):
+        return self.client.cancel(ord_no, code, 0)
 
     def buy(self, code, qty, price=None):
         no = self.client.order("buy", code, qty, price)

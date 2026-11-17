@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.0652";
+const UI_VERSION = "261118.0656";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1265,6 +1265,7 @@ pages.invest = {
   async aiPick(box) {
     const A = this.ap || (this.ap = { m: store.get("apMkt") === "us" ? "us" : "kr", model: store.get("apModel") || "", web: store.get("apWeb") !== "0", est: {}, busy: false, res: null, text: "", src: [] });
     if (!$("#apRoot", box)) {
+      A.m = curMkt(A.m);
       $(".fab")?.remove();
       box.innerHTML = `<div id="apRoot" class="ap">
         <section class="ap-hero">
@@ -1287,7 +1288,7 @@ pages.invest = {
         <div id="apHist"></div>
         <div class="tiny" style="padding:0 3px 6px">AI 추천은 실시간 자료로 낸 추정이라 틀릴 수 있어요. 승률은 AI가 매긴 추정치예요. 매수 여부는 직접 결정하고, 자동 매도는 켜 둔 종목만 정해진 값으로 실행돼요.</div>
       </div>`;
-      bindSeg(box, "AI시장", (v) => { A.m = v; store.set("apMkt", v === "us" ? "us" : ""); this.apEstimate(); });
+      bindSeg(box, "AI시장", (v) => { setMkt(v); A.m = v; store.set("apMkt", v === "us" ? "us" : ""); this.apEstimate(); });
       $("#apWeb").onchange = (e) => { A.web = e.target.checked; store.set("apWeb", A.web ? "" : "0"); this.apModels(); };
       $("#apModels").onclick = (e) => { const b = e.target.closest("[data-model]"); if (b) { A.model = b.dataset.model; store.set("apModel", A.model); this.apModels(); } };
       $("#apGo").onclick = () => this.apRun();
@@ -1584,6 +1585,8 @@ pages.invest = {
     const S = this.dv || (this.dv = { m: "kr", kind: "value" });
     if (S.m === "kr" && ["views", "watch", "buy"].includes(S.kind)) S.kind = "value";
     if (!$("#dvList", box)) {
+      const am = curMkt(S.m);
+      if (am !== S.m) { S.m = am; S.kind = am === "us" ? "views" : (["views", "watch", "buy"].includes(S.kind) ? "value" : S.kind); }
       $(".fab")?.remove();
       box.innerHTML = `<div class="dv">
         ${seg("시장", [["kr", "국내"], ["us", "미국"]], S.m, "dv-mkt")}
@@ -1592,7 +1595,7 @@ pages.invest = {
         <section class="card tight"><div class="dv-kwrap" id="dvKind"></div><div class="list" id="dvList"><div class="empty loading">불러오는 중</div></div></section>
         <div class="tiny" id="dvFoot" style="padding:0 3px"></div></div>`;
       $("#dvKind").append($("#dvChips"));
-      bindSeg(box, "시장", (v) => { S.m = v; S.kind = v === "us" ? "views" : (["views", "watch", "buy"].includes(S.kind) ? "value" : S.kind); box.innerHTML = ""; this.discover(box); });
+      bindSeg(box, "시장", (v) => { setMkt(v); S.m = v; S.kind = v === "us" ? "views" : (["views", "watch", "buy"].includes(S.kind) ? "value" : S.kind); box.innerHTML = ""; this.discover(box); });
       box.onclick = async (e) => {
         const st = e.target.closest("[data-star]");
         if (st) {
@@ -2148,6 +2151,15 @@ function marketSession(m) {
   else { phase = "closed"; label = holi ? `휴장 · ${holi}` : "장 마감"; sub = next; }
   return { m, phase, label, sub, holi, segs, now: holi ? null : P.min, kst, off };
 }
+// 지금 시간대에 맞는 시장: 열려 있는 장 > 프리·애프터 > 미국 주간거래. 직접 고르면 30분 동안은 그 선택을 따른다.
+const mktPick = { m: null, at: 0 };
+function autoMkt() {
+  const rank = { open: 4, auction: 4, pre: 3, after: 3, day: 1, closed: 0 };
+  const k = rank[marketSession("kr").phase] || 0, u = rank[marketSession("us").phase] || 0;
+  return k === 0 && u === 0 ? null : k >= u ? "kr" : "us";
+}
+function curMkt(fallback) { return mktPick.m && Date.now() - mktPick.at < 30 * 60 * 1000 ? mktPick.m : autoMkt() || fallback || "kr"; }
+function setMkt(m) { mktPick.m = m; mktPick.at = Date.now(); }
 function sessionChip(m) {
   const S = marketSession(m);
   return `<span class="ss-chip ss-${S.phase}"><i></i><b>${m === "kr" ? "국내" : "미국"}</b> ${esc(S.label)}</span>`;
@@ -2194,6 +2206,8 @@ const mkt = {
   async board(box) {
     const first = !$("#mkBoard", box);
     if (first) {
+      const am = curMkt(this.m);
+      if (am !== this.m) { this.m = am; this.last = {}; }
       $(".fab")?.remove();
       box.innerHTML = `<div id="mkBoard" class="mk">
         <div class="mk-idx" id="mkIdx" aria-label="지수"></div>
@@ -2208,6 +2222,7 @@ const mkt = {
         ${AI_BTN("chat", "AI에게 묻기 · 내 계좌·관심종목을 알고 답해요")}
       </div>`;
       bindSeg(box, "시장", (v) => {
+        setMkt(v);
         this.m = v; store.set("mkt", v === "us" ? "us" : ""); this.last = {};
         const c = this.snap[v] || memo.get("mk." + v);
         if (c) this.renderBoard(c, v); else { $("#mkList").innerHTML = `<div class="empty loading">불러오는 중</div>`; $("#mkIdx").innerHTML = ""; $("#mkSess").innerHTML = sessionCard(v); }
@@ -2874,6 +2889,7 @@ function bigNum(n) {
   return a >= 1e12 ? (n / 1e12).toFixed(1).replace(/\.0$/, "") + "조" : a >= 1e8 ? (n / 1e8).toFixed(a >= 1e10 ? 0 : 1).replace(/\.0$/, "") + "억" : a >= 1e4 ? Math.round(n / 1e4).toLocaleString("ko-KR") + "만" : won(n);
 }
 function orderSheet(o) {
+  if (!o.code && !o.market) o = { ...o, market: curMkt("kr") };
   const us0 = o.market === "us" || isUsCode(o.code);
   const S = { market: us0 ? "us" : "kr", engine: o.engine || "scalp", side: o.side || "buy", type: us0 || o.price ? "limit" : "market",
     code: o.code || "", qty: o.qty || 1, q: null, real: null, ctx: null, err: "", exch: o.exch || "", name: o.name || "",

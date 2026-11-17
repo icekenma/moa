@@ -25,6 +25,9 @@ class Runtime:
         self.ledger = Ledger(db)
         self.account = AccountView(self.settings, fx=lambda: self.market.yh_quote("USDKRW=X")["price"])
         self.inbox = Inbox(db, self.ledger, self.settings)
+        from .fixed import Fixed
+        self.fixed = Fixed(self)
+        self.inbox.fixed = self.fixed
         self.market = Market(self, data_dir or ".")
         from .ai import AI
         self.ai = AI(self)
@@ -116,6 +119,10 @@ class Runtime:
                     self.scalp.tick()
                     if time.time() - self._last_dca > 30:
                         self._last_dca = time.time()
+                        try:
+                            self.fixed.run()  # 고정 지출 자동 기록·알림(5분마다)
+                        except Exception as e:
+                            self.db.log("system", "error", f"고정 지출 처리 오류: {e}", datetime.now().isoformat(timespec="seconds"))
                         self.dca.run_due(datetime.now())
                         if datetime.now().strftime("%H:%M") >= "15:40":
                             self.dca.snapshot(date.today())

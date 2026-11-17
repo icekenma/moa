@@ -180,7 +180,11 @@ def create_app(rt, updater=None):
     @app.get("/api/ledger")
     def ledger():
         month = request.args.get("month") or date.today().strftime("%Y-%m")
-        return jsonify(summary=rt.ledger.summary(month), rows=rt.ledger.rows(month, request.args.get("kind")),
+        try:
+            soon = [x for x in rt.fixed.summary()["upcoming"] if 0 <= x["d"] <= 5 and x["status"] == "due" and x["kind"] == "out"]
+        except Exception:
+            soon = []
+        return jsonify(fixed_soon=soon[:5], summary=rt.ledger.summary(month), rows=rt.ledger.rows(month, request.args.get("kind")),
                        categories=rt.ledger.categories())
 
     @app.get("/api/ledger/trend")
@@ -669,6 +673,69 @@ def create_app(rt, updater=None):
         res = BT.run(data, cfg)
         res["trades"] = res["trades"][-300:]
         return jsonify(res)
+
+    # ---------- 고정 지출·구독 ----------
+    from .fixed import FixedError
+
+    def fixed_call(fn, *a):
+        try:
+            return fn(*a)
+        except FixedError as e:
+            raise ValueError(str(e))
+
+    @app.get("/api/fixed")
+    def fixed_get():
+        rt.fixed.run()
+        return jsonify(summary=rt.fixed.summary(), items=rt.fixed.list(), suggest=rt.fixed.suggestions(),
+                       cards=[{"id": c["id"], "name": c["name"]} for c in rt.fixed.cards() if c["active"]])
+
+    @app.post("/api/fixed")
+    def fixed_save():
+        return jsonify(id=fixed_call(rt.fixed.save, body()))
+
+    @app.delete("/api/fixed/<int:rid>")
+    def fixed_del(rid):
+        rt.fixed.delete(rid)
+        return jsonify(ok=True)
+
+    @app.post("/api/fixed/dismiss")
+    def fixed_dismiss():
+        rt.fixed.dismiss(body().get("key"))
+        return jsonify(ok=True)
+
+    @app.post("/api/fixed/<int:rid>/mark")
+    def fixed_mark(rid):
+        d = body()
+        st = d.get("status") if d.get("status") in ("skipped", "paid") else "skipped"
+        from datetime import date as _d
+        due = _d.fromisoformat(d.get("due"))
+        r = rt.db.one("SELECT * FROM recurring WHERE id=?", (rid,))
+        if not r:
+            raise ValueError("고정 지출을 찾지 못했어요")
+        rt.fixed._hit(rid, due, None, st, r["amount"] if st == "paid" else 0)
+        return jsonify(ok=True)
+
+    # ---------- 카드 실적·청구 ----------
+    @app.get("/api/cards")
+    def cards_get():
+        return jsonify(rt.fixed.card_overview())
+
+    @app.get("/api/cards/simple")
+    def cards_simple():
+        return jsonify([{"id": c["id"], "name": c["name"], "kind": c["kind"]} for c in rt.fixed.cards() if c["active"]])
+
+    @app.post("/api/cards")
+    def cards_save():
+        return jsonify(id=fixed_call(rt.fixed.save_card, body()))
+
+    @app.delete("/api/cards/<int:cid>")
+    def cards_del(cid):
+        rt.fixed.delete_card(cid)
+        return jsonify(ok=True)
+
+    @app.get("/api/cards/<int:cid>/txs")
+    def cards_txs(cid):
+        return jsonify(rt.fixed.card_txs(cid, request.args.get("start", "0000"), request.args.get("end", "9999")))
 
     # ---------- Claude AI 도우미 ----------
     @app.get("/api/ai/status")

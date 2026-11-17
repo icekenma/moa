@@ -998,3 +998,93 @@ def test_ai_credit_remaining_live(rt):
     rt.ai.session.post = low
     out = c.post("/api/ai/ask", json={"kind": "chat", "question": "hi"}).get_data(as_text=True)
     assert "크레딧이 바닥" in out and c.get("/api/ai/credit").get_json()["exhausted"] is True
+
+
+def _card_sms(amount, md, hm_, merchant, tail="1234", issuer="신한"):
+    return f"[Web발신]\n{issuer}카드({tail})승인\n안*석\n{amount:,}원 일시불\n{md} {hm_}\n{merchant}"
+
+
+def test_fixed_recurring_match_post_absorb_and_suggest(rt):
+    from moa.fixed import Fixed
+    F = rt.fixed
+    c = create_app(rt).test_client()
+    cid = c.post("/api/cards", json={"name": "신한 딥드림", "issuer": "신한", "last4": "1234", "perf_target": 300000,
+                                     "cycle_start": 1, "pay_day": 14}).get_json()["id"]
+    # 10/10 넷플릭스 카드 문자(먼저 들어옴)
+    c.post("/api/inbox", json={"text": _card_sms(13500, "10/10", "09:00", "넷플릭스")})
+    rid = c.post("/api/fixed", json={"name": "넷플릭스", "amount": 13500, "day": 10, "card_id": cid,
+                                     "start_date": "2026-10-01", "category_id": None}).get_json()["id"]
+    # 저장할 때 오늘 날짜로 한 번 돌므로, 시험을 위해 11월 건은 되돌린다
+    for h in rt.db.q("SELECT * FROM recurring_hits WHERE rec_id=? AND due_date>='2026-11-01'", (rid,)):
+        rt.db.x("DELETE FROM transactions WHERE id=?", (h["tx_id"],))
+    rt.db.x("DELETE FROM recurring_hits WHERE rec_id=? AND due_date>='2026-11-01'", (rid,))
+    F.run(today=date(2026, 10, 12), force=True)
+    h = rt.db.one("SELECT * FROM recurring_hits WHERE rec_id=? AND due_date='2026-10-10'", (rid,))
+    assert h["status"] == "paid" and rt.db.one("SELECT COUNT(*) AS n FROM transactions WHERE memo LIKE '%넷플릭스%'")["n"] == 1
+    # 11/10: 문자가 안 오면 3일 기다렸다 자동 기록
+    F.run(today=date(2026, 11, 11), force=True)
+    assert not rt.db.one("SELECT 1 AS x FROM recurring_hits WHERE rec_id=? AND due_date='2026-11-10'", (rid,))
+    F.run(today=date(2026, 11, 13), force=True)
+    h = rt.db.one("SELECT * FROM recurring_hits WHERE rec_id=? AND due_date='2026-11-10'", (rid,))
+    assert h["status"] == "posted"
+    # 늦게 온 문자는 새로 넣지 않고 그 기록에 맞춘다(금액이 조금 달라도 변동 금액이면)
+    rt.db.x("UPDATE recurring SET variable=1 WHERE id=?", (rid,))
+    r = c.post("/api/inbox", json={"text": _card_sms(13900, "11/10", "09:00", "넷플릭스")}).get_json()["item"]
+    assert r["status"] == "added" and r["tx_id"] == h["tx_id"] and "고정 지출" in r["note"]
+    assert rt.db.one("SELECT amount FROM transactions WHERE id=?", (h["tx_id"],))["amount"] == 13900
+    assert rt.db.one("SELECT COUNT(*) AS n FROM transactions WHERE memo LIKE '%넷플릭스%'")["n"] == 2
+    # 현금 월세: 결제일에 바로 기록
+    c.post("/api/fixed", json={"name": "월세", "amount": 500000, "day": 5, "start_date": "2026-11-01", "method": "계좌이체"})
+    F.run(today=date(2026, 11, 5), force=True)
+    assert rt.db.one("SELECT COUNT(*) AS n FROM transactions WHERE memo='월세' AND date='2026-11-05'")["n"] == 1
+    F.run(today=date(2026, 11, 6), force=True)  # 두 번 기록하지 않음
+    assert rt.db.one("SELECT COUNT(*) AS n FROM transactions WHERE memo='월세'")["n"] == 1
+    s = F.summary(today=date(2026, 11, 6))
+    assert s["month_total"] == 13900 + 500000 and s["month_paid"] == s["month_total"] and s["yearly"] > 0
+    # 반복 결제 찾기: 3개월 같은 날 같은 금액
+    for d in ("2026-08-03", "2026-09-03", "2026-10-04"):
+        rt.ledger.add({"date": d, "kind": "out", "amount": 7890, "memo": "쿠팡와우멤버십", "method": "신용카드"})
+    rt.ledger.add({"date": "2026-10-20", "kind": "out", "amount": 45000, "memo": "동네마트", "method": "체크카드"})
+    sug = F.suggestions(today=date(2026, 11, 6))
+    assert sug and sug[0]["name"].startswith("쿠팡와우") and sug[0]["confidence"] == "high" and sug[0]["day"] == 3
+    assert all("마트" not in x["name"] for x in sug)
+    c.post("/api/fixed/dismiss", json={"key": sug[0]["key"]})
+    assert not any(x["key"] == sug[0]["key"] for x in F.suggestions(today=date(2026, 11, 6)))
+    # 결제 전 알림(ntfy)
+    sent = []
+    rt.notify = lambda m: sent.append(m)
+    F._notify(date(2026, 12, 9))
+    assert any("넷플릭스" in m and "내일" in m for m in sent)
+
+
+def test_cards_perf_billing_and_double_count_guards(rt):
+    from moa.fixed import Fixed
+    c = create_app(rt).test_client()
+    cid = c.post("/api/cards", json={"name": "신한 딥드림", "issuer": "신한", "last4": "1234", "perf_target": 300000,
+                                     "cycle_start": 1, "pay_day": 14, "exclude_kw": "국세"}).get_json()["id"]
+    today = date.today()
+    md = f"{today.month}/{today.day}"
+    c.post("/api/inbox", json={"text": _card_sms(120000, md, "10:00", "이마트")})
+    c.post("/api/inbox", json={"text": _card_sms(50000, md, "11:00", "국세청 국세")})
+    c.post("/api/inbox", json={"text": _card_sms(8000, md, "12:00", "다른카드", tail="9999")})  # 다른 카드
+    ov = c.get("/api/cards").get_json()
+    card = ov["cards"][0]
+    assert card["perf"] == 120000 and card["perf_need"] == 180000  # 국세는 실적 제외
+    assert card["bills"][0]["amount"] >= 170000 or card["bills"][1]["amount"] >= 170000
+    assert any(s["last4"] == "9999" for s in ov["suggest"])  # 등록 안 된 카드 제안
+    # 이용기간: 시작일 1·결제일 14 → 12/14 결제는 11/1~11/30
+    k = {"cycle_start": 1, "pay_day": 14}
+    assert Fixed.billing_window(k, date(2026, 12, 14)) == (date(2026, 11, 1), date(2026, 11, 30))
+    k = {"cycle_start": 12, "pay_day": 25}
+    assert Fixed.billing_window(k, date(2026, 12, 25)) == (date(2026, 11, 12), date(2026, 12, 11))
+    # 은행의 카드 대금 출금은 지출에서 빼기
+    r = c.post("/api/inbox", json={"text": "[Web발신]\n하나,11/14 08:00\n123-******-12345\n출금850,000원\n잔액1,000,000원\n신한카드"}).get_json()["item"]
+    assert r["transfer"] == 1 and "카드 대금" in r["note"]
+    # 체크카드: 카드 문자와 은행 출금 문자가 같은 결제면 한 번만
+    c.post("/api/inbox", json={"text": _card_sms(23000, md, "13:00", "올리브영", issuer="NH농협", tail="5555")})
+    r = c.post("/api/inbox", json={"text": f"[Web발신]\n농협 출금23,000원\n{md} 13:01 351-****-1234-56 올리브영 잔액500,000원"}).get_json()["item"]
+    assert r["transfer"] == 1 and "체크카드" in r["note"]
+    # 직접 입력도 카드 지정, 수정할 때 카드 안 보내면 유지
+    tid = c.post("/api/tx", json={"date": today.isoformat(), "kind": "out", "amount": 10000, "memo": "점심", "card_id": cid}).get_json()["id"]
+    c.put(f"/api/tx/{tid}", json={"date": today.isoformat(), "kind": "out", "amount": 11000, "memo": "점심"})
+    assert rt.db.one("SELECT card_id FROM transactions WHERE id=?", (tid,))["card_id"] == cid

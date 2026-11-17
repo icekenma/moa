@@ -32,6 +32,7 @@ def validate_tx(d):
         "memo": (d.get("memo") or "").strip()[:100],
         "method": (d.get("method") or "").strip()[:20],
         "transfer": 1 if d.get("transfer") else 0,  # 내 계좌끼리 옮긴 돈: 기록은 남기되 수입·지출에서 뺀다
+        "card_id": int(d["card_id"]) if d.get("card_id") else None,
     }
 
 
@@ -63,16 +64,19 @@ class Ledger:
     def add(self, d):
         t = validate_tx(d)
         return self.db.x(
-            "INSERT INTO transactions(date,kind,amount,category_id,memo,method,created_at,transfer) "
-            "VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO transactions(date,kind,amount,category_id,memo,method,created_at,transfer,card_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
             (t["date"], t["kind"], t["amount"], None if t["transfer"] else t["category_id"], t["memo"], t["method"],
-             datetime.now().isoformat(timespec="seconds"), t["transfer"]))
+             datetime.now().isoformat(timespec="seconds"), t["transfer"], t["card_id"]))
 
     def update(self, tid, d):
         t = validate_tx(d)
-        self.db.x("UPDATE transactions SET date=?,kind=?,amount=?,category_id=?,memo=?,method=?,transfer=? WHERE id=?",
+        if "card_id" not in d:  # 화면에서 카드를 안 보냈으면 기존 연결 유지
+            old = self.db.one("SELECT card_id FROM transactions WHERE id=?", (tid,))
+            t["card_id"] = old["card_id"] if old else None
+        self.db.x("UPDATE transactions SET date=?,kind=?,amount=?,category_id=?,memo=?,method=?,transfer=?,card_id=? WHERE id=?",
                   (t["date"], t["kind"], t["amount"], None if t["transfer"] else t["category_id"], t["memo"], t["method"],
-                   t["transfer"], tid))
+                   t["transfer"], t["card_id"], tid))
 
     def delete(self, tid):
         self.db.x("DELETE FROM transactions WHERE id=?", (tid,))

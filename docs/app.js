@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1824";
+const UI_VERSION = "261117.1844";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -273,7 +273,7 @@ function pnlBars(values, labels, h = 96) {
 // ---------- 메뉴(1뎁스 탭 → 2뎁스) ----------
 const MENU = {
   home: { title: "홈", subs: [["summary", "요약"], ["activity", "최근 활동"]] },
-  ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["analysis", "분석"], ["budget", "예산"], ["auto", "자동"]] },
+  ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["fixed", "고정비"], ["cards", "카드"], ["analysis", "분석"], ["budget", "예산"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
   invest: { title: "투자", subs: [["market", "시세"], ["account", "내 계좌"], ["trade", "매매"], ["scalp", "단타"], ["dca", "적립"]], extra: { backtest: "scalp", rules: "scalp", sweep: "scalp", stock: "market" } },
   settings: { title: "설정", subs: [["connect", "서버"], ["accounts", "계좌 연결"], ["trading", "매매"], ["ai", "AI"], ["theme", "색상"], ["app", "앱 정보"]] },
@@ -289,7 +289,7 @@ function subnav(name, sub) {
   const m = MENU[name];
   if (!m) return "";
   const on = (m.extra && m.extra[sub]) || sub;
-  return `<nav class="subnav" aria-label="${esc(m.title)} 세부 메뉴">${m.subs.map(([id, label]) =>
+  return `<nav class="subnav ${m.subs.length > 5 ? "many" : ""}" aria-label="${esc(m.title)} 세부 메뉴">${m.subs.map(([id, label]) =>
     `<a href="#${name}/${id}" class="subtab" ${id === on ? 'aria-current="page"' : ""}>${esc(label)}</a>`).join("")}</nav>`;
 }
 
@@ -489,9 +489,173 @@ function txItem(t, btn = true) {
     <span class="end"><b class="${t.transfer ? "xf-amt" : t.kind === "in" ? "inc" : ""}">${t.transfer ? "" : t.kind === "in" ? "+" : "-"}${won(t.amount)}</b></span></${tag}>`;
 }
 
+
+// ---------- 고정비 시트 ----------
+async function recSheet(e, cards, cats) {
+  cards = cards || []; cats = cats || catCache || await categories();
+  const S = { kind: e.kind || "out", cycle: e.cycle || "monthly", notify: e.notify_days ?? 1, cat: e.category_id || null,
+    method: e.method || (e.card_id ? "신용카드" : "자동이체"), card: e.card_id || null, auto: e.auto_record ?? 1 };
+  const methods = ["자동이체", "계좌이체", "신용카드", "체크카드", "현금", "간편결제"];
+  const draw = () => {
+    const list = cats.filter((c) => c.kind === S.kind);
+    const dayOpts = (sel) => Array.from({ length: 30 }, (_, i) => i + 1).map((n) => `<option value="${n}" ${n == sel ? "selected" : ""}>${n}일</option>`).join("") + `<option value="31" ${sel >= 31 ? "selected" : ""}>말일</option>`;
+    openSheet(e.id ? "고정비 고치기" : "고정비 등록", `
+      ${seg("종류", [["out", "지출"], ["in", "수입"]], S.kind, "on-card")}
+      <input class="amount-in" id="rAmt" inputmode="numeric" placeholder="0원" aria-label="금액" value="${e.amount ? won(e.amount) : ""}">
+      <label class="field">이름<input id="rName" placeholder="예: 넷플릭스, 월세, 통신비" value="${esc(e.name || "")}"></label>
+      ${seg("주기", [["monthly", "매월"], ["yearly", "매년"], ["weekly", "매주"]], S.cycle, "on-card")}
+      <div class="fields">
+        ${S.cycle === "yearly" ? `<label class="field">월<select id="rMonth">${Array.from({ length: 12 }, (_, i) => `<option value="${i + 1}" ${(e.month || new Date().getMonth() + 1) == i + 1 ? "selected" : ""}>${i + 1}월</option>`).join("")}</select></label>` : ""}
+        ${S.cycle === "weekly" ? `<label class="field">요일<select id="rWd">${[..."월화수목금토일"].map((w, i) => `<option value="${i}" ${(e.weekday || 0) == i ? "selected" : ""}>${w}요일</option>`).join("")}</select></label>`
+          : `<label class="field">날짜<select id="rDay">${dayOpts(e.day || new Date().getDate())}</select></label>`}
+      </div>
+      <div class="field">분류<div class="chips">${list.map((c) => `<button type="button" class="chip" data-cat="${c.id}" aria-pressed="${c.id == S.cat}">${esc(c.name)}</button>`).join("")}</div></div>
+      <div class="field">결제 수단<div class="chips">${methods.map((x) => `<button type="button" class="chip" data-m="${x}" aria-pressed="${x === S.method}">${x}</button>`).join("")}</div></div>
+      ${cards.length && /카드/.test(S.method) ? `<div class="field">카드<div class="chips">${cards.map((c) => `<button type="button" class="chip" data-card="${c.id}" aria-pressed="${c.id == S.card}">${esc(c.name)}</button>`).join("")}</div></div>` : ""}
+      <div class="card-head" style="min-height:52px"><div><b style="font-size:15px">결제일에 자동 기록</b><div class="tiny">카드·은행 문자가 오면 그 기록과 맞춰 한 번만 남겨요</div></div>
+        <button class="switch" role="switch" id="rAuto" aria-checked="${!!S.auto}" aria-label="자동 기록"><span></span></button></div>
+      ${seg("알림", [["-1", "안 함"], ["0", "당일"], ["1", "1일 전"], ["3", "3일 전"]], String(S.notify), "on-card")}
+      <details class="field"><summary class="tiny">더 보기(문자 이름·변동 금액·기간)</summary>
+        <label class="field">문자에 찍히는 이름<input id="rMatch" placeholder="비우면 위 이름" value="${esc(e.match && e.match !== e.name ? e.match : "")}"></label>
+        <label class="check"><input type="checkbox" id="rVar" ${e.variable ? "checked" : ""}> 금액이 달마다 조금씩 달라요(통신비·관리비)</label>
+        <div class="fields"><label class="field">시작일<input type="date" id="rStart" value="${esc(e.start_date || localToday())}"></label>
+          <label class="field">종료일<input type="date" id="rEnd" value="${esc(e.end_date || "")}"></label></div>
+        ${e.id ? `<label class="check"><input type="checkbox" id="rActive" ${e.active === 0 ? "" : "checked"}> 사용 중</label>` : ""}
+      </details>
+      <button class="btn dark wide" id="rSave">${e.id ? "고친 내용 저장" : "등록"}</button>
+      ${e.id ? `<button class="btn soft wide" id="rDel">지우기</button>` : ""}`, (box) => {
+      moneyInput($("#rAmt", box));
+      const keep = () => { e = { ...e, amount: num($("#rAmt").value), name: $("#rName").value, day: $("#rDay")?.value || e.day, month: $("#rMonth")?.value || e.month, weekday: $("#rWd")?.value ?? e.weekday }; };
+      bindSeg(box, "종류", (v) => { keep(); S.kind = v; S.cat = null; draw(); });
+      bindSeg(box, "주기", (v) => { keep(); S.cycle = v; draw(); });
+      bindSeg(box, "알림", (v) => { S.notify = Number(v); });
+      $("#rAuto").onclick = (ev) => { S.auto = ev.currentTarget.getAttribute("aria-checked") !== "true"; ev.currentTarget.setAttribute("aria-checked", String(S.auto)); };
+      box.onclick = async (ev) => {
+        const c = ev.target.closest("[data-cat]"), m = ev.target.closest("[data-m]"), k = ev.target.closest("[data-card]");
+        if (c) { S.cat = Number(c.dataset.cat); $$("[data-cat]", box).forEach((x) => x.setAttribute("aria-pressed", String(x === c))); }
+        if (m) { keep(); S.method = m.dataset.m; if (!/카드/.test(S.method)) S.card = null; draw(); }
+        if (k) { S.card = Number(k.dataset.card); $$("[data-card]", box).forEach((x) => x.setAttribute("aria-pressed", String(x === k))); }
+        if (ev.target.id === "rDel") {
+          if (!confirmTap(ev.target, "한 번 더 누르면 지워요")) return;
+          await run(() => api("DELETE", `/api/fixed/${e.id}`), "지웠어요"); closeSheet(); pages.ledger.fixed();
+        }
+        if (ev.target.id === "rSave") {
+          const b = { id: e.id, kind: S.kind, amount: num($("#rAmt").value), name: $("#rName").value, cycle: S.cycle,
+            day: num($("#rDay")?.value || 1), month: num($("#rMonth")?.value || 0) || null, weekday: num($("#rWd")?.value || 0),
+            category_id: S.cat, method: S.method, card_id: S.card, auto_record: S.auto, notify_days: S.notify,
+            match: $("#rMatch").value.trim() || $("#rName").value.trim(), variable: $("#rVar").checked,
+            start_date: $("#rStart").value || localToday(), end_date: $("#rEnd").value || null, active: $("#rActive") ? $("#rActive").checked : true };
+          await run(() => api("POST", "/api/fixed", b), e.id ? "고쳤어요" : "등록했어요. 결제일에 맞춰 챙길게요");
+          closeSheet(); if (location.hash.startsWith("#ledger/fixed")) pages.ledger.fixed();
+        }
+      };
+    });
+  };
+  draw();
+}
+
+// ---------- 카드 ----------
+const ISSUER_COLORS = { "신한": ["#1A47A6", "#0E2E73"], "KB국민": ["#6B5B45", "#3F352A"], "삼성": ["#1C3FAA", "#0B1F66"], "현대": ["#2B2B2B", "#0F0F0F"],
+  "롯데": ["#D0342C", "#8F1D18"], "하나": ["#00877A", "#00564E"], "우리": ["#0A6CB5", "#064775"], "BC": ["#E04848", "#9E2626"],
+  "NH농협": ["#1D9A55", "#106338"], "씨티": ["#3D6DB5", "#22446F"], "IBK": ["#1F5FA8", "#123A68"], "카카오뱅크": ["#3A3A3A", "#1A1A1A"], "토스": ["#2F6FEB", "#1A44A0"] };
+function nextPayInfo(c) {  // 화면 미리보기: 다음 결제일과 그때 나가는 이용기간
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  const dim = (y, m) => new Date(y, m + 1, 0).getDate();
+  const at = (y, m, d) => new Date(y, m, Math.min(d, dim(y, m)));
+  let p = at(t.getFullYear(), t.getMonth(), c.pay_day); if (p < t) p = at(t.getFullYear(), t.getMonth() + 1, c.pay_day);
+  for (const back of [1, 2, 3]) {
+    const s = at(p.getFullYear(), p.getMonth() - back, c.cycle_start), e = new Date(at(p.getFullYear(), p.getMonth() - back + 1, c.cycle_start) - 864e5);
+    const d8 = new Date(+e + 8 * 864e5); let q = at(d8.getFullYear(), d8.getMonth(), c.pay_day); if (q < d8) q = at(d8.getFullYear(), d8.getMonth() + 1, c.pay_day);
+    if (+q === +p) return { p, s, e };
+  }
+  return null;
+}
+const md = (d) => `${d.getMonth() + 1}/${d.getDate()}`;
+function cardPlate(c) {
+  const [a, b] = ISSUER_COLORS[c.issuer] || ["#2A3550", "#161D2E"];
+  const b0 = c.bills[0], b1 = c.bills[1];
+  const pct = c.perf_pct == null ? null : Math.min(100, c.perf_pct);
+  return `<section class="card cd-card">
+    <button type="button" class="cd-plate" data-card="${c.id}" style="--c1:${a};--c2:${b}">
+      <span class="cd-top"><b>${esc(c.name)}</b><span>${esc(c.kind_label)}</span></span>
+      <span class="cd-no">${c.last4 ? `**** ${esc(c.last4)}` : esc(c.issuer || "")}</span>
+      ${b0 && c.kind === "credit" ? `<span class="cd-bill"><span>${esc(b0.pay_date.slice(5).replace("-", "/"))} 결제 · ${b0.d === 0 ? "오늘" : `D-${b0.d}`}</span><b>${won(b0.amount)}원</b></span>` : `<span class="cd-bill"><span>이번 달 사용</span><b>${won(c.perf)}원</b></span>`}
+    </button>
+    ${c.perf_target ? `<div class="cd-perf">
+      <div class="cd-row"><span>전월 실적(이번 달)</span><b>${won(c.perf)} <small>/ ${won(c.perf_target)}</small></b></div>
+      <div class="bar ${pct >= 100 ? "done" : ""}"><div style="width:${pct}%"></div></div>
+      <div class="tiny">${c.perf_need ? `<b>${won(c.perf_need)}원</b> 더 쓰면 다음 달 혜택 · 남은 ${c.days_left}일, 하루 ${won(c.perf_daily)}원` : "이번 달 실적 채웠어요. 다음 달 혜택 받아요"}
+        ${c.prev_perf ? ` · 지난달 ${c.prev_met ? `<span class="up">달성</span>` : `<span class="down">미달(${won(c.prev_perf)})</span>`}` : ""}</div></div>` : ""}
+    ${c.kind === "credit" && b0 ? `<div class="cd-bills">
+      <div><span>${esc(b0.pay_date.slice(5).replace("-", "/"))} 결제</span><span>${esc(b0.start.slice(5).replace("-", "/"))}~${esc(b0.end.slice(5).replace("-", "/"))} 이용분 ${b0.closed ? "· 마감" : "· 쓰는 중"} · ${b0.count}건</span><b>${won(b0.amount)}</b></div>
+      ${b1 ? `<div><span>${esc(b1.pay_date.slice(5).replace("-", "/"))} 결제</span><span>${esc(b1.start.slice(5).replace("-", "/"))}~${esc(b1.end.slice(5).replace("-", "/"))} 이용분</span><b>${won(b1.amount)}</b></div>` : ""}</div>` : ""}
+    <div class="cd-row tiny"><span>${c.annual_fee ? `연회비 ${won(c.annual_fee)}원` : ""}${c.note ? ` ${esc(c.note)}` : ""}</span><button class="link" data-cedit="${c.id}">카드 설정</button></div>
+  </section>`;
+}
+async function cardDetail(c, issuers) {
+  const b0 = c.bills[0];
+  const start = c.kind === "credit" && b0 ? b0.start : localToday().slice(0, 8) + "01", end = c.kind === "credit" && b0 ? b0.end : localToday();
+  const rows = await run(() => GET(`/api/cards/${c.id}/txs?start=${start}&end=${end}`));
+  openSheet(c.name, `
+    <div class="small muted">${esc(start.slice(5).replace("-", "/"))}~${esc(end.slice(5).replace("-", "/"))} ${c.kind === "credit" ? `이용분 · ${esc(b0.pay_date.slice(5).replace("-", "/"))} 결제` : "사용"} · ${rows.length}건 · <b>${won(rows.reduce((a, t) => a + (t.kind === "out" ? t.amount : -t.amount), 0))}원</b></div>
+    <div class="list">${rows.length ? rows.map((t) => txItem(t, false)).join("") : `<div class="empty">이 기간 내역이 없어요</div>`}</div>
+    <button class="btn wide" id="cdEdit">카드 설정</button>`, (box) => { $("#cdEdit", box).onclick = () => cardSheet(c, issuers); });
+}
+function cardSheet(c, issuers) {
+  const S = { kind: c.kind || "credit", issuer: c.issuer || "" };
+  const draw = () => {
+    openSheet(c.id ? "카드 설정" : "카드 등록", `
+      <label class="field">이름<input id="kName" placeholder="예: 신한 딥드림" value="${esc(c.name || "")}"></label>
+      <div class="field">카드사<div class="chips">${(issuers || []).map((x) => `<button type="button" class="chip" data-iss="${esc(x)}" aria-pressed="${x === S.issuer}">${esc(x)}</button>`).join("")}</div></div>
+      <div class="fields"><label class="field">끝 4자리<input id="kLast" inputmode="numeric" maxlength="4" placeholder="문자에 찍히는 번호" value="${esc(c.last4 || "")}"></label>
+        <label class="field">종류<select id="kKind"><option value="credit" ${S.kind === "credit" ? "selected" : ""}>신용카드</option><option value="check" ${S.kind === "check" ? "selected" : ""}>체크카드</option></select></label></div>
+      <label class="field">전월 실적 기준(원)<input id="kPerf" class="r" inputmode="numeric" placeholder="0이면 실적 없음" value="${c.perf_target ? won(c.perf_target) : ""}"></label>
+      <div class="fields" id="kBillBox">
+        <label class="field">이용기간 시작일<select id="kStart">${Array.from({ length: 28 }, (_, i) => `<option value="${i + 1}" ${(c.cycle_start || 1) == i + 1 ? "selected" : ""}>${i + 1}일</option>`).join("")}</select></label>
+        <label class="field">결제일<select id="kPay">${Array.from({ length: 28 }, (_, i) => `<option value="${i + 1}" ${(c.pay_day || 14) == i + 1 ? "selected" : ""}>${i + 1}일</option>`).join("")}</select></label></div>
+      <div class="notice" id="kPrev"></div>
+      <label class="field">실적 제외 항목(쉼표로)<input id="kEx" placeholder="예: 국세, 상품권, 관리비" value="${esc(c.exclude_kw || "")}"></label>
+      <div class="fields"><label class="field">연회비<input id="kFee" class="r" inputmode="numeric" value="${c.annual_fee ? won(c.annual_fee) : ""}"></label>
+        <label class="field">메모<input id="kNote" placeholder="예: 통신비 할인" value="${esc(c.note || "")}"></label></div>
+      <button class="btn dark wide" id="kSave">${c.id ? "저장" : "등록"}</button>
+      ${c.id ? `<button class="btn soft wide" id="kDel">카드 지우기</button>` : ""}`, (box) => {
+      ["#kPerf", "#kFee"].forEach((q) => moneyInput($(q, box)));
+      const prev = () => {
+        const credit = $("#kKind").value === "credit";
+        $("#kBillBox").hidden = !credit;
+        const info = credit ? nextPayInfo({ cycle_start: num($("#kStart").value), pay_day: num($("#kPay").value) }) : null;
+        $("#kPrev").innerHTML = credit ? (info ? `다음 결제 <b>${md(info.p)}</b>에는 <b>${md(info.s)}~${md(info.e)}</b> 사용분이 나가요. 카드사 앱의 이용기간과 같은지 확인해 주세요.` : "")
+          : "체크카드는 쓰는 즉시 통장에서 빠져서 결제일이 없어요. 실적만 계산해요.";
+        $("#kPrev").hidden = !$("#kPrev").innerHTML;
+      };
+      ["#kStart", "#kPay", "#kKind"].forEach((q) => ($(q, box).onchange = prev)); prev();
+      box.onclick = async (ev) => {
+        const i = ev.target.closest("[data-iss]");
+        if (i) { S.issuer = i.dataset.iss; $$("[data-iss]", box).forEach((x) => x.setAttribute("aria-pressed", String(x === i))); if (!$("#kName").value) $("#kName").value = S.issuer + "카드"; }
+        if (ev.target.id === "kDel") {
+          if (!confirmTap(ev.target, "한 번 더 누르면 지워요")) return;
+          await run(() => api("DELETE", `/api/cards/${c.id}`), "지웠어요"); closeSheet(); pages.ledger.cards();
+        }
+        if (ev.target.id === "kSave") {
+          const b = { id: c.id, name: $("#kName").value, issuer: S.issuer, last4: $("#kLast").value, kind: $("#kKind").value,
+            perf_target: num($("#kPerf").value), cycle_start: num($("#kStart").value), pay_day: num($("#kPay").value),
+            exclude_kw: $("#kEx").value, annual_fee: num($("#kFee").value), note: $("#kNote").value };
+          if (!b.issuer) { toast("카드사를 골라 주세요", true); return; }
+          await run(() => api("POST", "/api/cards", b), c.id ? "저장했어요" : "등록했어요. 지난 카드 문자도 이 카드에 연결했어요");
+          cardCache = null; closeSheet(); if (location.hash.startsWith("#ledger/cards")) pages.ledger.cards();
+        }
+      };
+    });
+  };
+  draw();
+}
+let cardCache = null;
+
 // ---------- 내역 입력 시트 ----------
 async function txSheet(e, done) {
   const cats = await run(() => categories());
+  if (!cardCache) cardCache = await GET("/api/cards/simple").catch(() => []);
+  let card = e.card_id || null;
   let kind = e.kind || "out";
   let xfer = !!e.transfer;
   let cat = e.category_id || null;
@@ -506,7 +670,8 @@ async function txSheet(e, done) {
       ${xfer ? `<div class="small muted">내 계좌끼리 옮긴 돈은 기록만 남기고 수입·지출 합계, 예산, 분석에서 빼요.</div>` : ""}
       <label class="field">내용<input id="tMemo" placeholder="${xfer ? "예: 하나 → 키움" : kind === "out" ? "어디에 썼나요" : "어디서 들어왔나요"}" value="${esc(e.memo || "")}"></label>
       ${xfer ? "" : `<div class="field">분류<div class="chips" role="group" aria-label="분류">${list.map((c) => `<button type="button" class="chip" data-cat="${c.id}" aria-pressed="${c.id === cat}">${esc(c.name)}</button>`).join("")}</div></div>
-      <div class="field">결제수단<div class="chips" role="group" aria-label="결제수단">${methods.map((x) => `<button type="button" class="chip" data-m="${x}" aria-pressed="${x === method}">${x}</button>`).join("")}</div></div>`}
+      <div class="field">결제수단<div class="chips" role="group" aria-label="결제수단">${methods.map((x) => `<button type="button" class="chip" data-m="${x}" aria-pressed="${x === method}">${x}</button>`).join("")}</div></div>
+      ${cardCache.length && /카드/.test(method) ? `<div class="field">카드<div class="chips" role="group" aria-label="카드">${cardCache.map((c) => `<button type="button" class="chip" data-tcard="${c.id}" aria-pressed="${c.id == card}">${esc(c.name)}</button>`).join("")}</div></div>` : ""}`}
       <label class="field">날짜<input type="date" id="tDate" value="${e.date || localToday()}"></label>
       <button class="btn dark wide" id="tSave">${e.id ? "고친 내용 저장" : "저장"}</button>
       ${e.id ? `<button class="btn soft wide" id="tDel">이 내역 지우기</button>` : ""}`, (box) => {
@@ -520,13 +685,15 @@ async function txSheet(e, done) {
       box.onclick = async (ev) => {
         const c = ev.target.closest("[data-cat]"), m = ev.target.closest("[data-m]");
         if (c) { cat = Number(c.dataset.cat); $$("[data-cat]", box).forEach((x) => x.setAttribute("aria-pressed", String(x === c))); }
-        if (m) { method = m.dataset.m; $$("[data-m]", box).forEach((x) => x.setAttribute("aria-pressed", String(x === m))); }
+        if (m) { method = m.dataset.m; if (!/카드/.test(method)) card = null; e = { ...e, amount: num($("#tAmt").value), memo: $("#tMemo").value, date: $("#tDate").value, category_id: cat }; draw(); return; }
+        const tc = ev.target.closest("[data-tcard]");
+        if (tc) { card = card == tc.dataset.tcard ? null : Number(tc.dataset.tcard); $$("[data-tcard]", box).forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.tcard == card))); }
         if (ev.target.id === "tDel") {
           if (!confirmTap(ev.target, "한 번 더 누르면 지워요")) return;
           await run(() => api("DELETE", `/api/tx/${e.id}`), "지웠어요"); closeSheet(); done && done();
         }
         if (ev.target.id === "tSave") {
-          const body = { kind, amount: num($("#tAmt").value), memo: $("#tMemo").value, category_id: xfer ? null : cat, method, date: $("#tDate").value, transfer: xfer };
+          const body = { kind, amount: num($("#tAmt").value), memo: $("#tMemo").value, category_id: xfer ? null : cat, method, date: $("#tDate").value, transfer: xfer, card_id: /카드/.test(method) ? card : null };
           await run(() => (e.id ? api("PUT", `/api/tx/${e.id}`, body) : api("POST", "/api/tx", body)), e.id ? "고쳤어요" : "저장했어요");
           closeSheet(); done && done(body);
         }
@@ -569,6 +736,8 @@ pages.ledger = {
     this.d = d;
     const addFab = () => fab("기록", () => txSheet({ kind: S.kind === "in" ? "in" : "out", date: S.month === thisMonth() ? localToday() : S.month + "-01" }, (b) => { if (b && b.date.slice(0, 7) !== S.month) S.month = b.date.slice(0, 7); route(); }));
     if (h.sub === "auto") return this.auto();
+    if (h.sub === "fixed") return this.fixed();
+    if (h.sub === "cards") return this.cards();
     if (h.sub === "calendar") { this.calendar(d); addFab(); }
     else if (h.sub === "analysis") await this.analysis(d);
     else if (h.sub === "budget") this.budget(d);
@@ -578,7 +747,10 @@ pages.ledger = {
     const S = ledgerState;
     const byDay = {};
     d.rows.forEach((t) => (byDay[t.date] = byDay[t.date] || []).push(t));
+    const up = (d.fixed_soon || []);
     view.innerHTML = `${monthNav(S, d.summary)}
+      ${up.length ? `<a class="fx-banner" href="#ledger/fixed"><span class="fx-d">${up[0].d === 0 ? "오늘" : up[0].d === 1 ? "내일" : `D-${up[0].d}`}</span>
+        <span><b>${esc(up[0].name)}</b> ${won(up[0].amount)}원 결제 예정${up.length > 1 ? ` 외 ${up.length - 1}건` : ""}</span><span class="fx-go">›</span></a>` : ""}
       ${seg("내역 종류", [["all", "전체"], ["out", "지출"], ["in", "수입"], ["transfer", "이체"]], S.kind)}
       <section class="card tight">
         ${Object.keys(byDay).length ? Object.entries(byDay).map(([date, rows]) => {
@@ -588,6 +760,72 @@ pages.ledger = {
       </section>`;
     bindSeg(view, "내역 종류", (v) => { S.kind = v; route(); });
     view.onclick = (e) => { const b = e.target.closest("[data-edit]"); if (b) txSheet({ ...d.rows.find((r) => r.id == b.dataset.edit) }, route); };
+  },
+  // ---------- 고정비·구독 ----------
+  async fixed() {
+    const d = await GET("/api/fixed");
+    const sm = d.summary, cats = catCache || await categories();
+    const pctPaid = sm.month_total ? Math.round(sm.month_paid / sm.month_total * 100) : 0;
+    const stTag = { paid: ["냈어요", "g"], posted: ["자동 기록", "g"], skipped: ["건너뜀", ""], due: ["예정", ""], late: ["확인 필요", "warn"] };
+    const dLabel = (x) => x.d === 0 ? "오늘" : x.d === 1 ? "내일" : x.d > 0 ? `D-${x.d}` : `${-x.d}일 지남`;
+    view.innerHTML = `
+      <section class="card fx-sum">
+        <div class="card-head"><h2>이번 달 고정 지출</h2><span class="tiny">${d.items.filter((x) => x.active).length}개 등록</span></div>
+        <div class="fx-big">${won(sm.month_total)}<small>원</small></div>
+        <div class="bar"><div style="width:${pctPaid}%"></div></div>
+        <div class="kv"><div>낸 것<b>${won(sm.month_paid)}</b></div><div>남은 것<b>${won(sm.month_left)}</b></div><div>1년 환산<b>${shortWon(sm.yearly)}</b></div></div>
+      </section>
+      ${d.suggest.length ? `<div class="sec-title">반복 결제를 찾았어요 · 눌러서 등록</div>
+        <section class="card tight"><div class="list">${d.suggest.map((x, i) => `<div class="item fx-sug">
+          <span class="ico ${x.confidence === "high" ? "y" : ""}">${x.subscription ? "구독" : "반복"}</span>
+          <span class="main"><b>${esc(x.name)}</b><span class="sub">매월 ${x.day}일쯤 · ${x.months >= 2 ? `${x.months}달 연속` : "구독으로 보여요"}${x.variable ? " · 금액 조금씩 달라요" : ""}</span></span>
+          <span class="end"><b>${won(x.amount)}</b><span class="fx-btns"><button class="btn sm" data-sadd="${i}">등록</button><button class="btn sm soft" data-sno="${i}">아니에요</button></span></span></div>`).join("")}</div></section>` : ""}
+      <div class="sec-title">다가오는 결제</div>
+      <section class="card tight"><div class="list">${sm.upcoming.length ? sm.upcoming.map((x) => `<div class="item" data-rid="${x.id}">
+        <span class="fx-dd ${x.d <= 1 && x.d >= 0 ? "soon" : x.d < 0 ? "past" : ""}">${dLabel(x)}</span>
+        <span class="main"><b>${esc(x.name)}</b><span class="sub">${esc(x.due.slice(5).replace("-", "."))}${x.card ? " · " + esc(x.card) : ""}${x.auto ? "" : " · 직접 기록"}</span></span>
+        <span class="end"><b class="${x.kind === "in" ? "inc" : ""}">${x.kind === "in" ? "+" : ""}${won(x.amount)}</b>
+          ${x.status === "late" ? `<span class="fx-btns"><button class="btn sm" data-mark="paid" data-due="${x.due}" data-id="${x.id}">냈어요</button><button class="btn sm soft" data-mark="skipped" data-due="${x.due}" data-id="${x.id}">건너뛰기</button></span>`
+            : `<span class="tag ${stTag[x.status][1]}">${stTag[x.status][0]}</span>`}</span></div>`).join("")
+        : `<div class="empty">한 달 안에 예정된 결제가 없어요</div>`}</div></section>
+      <div class="sec-title">등록한 고정비</div>
+      <section class="card tight"><div class="list">${d.items.length ? d.items.map((r) => `<button type="button" class="item ${r.active ? "" : "off"}" data-rid="${r.id}">
+        <span class="ico">${esc((r.category || r.name).slice(0, 2))}</span>
+        <span class="main"><b>${esc(r.name)}</b><span class="sub">${esc(r.when)}${r.card ? " · " + esc(r.card) : r.method ? " · " + esc(r.method) : ""}${r.auto_record ? " · 자동 기록" : ""}${r.notify_days >= 0 ? " · 알림" : ""}${r.active ? "" : " · 멈춤"}</span></span>
+        <span class="end"><b class="${r.kind === "in" ? "inc" : ""}">${r.variable ? "약 " : ""}${won(r.amount)}</b></span></button>`).join("")
+        : `<div class="empty">월세·통신비·구독처럼 매달 나가는 돈을 등록하면, 그날 자동으로 기록하고 미리 알려 드려요</div>`}</div></section>
+      <div class="tiny" style="padding:0 4px">카드로 내는 고정비는 카드 문자가 오면 그 기록과 맞춰 한 번만 남겨요. 문자가 없으면 결제일 3일 뒤 자동 기록해요. 알림은 설정 → 매매의 휴대폰 알림(ntfy)으로 가요.</div>`;
+    fab("고정비", () => recSheet({}, d.cards, cats));
+    view.onclick = async (e) => {
+      const add = e.target.closest("[data-sadd]"), no = e.target.closest("[data-sno]"), mk = e.target.closest("[data-mark]");
+      if (add) { const x = d.suggest[add.dataset.sadd]; return recSheet({ name: x.name, amount: x.amount, day: x.day, category_id: x.category_id, method: x.method, card_id: x.card_id, variable: x.variable, match: x.name, auto_record: true }, d.cards, cats); }
+      if (no) { await run(() => api("POST", "/api/fixed/dismiss", { key: d.suggest[no.dataset.sno].key }), "다시 제안하지 않을게요"); return this.fixed(); }
+      if (mk) { await run(() => api("POST", `/api/fixed/${mk.dataset.id}/mark`, { due: mk.dataset.due, status: mk.dataset.mark }), mk.dataset.mark === "paid" ? "낸 것으로 표시했어요" : "이번엔 건너뛸게요"); return this.fixed(); }
+      const it = e.target.closest("[data-rid]");
+      if (it) recSheet(d.items.find((r) => r.id == it.dataset.rid), d.cards, cats);
+    };
+  },
+
+  // ---------- 카드 ----------
+  async cards() {
+    const d = await GET("/api/cards");
+    view.innerHTML = `
+      ${d.cards.some((c) => c.kind === "credit") ? `<section class="card"><div class="card-head"><h2>다음 카드 결제 예정</h2><b>${won(d.next_due_total)}원</b></div>
+        <div class="tiny">신용카드별 가장 가까운 결제일에 나갈 금액 합계(지금까지 쓴 만큼)예요.</div></section>` : ""}
+      ${d.suggest.length ? `<div class="sec-title">문자에서 찾은 카드 · 눌러서 등록</div>
+        <section class="card tight"><div class="list">${d.suggest.map((x, i) => `<div class="item"><span class="ico y">${esc(x.issuer.slice(0, 2))}</span>
+          <span class="main"><b>${esc(x.issuer)}카드${x.last4 ? ` ****${esc(x.last4)}` : ""}</b><span class="sub">문자 ${x.count}건 · 최근 ${esc(String(x.last).slice(5).replace("-", "."))}</span></span>
+          <button class="btn sm" data-csug="${i}">등록</button></div>`).join("")}</div></section>` : ""}
+      ${d.cards.length ? d.cards.map((c) => cardPlate(c)).join("") : `<div class="empty card">카드를 등록하면 전월 실적 진행률과 결제일·청구 예정액을 보여 드려요. 카드 문자가 오면 자동으로 이 카드에 연결돼요.</div>`}`;
+    fab("카드", () => cardSheet({}, d.issuers));
+    view.onclick = (e) => {
+      const sg = e.target.closest("[data-csug]");
+      if (sg) { const x = d.suggest[sg.dataset.csug]; return cardSheet({ name: `${x.issuer}카드`, issuer: x.issuer, last4: x.last4 }, d.issuers); }
+      const ed = e.target.closest("[data-cedit]");
+      if (ed) return cardSheet(d.cards.find((c) => c.id == ed.dataset.cedit), d.issuers);
+      const pl = e.target.closest("[data-card]");
+      if (pl) cardDetail(d.cards.find((c) => c.id == pl.dataset.card), d.issuers);
+    };
   },
   calendar(d) {
     const S = ledgerState;

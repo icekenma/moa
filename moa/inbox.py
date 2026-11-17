@@ -48,11 +48,20 @@ def guess_category(merchant):
     return None
 
 
+def _card_tail(text):
+    """카드 끝 4자리: '신한카드(1234)', '삼성1234', '체크카드 (1*3*)' 등."""
+    m = re.search(r"(?:카드|체크|승인)\s*\(?\s*(\d{4})\s*\)?", text) or re.search(r"\((\d{4})\)", text)
+    return m.group(1) if m else ""
+
+
 def _issuer(text):
+    """문자에서 가장 먼저 나오는 금융사(예: '하나,… 신한카드'면 보낸 곳인 하나)."""
+    best, pos = "", len(text) + 1
     for name in ISSUERS:
-        if name in text:
-            return {"국민": "KB국민", "비씨": "BC", "농협": "NH농협", "기업": "IBK"}.get(name, name)
-    return ""
+        i = text.find(name)
+        if 0 <= i < pos or (i == pos and len(name) > len(best)):
+            best, pos = name, i
+    return {"국민": "KB국민", "비씨": "BC", "농협": "NH농협", "기업": "IBK"}.get(best, best)
 
 
 def parse(text, received=None):
@@ -125,7 +134,8 @@ def parse(text, received=None):
         "issuer": _issuer(body), "date": d.isoformat(),
         "time": f"{int(tm.group(1)):02d}:{tm.group(2)}" if tm else "",
         "balance": _n(bal.group(1)) if bal else None,
-        "acct_tail": acct.group(2)[-4:] if acct else "",
+        "acct_tail": acct.group(2)[-4:] if acct and kind == "bank" else "",
+        "card_tail": _card_tail(body) if kind == "card" else "",
         "category": guess_category(merchant) if kind == "card" else None,
         "raw": body[:300],
     }
@@ -174,6 +184,9 @@ class Inbox:
             db.x("ALTER TABLE inbox ADD COLUMN prev_balance INTEGER")
         if "transfer" not in cols:
             db.x("ALTER TABLE inbox ADD COLUMN transfer INTEGER NOT NULL DEFAULT 0")
+        if "card_tail" not in cols:
+            db.x("ALTER TABLE inbox ADD COLUMN card_tail TEXT NOT NULL DEFAULT ''")
+        self.fixed = None  # 고정 지출·카드(런타임이 연결)
 
     # ---------- 내 계좌끼리 옮긴 돈(이체) 찾기 ----------
     PAIR_MINUTES = 30
@@ -241,6 +254,34 @@ class Inbox:
         elif it["status"] == "pending":
             self.apply(it["id"], transfer=True)
 
+    def _smart(self, iid):
+        """중복·이중 계산 막기: 카드 대금 출금, 체크카드와 같은 출금, 이미 자동 기록한 고정 지출. 처리했으면 True."""
+        it = self.get(iid)
+        fx = self.fixed
+        if not it:
+            return False
+        if fx and fx.is_card_payment(it):
+            self._mark_transfer(it, "카드 대금이라 지출에서 뺐어요(카드 쓸 때 이미 기록)")
+            return True
+        # 체크카드: 카드 문자와 은행 출금 문자가 같은 결제로 두 번 올 때 은행 쪽을 이체로
+        if it["action"] in ("spend", "outflow"):
+            other = "outflow" if it["action"] == "spend" else "spend"
+            t0 = self._when(it)
+            for c in self.db.q("SELECT * FROM inbox WHERE action=? AND amount=? AND date=? AND id!=? AND transfer=0 "
+                               "AND status!='ignored'", (other, it["amount"], it["date"], it["id"])):
+                t1 = self._when(c)
+                if t0 and t1 and abs((t1 - t0).total_seconds()) <= 180:
+                    bank = it if it["action"] == "outflow" else c
+                    self._mark_transfer(self.get(bank["id"]), "체크카드 결제와 같은 건이라 한 번만 셌어요")
+                    return bank["id"] == it["id"]
+        if fx:
+            tid = fx.absorb_sms(it)
+            if tid:
+                self.db.x("UPDATE inbox SET status='added', tx_id=?, note=? WHERE id=?",
+                          (tid, "고정 지출로 이미 기록돼 있어 금액만 맞췄어요", iid))
+                return True
+        return False
+
     def detect_transfer(self, iid):
         it = self.get(iid)
         if not it or it["kind"] != "bank" or it.get("transfer") or it["status"] == "ignored":
@@ -288,11 +329,12 @@ class Inbox:
             return {"status": "duplicate", **p}
         iid = self.db.x(
             "INSERT INTO inbox(hash,received_at,source,kind,action,amount,merchant,issuer,date,time,balance,acct_tail,"
-            "category,raw,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "category,raw,status,card_tail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (h, received.isoformat(timespec="seconds"), source, p["kind"], p["action"], p["amount"], p["merchant"],
-             p["issuer"], p["date"], p["time"], p["balance"], p["acct_tail"], p["category"], p["raw"], "pending"))
+             p["issuer"], p["date"], p["time"], p["balance"], p["acct_tail"], p["category"], p["raw"], "pending",
+             p.get("card_tail", "")))
         note = []
-        if not self.detect_transfer(iid) and self._auto(p):
+        if not self._smart(iid) and not self.detect_transfer(iid) and self._auto(p):
             self.apply(iid)
         if p["balance"] is not None:
             a = self._update_asset(p)
@@ -352,6 +394,9 @@ class Inbox:
                                        "category_id": self._cat_id("기타수입", "in"),
                                        "memo": f"{it['merchant'] or it['issuer']} 결제 취소", "method": "카드"})
                 self.db.x("UPDATE inbox SET status='added', tx_id=? WHERE id=?", (tid, iid))
+                card = self.fixed.card_for(it) if self.fixed else None
+                if card:
+                    self.db.x("UPDATE transactions SET card_id=? WHERE id=?", (card["id"], tid))
             return self.get(iid)
         kind = "in" if it["action"] == "income" else "out"
         xfer = bool(it.get("transfer")) if transfer is None else bool(transfer)
@@ -363,6 +408,11 @@ class Inbox:
                                "method": method, "transfer": xfer})
         self.db.x("UPDATE inbox SET status='added', tx_id=?, category=?, transfer=? WHERE id=?",
                   (tid, cat, 1 if xfer else 0, iid))
+        if self.fixed:
+            card = self.fixed.card_for(it)
+            if card:
+                self.db.x("UPDATE transactions SET card_id=? WHERE id=?", (card["id"], tid))
+            self.fixed.run(force=True)
         return self.get(iid)
 
     def ignore(self, iid):

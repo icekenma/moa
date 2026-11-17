@@ -423,3 +423,77 @@ dialog.upd[open]{animation:pop .18s ease-out}
 .cd-bills>div span:first-child{font-weight:700;color:var(--ink);white-space:nowrap}
 .cd-bills>div span{color:var(--ink3)}
 .cd-bills b{font-size:12px}
+
+/* ===== 투자 홈 ===== */
+.ih-hero{color:var(--on-deep-strong);background:var(--deep);margin:-3px -11px 0;padding:4px 14px 13px;border-radius:0 0 15.5px 15.5px;display:flex;flex-direction:column;gap:2px}
+.ih-lbl{font-size:10.5px;color:var(--on-deep2);font-weight:600}
+.ih-total{font-size:27px;font-weight:800;letter-spacing:-0.035em;line-height:1.15}
+.ih-total small{font-size:15px;font-weight:700;margin-left:2px}
+.ih-day{font-size:12.5px;font-weight:700}
+.ih-hero .up{color:#FF7A70}.ih-hero .down{color:#7FA6FF}
+.ih-sub{display:flex;flex-wrap:wrap;gap:3px 11px;margin-top:6px;padding-top:7px;border-top:1px solid rgba(255,255,255,.08);font-size:10.5px;color:var(--on-deep2)}
+.ih-sub b{color:var(--on-deep-strong);font-weight:700}
+.ih-empty{font-size:12px;color:var(--on-deep);line-height:1.6;padding:4px 0}
+.ih-empty a{color:var(--hl);font-weight:700}
+.ih-idx{display:flex;gap:5.5px;overflow-x:auto;scrollbar-width:none;margin:0 -11px;padding:0 11px}
+.ih-idx::-webkit-scrollbar{display:none}
+.ih-idx>div{flex:0 0 auto;background:var(--card);border-radius:10px;padding:6px 10px;display:flex;flex-direction:column;min-width:82px;box-shadow:var(--shadow)}
+.ih-idx span{font-size:9.5px;color:var(--ink3);font-weight:600}
+.ih-idx b{font-size:12.5px;font-weight:800;letter-spacing:-0.02em}
+.ih-idx em{font-style:normal;font-size:10px;font-weight:700}
+.ih-head{flex-wrap:wrap;gap:5px;padding-top:7px}
+.ih-sort{flex:0 0 auto}
+.ih-row .sub .up,.ih-row .sub .down{font-weight:700}
+.ih-quick{display:grid;grid-template-columns:repeat(3,1fr);gap:5.5px}
+.ih-quick .btn{min-height:34px;font-size:11.5px}
+
+/* ===== 발견: 순위 ===== */
+.dv{display:flex;flex-direction:column;gap:7px}
+.dv-kind{flex-wrap:nowrap;overflow-x:auto}
+.dv-rank{flex:0 0 20px;font-size:12.5px;font-weight:800;color:var(--ink3);text-align:center}
+.dv-rank.dv-top{color:var(--up)}
+a.item{text-decoration:none}
+.dv-kwrap .chips{padding:8px 0 4px}
+.dv-row .end{display:flex;flex-direction:column;align-items:flex-end}
+
+/* ===== 종목 상세 탭 ===== */
+.mk-mini{display:flex;flex-wrap:wrap;gap:2px 10px;margin-top:5px;font-size:10px;color:var(--on-deep2)}
+.mk-mini b{font-weight:700}.mk-mini .up{color:#FF7A70}.mk-mini .down{color:#7FA6FF}
+.dt-tabs .seg{width:100%}
+.mk-grid.info{margin-top:10px;padding-top:9px;border-top:1px solid var(--line)}
+.cd-legend{display:flex;gap:9px;align-items:center;min-height:16px;flex-wrap:wrap}
+.cd-legend i{display:inline-block;width:9px;height:2px;margin-right:3px;vertical-align:3px}
+.cd-tip{min-height:16px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cd-svg{touch-action:pan-y;cursor:crosshair}
+.cd-src{text-align:right;margin-top:2px}
+
+/* 호가 */
+.ob{display:flex;flex-direction:column;gap:1px;margin:0 -4px}
+.ob-row{display:grid;grid-template-columns:1fr 104px 1fr;align-items:center;min-height:25px;border:0;padding:0;font-size:11px;text-align:inherit}
+.ob-row.ask{background:#EEF3FD}.ob-row.bid{background:#FDF0EF}
+.ob-row:active{filter:brightness(.95)}
+.ob-q{position:relative;height:100%;display:flex;align-items:center;padding:0 6px}
+.ob-row.ask .ob-q{justify-content:flex-end}
+.ob-q i{position:absolute;top:4px;bottom:4px;opacity:.22;border-radius:2px}
+.ob-row.ask .ob-q i{right:0;background:var(--down)}
+.ob-row.bid .ob-q i{left:0;background:var(--up)}
+.ob-q em{position:relative;font-style:normal;font-weight:600;color:var(--ink2)}
+.ob-p{display:flex;flex-direction:column;align-items:center;line-height:1.15;font-weight:800;background:var(--card);height:100%;justify-content:center}
+.ob-p small{font-size:9px;font-weight:600}
+.ob-p.now{outline:1.5px solid var(--ink);outline-offset:-1.5px}
+.ob-tot{display:flex;justify-content:space-between;font-size:10px;color:var(--ink3);font-weight:600;padding:5px 6px 0}
+
+/* 체결 */
+.tk{width:100%;border-collapse:collapse;font-size:11px}
+.tk th{font-size:9.5px;color:var(--ink3);font-weight:600;text-align:right;padding:3px 2px;border-bottom:1px solid var(--line)}
+.tk td{text-align:right;padding:4px 2px;border-bottom:1px solid var(--bg);font-weight:600}
+.tk th:first-child,.tk td:first-child{text-align:left;color:var(--ink3)}
+
+/* 주문 창 */
+.o-avail{color:var(--ink3);min-height:15px}.o-avail b{color:var(--ink)}
+.stepper{display:flex;align-items:stretch;border:1px solid var(--line2);border-radius:9px;overflow:hidden;background:#fff}
+.stepper input{flex:1 1 auto;min-width:0;border:0!important;border-radius:0!important;text-align:center;font-weight:700}
+.stepper button{flex:0 0 36px;border:0;background:var(--bg);font-size:16px;font-weight:700;color:var(--ink2)}
+.stepper button:active{background:var(--line)}
+.o-pct{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+.o-pct .chip{padding:0}

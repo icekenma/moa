@@ -29,6 +29,8 @@ class Runtime:
         self.fixed = Fixed(self)
         self.inbox.fixed = self.fixed
         self.market = Market(self, data_dir or ".")
+        from .invest import Invest
+        self.invest = Invest(self)
         from .ai import AI
         self.ai = AI(self)
         from .trading.sweep import SweepJob
@@ -119,6 +121,10 @@ class Runtime:
                     self.scalp.tick()
                     if time.time() - self._last_dca > 30:
                         self._last_dca = time.time()
+                        try:
+                            self.invest.check_alerts()  # 가격 알림
+                        except Exception as e:
+                            self.db.log("system", "error", f"가격 알림 확인 오류: {e}", datetime.now().isoformat(timespec="seconds"))
                         try:
                             self.fixed.run()  # 고정 지출 자동 기록·알림(5분마다)
                         except Exception as e:

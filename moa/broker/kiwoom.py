@@ -15,7 +15,17 @@ API = {
     "token": "/oauth2/token",
     "quote": ("/api/dostk/stkinfo", "ka10001"),     # 주식기본정보요청
     "minute": ("/api/dostk/chart", "ka10080"),      # 주식분봉차트조회요청
-    "daily": ("/api/dostk/chart", "ka10081"),
+    "daily": ("/api/dostk/chart", "ka10081"),       # 주식일봉차트조회요청
+    "weekly": ("/api/dostk/chart", "ka10082"),      # 주봉
+    "monthly": ("/api/dostk/chart", "ka10083"),     # 월봉
+    "orderbook": ("/api/dostk/mrkcond", "ka10004"), # 주식호가(10단계)
+    "ticks": ("/api/dostk/stkinfo", "ka10003"),     # 체결정보
+    "rank_value": ("/api/dostk/rkinfo", "ka10032"), # 거래대금상위
+    "rank_volume": ("/api/dostk/rkinfo", "ka10030"),# 당일거래량상위
+    "rank_change": ("/api/dostk/rkinfo", "ka10027"),# 전일대비등락률상위
+    "us_book": ("/api/us/mrkcond", "usa20101"),     # 미국 10호가
+    "us_rank_price": ("/api/us/stkinfo", "usa20930"),  # 미국 가격급등락
+    "us_rank_volume": ("/api/us/stkinfo", "usa20520"), # 미국 거래량급등
     "acctno": ("/api/dostk/acnt", "ka00001"),      # 계좌번호조회
     "watchinfo": ("/api/dostk/stkinfo", "ka10095"), # 관심종목정보요청(여러 종목 | 로 한 번에)      # 계좌번호조회       # 주식일봉차트조회요청
     "index": ("/api/dostk/sect", "ka20001"),        # 업종현재가요청(코스피 001, 코스닥 101)

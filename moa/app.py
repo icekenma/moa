@@ -719,6 +719,48 @@ def create_app(rt, updater=None):
         res["trades"] = res["trades"][-300:]
         return jsonify(res)
 
+    # ---------- 투자 화면(홈·호가·캔들·체결·정보·랭킹·알림) ----------
+    @app.get("/api/invest/home")
+    def invest_home():
+        return jsonify(rt.invest.home())
+
+    @app.get("/api/invest/book/<m>/<sym>")
+    def invest_book(m, sym):
+        m = mkt_arg(m)
+        return jsonify(rt.invest.orderbook(m, sym_arg(m, sym)))
+
+    @app.get("/api/invest/ticks/<m>/<sym>")
+    def invest_ticks(m, sym):
+        m = mkt_arg(m)
+        return jsonify(rt.invest.ticks(m, sym_arg(m, sym)))
+
+    @app.get("/api/invest/candles/<m>/<sym>")
+    def invest_candles(m, sym):
+        m = mkt_arg(m)
+        return jsonify(rt.invest.candles(m, sym_arg(m, sym), request.args.get("tf", "d")))
+
+    @app.get("/api/invest/info/<m>/<sym>")
+    def invest_info(m, sym):
+        m = mkt_arg(m)
+        return jsonify(rt.invest.info(m, sym_arg(m, sym)))
+
+    @app.get("/api/invest/rank")
+    def invest_rank():
+        return jsonify(rt.invest.ranking(mkt_arg(request.args.get("mkt", "kr")), request.args.get("kind", "value")))
+
+    @app.get("/api/invest/alerts")
+    def invest_alerts():
+        return jsonify(rt.invest.alerts())
+
+    @app.post("/api/invest/alerts")
+    def invest_alert_add():
+        return jsonify(id=rt.invest.add_alert(body()))
+
+    @app.delete("/api/invest/alerts/<int:aid>")
+    def invest_alert_del(aid):
+        rt.invest.del_alert(aid)
+        return jsonify(ok=True)
+
     # ---------- 고정 지출·구독 ----------
     from .fixed import FixedError
 

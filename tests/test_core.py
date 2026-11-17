@@ -1146,3 +1146,63 @@ def test_orders_get_real_fill_prices(rt):
     o = {x["broker_no"]: x for x in c.get("/api/stocks").get_json()["orders"]}
     assert o["0001234"]["status"] == "filled" and o["0001234"]["fill_price"] == 192400 and "체결 1주 192,400원" in o["0001234"]["msg"]
     assert o["0001240"]["status"] == "partial" and o["0001240"]["fill_price"] == 192700  # 2주 가중 평균, 3주 중 일부
+
+
+class _FakeInvestKiwoom(_FakeMarketKiwoom):
+    def post(self, url, json=None, headers=None, timeout=None):
+        api = (headers or {}).get("api-id")
+        if api == "ka10004":
+            d = {"return_code": 0, "sel_fpr_bid": "+70200", "sel_fpr_req": "1200", "buy_fpr_bid": "+70100", "buy_fpr_req": "900",
+                 "tot_sel_req": "50000", "tot_buy_req": "42000"}
+            for n in range(2, 11):
+                d[f"sel_{n}th_pre_bid"] = str(70200 + (n - 1) * 100); d[f"sel_{n}th_pre_req"] = str(100 * n)
+                d[f"buy_{n}th_pre_bid"] = str(70100 - (n - 1) * 100); d[f"buy_{n}th_pre_req"] = str(90 * n)
+            return _Resp(d)
+        if api == "ka10003":
+            return _Resp({"return_code": 0, "cntr_infr": [{"tm": "101530", "cur_prc": "+70100", "cntr_trde_qty": "-15",
+                                                           "pre_rt": "-1.27", "cntr_str": "95.2"}]})
+        if api in ("ka10082", "ka10083"):
+            k = {"ka10082": "stk_stk_pole_chart_qry", "ka10083": "stk_mth_pole_chart_qry"}[api]
+            return _Resp({"return_code": 0, k: [{"dt": "20261113", "open_pric": "70000", "high_pric": "71000",
+                                                "low_pric": "69000", "cur_prc": "70100", "trde_qty": "1000"}]})
+        if api == "ka10032":
+            return _Resp({"return_code": 0, "trde_prica_upper": [{"stk_cd": "005930", "stk_nm": "삼성전자", "cur_prc": "+70100",
+                                                                  "pred_pre": "-900", "flu_rt": "-1.27", "trde_prica": "1234567"}]})
+        if api == "ka10027":
+            assert json["sort_tp"] in ("1", "3")
+            return _Resp({"return_code": 0, "pred_pre_flu_rt_upper": [{"stk_cd": "123456", "stk_nm": "급등주", "cur_prc": "+5000",
+                                                                       "pred_pre": "+1150", "flu_rt": "+29.87"}]})
+        if api in ("kt00018", "kt00001", "ka00001"):
+            return _FakeKiwoom.post(self, url, json, headers, timeout)
+        return super().post(url, json, headers, timeout)
+
+
+def test_invest_book_candles_rank_info_home_alerts(rt):
+    rt.settings.update({"kiwoom_view": {"appkey": "kv", "secretkey": "s", "mock": False}})
+    rt.account.client().session = _FakeInvestKiwoom()
+    c = create_app(rt).test_client()
+    b = c.get("/api/invest/book/kr/005930").get_json()
+    assert len(b["asks"]) == 10 and b["asks"][0] == {"price": 70200, "qty": 1200} and b["bids"][0]["price"] == 70100
+    assert b["asks"][9]["price"] == 71100 and b["tot_bid"] == 42000
+    t = c.get("/api/invest/ticks/kr/005930").get_json()
+    assert t[0]["t"] == "10:15:30" and t[0]["qty"] == -15 and t[0]["strength"] == 95.2
+    for tf in ("d", "w", "mo", "m1"):
+        cd = c.get(f"/api/invest/candles/kr/005930?tf={tf}").get_json()
+        assert cd["bars"] and set(cd["bars"][0]) == {"t", "o", "h", "l", "c", "v"}, tf
+    r = c.get("/api/invest/rank?mkt=kr&kind=value").get_json()
+    assert r["items"][0]["sym"] == "005930" and r["items"][0]["value"] == 1234567
+    assert c.get("/api/invest/rank?mkt=kr&kind=up").get_json()["items"][0]["change_pct"] == 29.87
+    info = c.get("/api/invest/info/kr/005930").get_json()
+    assert info["items"][0][0] == "시가총액"
+    h = c.get("/api/invest/home").get_json()
+    assert h["account"]["total"] >= 6166000 and h["holdings"][0]["day_pct"] == -1.27 and h["day_pnl"] == -900 * sum(x["qty"] for x in h["holdings"])
+    # 가격 알림: 현재가 70,100 → 70,000 이하 알림은 바로, 80,000 이상은 대기
+    sent = []
+    rt.notify = lambda m: sent.append(m)
+    c.post("/api/invest/alerts", json={"mkt": "kr", "sym": "005930", "name": "삼성전자", "price": 70000})
+    c.post("/api/invest/alerts", json={"mkt": "kr", "sym": "005930", "name": "삼성전자", "price": "80,000"})
+    al = c.get("/api/invest/alerts").get_json()
+    assert {a["cond"] for a in al} == {"above", "below"}
+    rt.market.kr_quote = lambda s: {"price": 69900}
+    assert len(rt.invest.check_alerts(force=True)) == 1 and "69,900원" in sent[0] and "이하" in sent[0]
+    assert c.post("/api/invest/alerts", json={"mkt": "kr", "sym": "005930", "price": "abc"}).status_code == 400

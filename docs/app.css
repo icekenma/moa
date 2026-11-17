@@ -1466,3 +1466,19 @@ dialog.sheet{max-height:calc(92dvh / var(--zoom,1));overflow:hidden;overscroll-b
 .sheet-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 .sheet-body>*{flex-shrink:0}
 dialog.upd{overscroll-behavior:contain}
+
+/* ===== 차트 위 AI 추천 표시 ===== */
+.pk-l{stroke-width:1;stroke-dasharray:4 3}
+.pk-l.tp{stroke:var(--up)}.pk-l.sl{stroke:var(--down)}.pk-l.en{stroke:var(--ink2);stroke-dasharray:1.5 2.5}
+.pk-t{font-size:7.5px;font-weight:800;paint-order:stroke;stroke:var(--card);stroke-width:2.5px}
+.pk-t.tp{fill:var(--up)}.pk-t.sl{fill:var(--down)}.pk-t.en{fill:var(--ink2)}.pk-t.rec{fill:var(--amber)}
+.pk-v{stroke:var(--amber);stroke-width:1.2}.pk-v.end{stroke:var(--ink3);stroke-dasharray:2 3;stroke-width:.8}
+.pk-zone{fill:color-mix(in srgb,var(--amber) 6%,transparent)}
+.pk-win{fill:color-mix(in srgb,var(--up) 10%,transparent)}.pk-lose{fill:color-mix(in srgb,var(--down) 10%,transparent)}
+.pk-dot{fill:var(--amber);stroke:var(--card);stroke-width:1.5}
+.pk-info{gap:7px;border-color:color-mix(in srgb,var(--amber) 35%,transparent)!important}
+.pk-lv{display:grid;grid-template-columns:repeat(auto-fit,minmax(78px,1fr));gap:5px}
+.pk-lv>div{display:flex;flex-direction:column;padding:6px 9px;border-radius:10px;background:color-mix(in srgb,var(--ink) 6%,transparent)}
+.pk-lv span{font-size:9.5px;font-weight:700;color:var(--ink3)}.pk-lv b{font-size:13px;font-weight:800}
+.pk-lv .tp b{color:var(--up)}.pk-lv .sl b{color:var(--down)}
+.pk-info .btn{align-self:flex-start}

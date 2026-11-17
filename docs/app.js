@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2110";
+const UI_VERSION = "261117.2113";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -281,7 +281,7 @@ const MENU = {
   home: { title: "홈", subs: [["summary", "요약"], ["activity", "최근 활동"]] },
   ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["fixed", "고정비"], ["cards", "카드"], ["analysis", "분석"], ["budget", "예산"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
-  invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["scalp", "단타"], ["dca", "적립"]], extra: { backtest: "scalp", rules: "scalp", sweep: "scalp", stock: "home", account: "home" } },
+  invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["dca", "적립"]], extra: { scalp: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
   settings: { title: "설정", subs: [["connect", "서버"], ["accounts", "계좌 연결"], ["trading", "매매"], ["ai", "AI"], ["theme", "화면"], ["app", "앱 정보"]] },
 };
 const lastSub = {};
@@ -350,7 +350,7 @@ async function route() {
   const page = pages[h.name];
   const tabName = h.name;
   document.documentElement.dataset.sec = h.name;
-  document.documentElement.dataset.sub = h.sub || "";
+  document.documentElement.dataset.sub = (h.sub === "scalp" ? "ai" : h.sub) || "";
   $$(".tab").forEach((a) => {
     const on = a.dataset.tab === tabName;
     a.classList.toggle("on", on);
@@ -456,7 +456,7 @@ pages.home = {
   },
   async summary() {
     const d = await GET("/api/home");
-    const L = d.ledger, A = d.assets, S = d.scalp, D = d.dca;
+    const L = d.ledger, A = d.assets, D = d.dca, AI = d.ai || {};
     const m = Number(L.month.slice(5));
     const hero = L.budget > 0
       ? (L.remaining > 0 ? `${m}월은 ${L.days_left}일 남았고,<br>하루 <span class="hl">${won(L.per_day)}원</span>씩 쓸 수 있어요`
@@ -487,10 +487,11 @@ pages.home = {
           ${A.history.length >= 2 ? lineChart([{ values: A.history.map((h) => h.net) }], { h: 72, label: "월별 순자산 추이" }) : ""}`
         : `<div class="small muted">계좌를 등록하면 순자산을 매달 기록해요</div>`}
       </a>
-      <a class="card dark dom-night" href="#invest/scalp" style="text-decoration:none">
-        <div class="card-head"><h2>오늘의 투자</h2><span class="tiny" style="color:#C5CCD6">${esc(S.mode_label || "")}</span></div>
+      <a class="card dark dom-night" href="#invest/ai" style="text-decoration:none">
+        <div class="card-head"><h2>오늘의 투자</h2><span class="tiny" style="color:#C5CCD6">AI 추천 ›</span></div>
         <div class="grid2">
-          <div><div class="small muted">단타 실현손익</div><div class="mid">${signed(S.today.realized)}원</div><div class="tiny" style="color:#C5CCD6">${STATE[S.state]} · ${S.today.closed}건</div></div>
+          <div><div class="small muted">AI 자동 익절·손절</div><div class="mid">${AI.watching ? `감시 ${AI.watching}` : "대기"}</div>
+            <div class="tiny" style="color:#C5CCD6">${AI.done_today ? `오늘 정리 ${AI.done_today}건 · 평균 ${pct(AI.avg_pct, 2)}` : AI.picks_today ? `오늘 추천 ${AI.picks_today}회` : "AI 탭에서 추천 받기"}</div></div>
           <div><div class="small muted">적립 다음 매수</div>${D.schedule.length ? `<div class="mid">${korDate(D.schedule[0].date, false)}</div><div class="tiny" style="color:#C5CCD6">${won(D.schedule[0].amount)}원</div>` : `<div class="small muted">플랜 없음</div>`}</div>
         </div>
       </a>
@@ -1090,7 +1091,7 @@ pages.assets = {
       ${d.groups.map((g) => `<div class="sec-title">${esc(g.label)} · ${g.type === "debt" ? "-" : ""}${won(g.total)}원</div>
         <section class="card tight"><div class="list">${g.items.map((a) => `<button type="button" class="item" data-edit="${a.id}">
           <span class="ico ${hue(g.label)}">${esc(g.label.slice(0, 2))}</span>
-          <span class="main"><b>${esc(a.name)}</b><span class="sub">${a.linked ? ({ scalp: "단타 계좌와 연결", dca: "장기 계좌와 연결", kiwoom: "내 키움 계좌와 연결" }[a.linked]) : esc(a.note || "직접 입력")}${a.sync_error ? " · 연결 실패" : ""}</span></span>
+          <span class="main"><b>${esc(a.name)}</b><span class="sub">${a.linked ? ({ scalp: "기본 계좌와 연결", dca: "장기 계좌와 연결", kiwoom: "내 키움 계좌와 연결" }[a.linked]) : esc(a.note || "직접 입력")}${a.sync_error ? " · 연결 실패" : ""}</span></span>
           <span class="end"><b>${g.type === "debt" ? "-" : ""}${won(a.balance)}</b></span></button>`).join("")}</div></section>`).join("")
         || `<section class="card"><div class="empty">통장, 예적금, 연금, 대출을 등록하면<br>순자산을 계산해요</div></section>`}`;
     if (h.sub === "accounts") { view.innerHTML = groupsHtml; fab("계좌", () => this.sheet(d, null)); }
@@ -1114,7 +1115,7 @@ pages.assets = {
       <label class="field">이름<input id="aName" value="${esc(e?.name || "")}" placeholder="예: 생활비 통장"></label>
       <label class="field">종류<select id="aType">${Object.entries(d.types).map(([k, v]) => `<option value="${k}" ${e?.type === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
       <label class="field">매매 계좌와 연결<select id="aLink"><option value="">연결 안 함(잔액 직접 입력)</option>
-        <option value="scalp" ${e?.linked === "scalp" ? "selected" : ""}>단타 계좌 평가금 자동 반영</option>
+        <option value="scalp" ${e?.linked === "scalp" ? "selected" : ""}>기본 계좌 평가금 자동 반영</option>
         <option value="dca" ${e?.linked === "dca" ? "selected" : ""}>장기투자 계좌 평가금 자동 반영</option>
         <option value="kiwoom" ${e?.linked === "kiwoom" ? "selected" : ""}>내 키움 계좌 총자산 자동 반영</option></select></label>
       <label class="field" id="aBalWrap">잔액<input id="aBal" class="r" inputmode="numeric" value="${e ? won(e.balance) : ""}" placeholder="0원"></label>
@@ -1150,7 +1151,7 @@ pages.invest = {
     if (sub === "rules") return this.rules();
     if (sub === "sweep") return this.sweep();
     if (sub === "stock") return mkt.detail(h);
-    investState.tab = ["home", "ai", "market", "discover", "account", "trade", "scalp", "dca"].includes(sub) ? sub : "home";
+    investState.tab = ["home", "ai", "market", "discover", "account", "trade", "dca"].includes(sub) ? sub : sub === "scalp" ? "ai" : "home";
     setTop("투자", { menu: "invest", sub: investState.tab });
     view.innerHTML = `<div id="iv" style="display:flex;flex-direction:column;gap:8.5px"></div>`;
     await this.fill();
@@ -1493,7 +1494,7 @@ pages.invest = {
       ${demoNotice(d.data_source)}
       ${d.accounts.filter((a) => (a.error || a.us_error) && !a.same_as).map((a) => `<div class="notice warn">${esc(a.label)}: ${esc(a.error || a.us_error)}</div>`).join("")}
       <div class="grid2">${d.accounts.map((a) => {
-        if (a.same_as) return `<div class="tile"><div class="lbl">${esc(a.label)}</div><div class="val" style="font-size:12px">단타 계좌와 같은 계좌</div>
+        if (a.same_as) return `<div class="tile"><div class="lbl">${esc(a.label)}</div><div class="val" style="font-size:12px">기본 계좌와 같은 계좌</div>
           <div class="tiny">같은 키움 앱키라 같은 계좌예요. 잔고는 왼쪽에 함께 보여요.</div></div>`;
         const H = a.holdings.concat(a.us_holdings || []);
         const val = H.reduce((s, x) => s + x.value, 0), pnl = H.reduce((s, x) => s + x.pnl, 0);
@@ -1503,7 +1504,7 @@ pages.invest = {
       <div class="tiny" style="padding:0 3px">${esc(d.now.replace("T", " "))} · ${d.market_open ? "장 운영 중" : "장 마감"} · ${esc(d.accounts.map((a) => a.mode_label || "준비 안 됨").join(" / "))}</div>
       <div class="sec-title">보유 종목</div>
       <section class="card tight"><div class="list">${rows.length ? rows.map((x) => `<button type="button" class="item" data-sell="${x.eng}|${esc(x.code)}|${x.sellable ?? x.qty}">
-        <span class="ico ${x.market === "us" ? "" : x.eng === "scalp" ? "y" : ""}">${x.market === "us" ? "미국" : x.eng === "scalp" ? "단타" : "장기"}</span>
+        <span class="ico ${x.market === "us" ? "" : x.eng === "scalp" ? "y" : ""}">${x.market === "us" ? "미국" : x.eng === "scalp" ? "기본" : "장기"}</span>
         <span class="main"><b>${esc(x.name)}</b><span class="sub">${won(x.qty)}주 · 평균 ${x.market === "us" ? usd(x.avg_price) : won(x.avg_price)} · 현재 ${x.market === "us" ? usd(x.price) : won(x.price)}</span></span>
         <span class="end"><b>${won(x.value)}</b><span class="small ${tone(x.pnl)}" style="font-weight:700">${signed(x.pnl)} (${pct(x.pnl_pct, 1)})</span></span></button>`).join("")
         : `<div class="empty">보유 종목이 없어요</div>`}</div></section>
@@ -2499,7 +2500,7 @@ function orderSheet(o) {
       : `${esc(S.q.name)} 주문 기준가 <b style="color:${gap ? "var(--up)" : "var(--ink)"}">${won(S.q.price)}원</b>${gap ? " (가상 시세)" : ""}`;
     openSheet(US ? "미국 주식 주문" : "직접 주문", `
       ${seg("시장", [["kr", "국내"], ["us", "미국"]], S.market, "on-card")}
-      ${seg("계좌", [["scalp", "단타 계좌"], ["dca", "장기투자 계좌"]], S.engine, "on-card")}
+      ${seg("계좌", [["scalp", "기본 계좌"], ["dca", "장기투자 계좌"]], S.engine, "on-card")}
       <div class="o-mode ${realOrder ? "real" : ""}">${a ? (a.error ? `<b>주문할 수 없어요</b> ${esc(a.error)}`
         : usBlocked ? `<b>미국 주식은 키움 계좌로만</b> 이 계좌는 '앱 내 모의'라 미국 주문을 할 수 없어요. 설정 → 계좌 연결에서 주문 방식을 '키움으로 주문'으로 바꿔 주세요`
         : realOrder ? `<b>키움 실전 계좌</b> 실제 돈으로 주문이 나가요${US ? ". 달러(또는 원화주문 설정)로 결제돼요" : ""}`
@@ -2661,7 +2662,7 @@ pages.settings = {
       <section class="card ai-cr" id="crCard">${creditHtml(st.credit)}</section>
       <section class="card">
         <div class="card-head"><h2>Claude AI 도우미</h2><span class="tag ${st.configured ? "g" : "warn"}">${st.configured ? "연결됨" : "키 필요"}</span></div>
-        <div class="small muted">투자 화면의 ✦ 버튼에서 종목 정리, 포트폴리오 점검, 단타 복기, 훑기 해석, 자유 질문을 할 수 있어요. AI는 주문하지 않아요.</div>
+        <div class="small muted">투자 화면의 ✦ 버튼에서 종목 정리, 포트폴리오 점검, AI 종목 추천, 자유 질문을 할 수 있어요. AI는 주문하지 않아요.</div>
         <label class="field">Claude API 키<input id="aiKey" type="password" value="${esc(c.api_key || "")}" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off"></label>
         <div class="tiny">platform.claude.com/settings/keys에서 만들어요. 키는 노트북에만 저장하고 화면엔 가려서 보여요.</div>
         <label class="field">모델<select id="aiModel">${Object.entries(st.models).map(([k, v]) => `<option value="${k}" ${k === c.model ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
@@ -2718,7 +2719,7 @@ pages.settings = {
         <section class="card"><h2>미리 보기</h2>
           <div class="hero" style="font-size:16px">하루 <span class="hl">63,700원</span>씩 쓸 수 있어요</div>
           <div class="btns"><button type="button" class="btn dark">저장</button><button type="button" class="btn">취소</button></div>
-          <div class="card dark" style="padding:11px"><div class="small muted">단타 실현손익</div><div class="mid">+38,400원</div></div>
+          <div class="card dark" style="padding:11px"><div class="small muted">오늘 투자 손익</div><div class="mid">+38,400원</div></div>
         </section>
         <button class="btn soft wide" data-reset-theme>기본 색으로 되돌리기</button>
         <div class="tiny" style="text-align:center">글자 크기와 색상은 이 기기에만 저장돼요. 다른 기기는 따로 고를 수 있어요.</div>`;
@@ -2821,7 +2822,7 @@ pages.settings = {
         <button class="btn sm" id="kvTest">저장하고 연결 확인</button>
       </section>
       <div class="sec-title">자동매매 주문 계좌</div>
-      ${acct("scalp", "단타")}
+      ${acct("scalp", "기본")}
       ${acct("dca", "장기투자")}
       <div id="setErr"></div>
       <button class="btn dark wide" id="saveSet">주문 계좌 설정 저장</button>` : `<div class="notice warn">서버에 연결되지 않아 계좌 정보를 불러오지 못했어요.</div>`;
@@ -2835,7 +2836,7 @@ pages.settings = {
         <div class="fields"><label class="field">수수료(%, 한쪽)<input class="r" id="cCom" inputmode="decimal" value="${+(s.costs.commission * 100).toFixed(4)}"></label>
           <label class="field">매도 거래세(%)<input class="r" id="cTax" inputmode="decimal" value="${+(s.costs.tax * 100).toFixed(4)}"></label>
           <label class="field">슬리피지(호가 수)<input class="r" id="cSlip" inputmode="numeric" value="${s.costs.slippage_ticks}"></label></div>
-        <div class="tiny">본인 증권사 수수료와 올해 거래세율로 맞춰 주세요. 단타 손익에 가장 크게 영향을 줘요.</div></section>
+        <div class="tiny">본인 증권사 수수료와 올해 거래세율로 맞춰 주세요. 실제 손익 계산에 쓰여요.</div></section>
       <section class="card"><h2>적립 매수 시간·휴장일</h2>
         <div class="fields"><label class="field">매수 시작<input id="dwS" value="${esc(s.dca_window.start)}"></label><label class="field">매수 마감<input id="dwE" value="${esc(s.dca_window.end)}"></label></div>
         <label class="field">휴장일(YYYY-MM-DD, 줄마다)<textarea id="hol" rows="4">${esc(s.holidays.join("\n"))}</textarea></label>
@@ -2856,7 +2857,7 @@ pages.settings = {
     if ($("#kwCard")) bindKwCard($("#kwCard"));
     $("#bkAdd")?.addEventListener("click", () => bankSheet(null, route));
     $$("[data-bk]").forEach((el) => el.addEventListener("click", () => bankSheet(con.banks.find((b) => b.id == el.dataset.bk), route)));
-    const errs = (e) => { $("#setErr").innerHTML = Object.entries(e || {}).map(([k, v]) => `<div class="notice warn">${esc({ scalp: "단타 계좌", dca: "장기투자 계좌", feed: "시세" }[k] || k)}: ${esc(v)}</div>`).join(""); };
+    const errs = (e) => { $("#setErr").innerHTML = Object.entries(e || {}).map(([k, v]) => `<div class="notice warn">${esc({ scalp: "기본 계좌", dca: "장기투자 계좌", feed: "시세" }[k] || k)}: ${esc(v)}</div>`).join(""); };
     // 지금 화면에 있는 입력란만 모아서 저장한다(다른 2뎁스 화면의 값은 건드리지 않음)
     const collect = () => {
       const out = {};
@@ -2866,7 +2867,7 @@ pages.settings = {
         const real = {}; $$("[data-real]").forEach((i) => (real[i.dataset.real] = i.checked));
         const cash = {}; $$("[data-cash]").forEach((i) => (cash[i.dataset.cash] = num(i.value)));
         out.kiwoom = kiwoom; out.real_orders_allowed = real; out.paper_start_cash = cash;
-        out.trade_mode = { scalp: segVal(view, "단타 주문 방식"), dca: segVal(view, "장기투자 주문 방식") };
+        out.trade_mode = { scalp: segVal(view, "기본 주문 방식"), dca: segVal(view, "장기투자 주문 방식") };
       }
       if ($("[data-kv]")) { const kv = {}; $$("[data-kv]").forEach((i) => (kv[i.dataset.kv] = i.type === "checkbox" ? i.checked : i.value.trim())); out.kiwoom_view = kv; }
       if (segVal(view, "시세 출처")) { out.data_source = segVal(view, "시세 출처"); out.demo_speed = num($("#demoSpeed").value) || 2; }
@@ -2879,7 +2880,7 @@ pages.settings = {
       if ($("#pubUrl")) out.public_url = $("#pubUrl").value.trim().replace(/\/+$/, "");
       return out;
     };
-    ["시세 출처", "단타 주문 방식", "장기투자 주문 방식"].forEach((n) => bindSeg(view, n, () => {}));
+    ["시세 출처", "기본 주문 방식", "장기투자 주문 방식"].forEach((n) => bindSeg(view, n, () => {}));
     $$("[data-cash]").forEach(moneyInput);
     const link = () => {
       if (!info) return "";

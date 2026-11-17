@@ -45,6 +45,8 @@ class Runtime:
         self._lock = threading.RLock()
         self.rebuild()
         self.scalp = ScalpEngine(self)
+        if self.settings.get("scalp_state") != "stopped":  # 화면이 없어진 엔진이 몰래 돌지 않게
+            self.settings.update({"scalp_state": "stopped"})
         self.dca = DcaEngine(self)
         self._stop = threading.Event()
         self._last_dca = 0.0
@@ -120,7 +122,7 @@ class Runtime:
         while not self._stop.is_set():
             try:
                 with self._lock:
-                    self.scalp.tick()
+                    # 단타 엔진은 화면에서 뺐다(AI 탭 자동매매로 대체 예정). 엔진은 멈춘 채로 둔다.
                     try:
                         self.aipick.check()  # AI 추천 종목 자동 익절·손절(5초마다)
                     except Exception as e:

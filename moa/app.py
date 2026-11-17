@@ -172,6 +172,7 @@ def create_app(rt, updater=None):
             ledger=rt.ledger.summary(month), recent=rt.ledger.recent(5),
             assets=rt.assets.overview(),
             scalp={k: sc[k] for k in ("state", "mode_label", "today", "error", "data_source")},
+            ai=rt.aipick.today(),
             dca={"schedule": dc["schedule"], "monthly": dc["monthly"], "value": dc["value"],
                  "gain": dc["gain"], "gain_pct": dc["gain_pct"], "plans": len(dc["plans"])},
             feed_error=rt.errors.get("feed"))
@@ -276,7 +277,7 @@ def create_app(rt, updater=None):
         same = (st["trade_mode"]["scalp"] == st["trade_mode"]["dca"] == "kiwoom"
                 and st["kiwoom"]["scalp"].get("appkey") == st["kiwoom"]["dca"].get("appkey")
                 and bool(st["kiwoom"]["scalp"].get("mock")) == bool(st["kiwoom"]["dca"].get("mock")))
-        for eng, label in (("scalp", "단타 계좌"), ("dca", "장기투자 계좌")):
+        for eng, label in (("scalp", "기본 계좌"), ("dca", "장기투자 계좌")):
             b = rt.brokers.get(eng)
             item = {"engine": eng, "label": label, "error": rt.errors.get(eng),
                     "mode_label": b.label if b else None, "holdings": [], "cash": None}

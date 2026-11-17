@@ -276,6 +276,14 @@ class AIPick:
                                              "비중 5%, 목표·손절을 좁게 잡은 보수적 진입이에요"],
                 "risks": ["시장 분위기가 약해 승률이 낮아요"], "auto": True}
 
+    def today(self):
+        d = datetime.now().strftime("%Y-%m-%d")
+        w = self.rt.db.one("SELECT COUNT(*) n FROM ai_guards WHERE status='watching'")["n"]
+        done = self.rt.db.q("SELECT base, entry, exit_price FROM ai_guards WHERE status='done' AND closed_at LIKE ?", (d + "%",))
+        pl = [(r["exit_price"] / (r["base"] or r["entry"]) - 1) * 100 for r in done if r["exit_price"] and (r["base"] or r["entry"])]
+        n = self.rt.db.one("SELECT COUNT(*) n FROM ai_picks WHERE ts LIKE ?", (d + "%",))["n"]
+        return {"watching": w, "done_today": len(done), "avg_pct": round(sum(pl) / len(pl), 2) if pl else 0, "picks_today": n}
+
     def history(self):
         rows = self.rt.db.q("SELECT id,ts,mkt,model,usd,stance,view,picks FROM ai_picks ORDER BY id DESC LIMIT 15")
         for r in rows:

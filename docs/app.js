@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.0656";
+const UI_VERSION = "261118.0702";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1558,7 +1558,7 @@ pages.invest = {
       ${table("추천 받은 시간대별", st.by_tod, (k) => k)}
       ${table("직접 산 것 vs 안 산 것", st.by_bought, (k) => k)}
       <div class="sec-title">추천 하나하나 · ${st.rows.length}건</div>
-      <section class="card tight"><div class="list">${st.rows.length ? st.rows.map((r) => `<a class="item as-r" href="#invest/stock?m=${r.mkt}&s=${encodeURIComponent(r.sym)}">
+      <section class="card tight"><div class="list">${st.rows.length ? st.rows.map((r) => `<a class="item as-r" href="#invest/stock?m=${r.mkt}&s=${encodeURIComponent(r.sym)}&pk=${r.pick_id}">
         <span class="as-badge r-${esc(r.result || "진행 중")}">${esc(r.result || "진행 중")}</span>
         <span class="main"><b>${esc(r.name || r.sym)} ${r.bought ? `<span class="tag g">샀음</span>` : ""}</b>
           <span class="sub">${esc(r.ts.slice(5, 16).replace("T", " "))} · ${r.mkt === "us" ? "미국" : "국내"} · ${esc(mn(r.model))} · 예측 ${r.win_prob ?? "-"}% · +${r.target_pct}/−${r.stop_pct}${r.mfe != null ? ` · 최대 ${pct(r.mfe, 1)}/${pct(r.mae, 1)}` : ""}</span></span>

@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1847";
+const UI_VERSION = "261117.1853";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1202,7 +1202,7 @@ pages.invest = {
       <div id="openBox">${this.openHtml(this.openMemo)}</div>
       <div class="sec-title">최근 주문</div>
       <section class="card tight"><div class="list">${d.orders.length ? d.orders.slice(0, 10).map((o) => {
-        const st = { cancel: ["취소", ""], cancelled: ["취소됨", ""], accepted: ["접수", "y"], filled: ["체결", "g"] }[o.status] || [o.status, ""];
+        const st = { cancel: ["취소", ""], cancelled: ["취소됨", ""], accepted: ["접수·예상가", "y"], partial: ["일부 체결", "y"], filled: ["체결", "g"] }[o.status] || [o.status, ""];
         return `<div class="item">
         <span class="ico" style="color:${o.status === "cancel" ? "var(--ink3)" : o.side === "buy" ? "var(--up)" : "var(--down)"}">${o.status === "cancel" ? "취소" : o.side === "buy" ? "매수" : "매도"}</span>
         <span class="main"><b>${esc(o.name || o.code)}</b><span class="sub">${o.ts.slice(5, 16).replace("T", " ")} · ${esc(o.msg)}</span></span>

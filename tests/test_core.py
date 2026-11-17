@@ -1112,3 +1112,37 @@ def test_empty_unfilled_is_not_error_and_orders_settle(rt):
     d = c.get("/api/orders/open").get_json()
     assert d["errors"] == {} and d["items"] == []
     assert c.get("/api/stocks").get_json()["orders"][0]["status"] == "filled"
+
+
+def test_orders_get_real_fill_prices(rt):
+    class F(_FakeKiwoom):
+        def post(self, url, json=None, headers=None, timeout=None):
+            api = (headers or {}).get("api-id")
+            if api == "kt10000":
+                return _Resp({"return_code": 0, "ord_no": "0001234"})
+            if api == "kt10001":
+                return _Resp({"return_code": 0, "ord_no": "0001240"})
+            if api == "ka10075":
+                return _Resp({"return_code": 0, "oso": []})
+            if api == "kt00007":
+                assert json["qry_tp"] == "4" and len(json["ord_dt"]) == 8
+                return _Resp({"return_code": 0, "acnt_ord_cntr_prps_dtl": [
+                    {"ord_no": "0001234", "cntr_qty": "1", "cntr_uv": "192400"},
+                    {"ord_no": "0001240", "cntr_qty": "1", "cntr_uv": "192600"},
+                    {"ord_no": "0001240", "cntr_qty": "1", "cntr_uv": "192800"}]})
+            if api == "ust21050":
+                return _Resp({"return_code": 0, "result_list": []})
+            return super().post(url, json, headers, timeout)
+    rt.settings.update({"trade_mode": {"scalp": "kiwoom"}, "real_orders_allowed": {"scalp": True},
+                        "kiwoom": {"scalp": {"appkey": "kf", "secretkey": "s", "mock": False}}})
+    rt.rebuild()
+    rt.brokers["scalp"].client.session = F()
+    rt.feed.quote = lambda code: {"price": 192300}
+    rt.feed.name = lambda code: "삼성전자"
+    c = create_app(rt).test_client()
+    c.post("/api/order", json={"engine": "scalp", "side": "buy", "code": "005930", "qty": 1})
+    c.post("/api/order", json={"engine": "scalp", "side": "sell", "code": "005930", "qty": 3})
+    c.get("/api/orders/open")
+    o = {x["broker_no"]: x for x in c.get("/api/stocks").get_json()["orders"]}
+    assert o["0001234"]["status"] == "filled" and o["0001234"]["fill_price"] == 192400 and "체결 1주 192,400원" in o["0001234"]["msg"]
+    assert o["0001240"]["status"] == "partial" and o["0001240"]["fill_price"] == 192700  # 2주 가중 평균, 3주 중 일부

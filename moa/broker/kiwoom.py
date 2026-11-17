@@ -24,6 +24,8 @@ API = {
     "sell": ("/api/dostk/ordr", "kt10001"),         # 주식 매도주문
     "cancel": ("/api/dostk/ordr", "kt10003"),       # 주식 취소주문
     "unfilled": ("/api/dostk/acnt", "ka10075"),     # 미체결요청
+    "fills": ("/api/dostk/acnt", "kt00007"),        # 계좌별주문체결내역상세(체결만)
+    "us_fills": ("/api/us/acnt", "ust21150"),       # 미국주식 일별 주문체결내역
     "balance": ("/api/dostk/acnt", "kt00018"),
     # 미국주식(키움 공식 TR)
     "us_info": ("/api/us/stkinfo", "usa10100"),      # 종목 조회(거래소 구분 확인)
@@ -37,8 +39,8 @@ API = {
     "deposit": ("/api/dostk/acnt", "kt00001"),      # 예수금상세현황요청
 }
 MIN_INTERVAL = 0.21  # 같은 앱키의 호출 간 최소 간격(초). 키움 조회 한도(초당 약 5회) 대비.
-SLOW_APIS = {"kt00001": 1.1, "kt00018": 1.1, "ka10075": 1.0, "ust21050": 1.0, "ust21070": 1.0, "ust21110": 1.0}  # 계좌 조회는 같은 TR을 1초에 한 번만
-CACHE_APIS = {"kt00001": 2.5, "kt00018": 2.5, "ka10075": 2.0, "ust21050": 2.0, "ust21070": 2.5, "ust21110": 2.5,
+SLOW_APIS = {"kt00007": 1.0, "ust21150": 1.0, "kt00001": 1.1, "kt00018": 1.1, "ka10075": 1.0, "ust21050": 1.0, "ust21070": 1.0, "ust21110": 1.0}  # 계좌 조회는 같은 TR을 1초에 한 번만
+CACHE_APIS = {"kt00007": 5.0, "ust21150": 5.0, "kt00001": 2.5, "kt00018": 2.5, "ka10075": 2.0, "ust21050": 2.0, "ust21070": 2.5, "ust21110": 2.5,
               "usa10100": 86400, "usa20100": 2.0}  # 여러 화면·엔진이 동시에 물어도 키움에는 한 번만
 _SHARED = {}  # (앱키, 모의 여부) -> 토큰·호출 간격·응답 저장을 앱키 하나당 하나로 공유
 _SHARED_LOCK = threading.Lock()
@@ -250,6 +252,34 @@ class KiwoomClient:
         exch = exch or self.us_exchange(sym)[0]
         d = self.call("us_cancel", {"orig_ord_no": str(ord_no), "stex_tp": exch, "stk_cd": sym})
         return d.get("ord_no", "")
+
+    @staticmethod
+    def _sum_fills(rows, qty_key, px_key):
+        """주문번호별 체결 수량과 평균 체결가(여러 번 나눠 체결돼도 가중 평균)."""
+        out = {}
+        for r in rows or []:
+            no = str(r.get("ord_no", "")).strip().lstrip("0")
+            q, px = num(r.get(qty_key)), num(r.get(px_key))
+            if not no or q <= 0 or px <= 0:
+                continue
+            a = out.setdefault(no, [0.0, 0.0])
+            a[0] += q
+            a[1] += q * px
+        return {k: {"qty": int(v[0]), "price": round(v[1] / v[0], 4)} for k, v in out.items()}
+
+    @_empty_ok
+    def fills_today(self):
+        """오늘 국내 체결 내역(kt00007): {주문번호: {qty, price}}."""
+        d = self.call("fills", {"ord_dt": datetime.now().strftime("%Y%m%d"), "qry_tp": "4", "stk_bond_tp": "1",
+                                "sell_tp": "0", "stk_cd": "", "fr_ord_no": "", "dmst_stex_tp": "%"})
+        return self._sum_fills(d.get("acnt_ord_cntr_prps_dtl"), "cntr_qty", "cntr_uv")
+
+    @_empty_ok
+    def us_fills_today(self):
+        """오늘 미국 체결 내역(ust21150): {주문번호: {qty, price(달러)}}."""
+        d = self.call("us_fills", {"ord_dt": "", "query_tp": "5", "slby_tp": "0", "stex_tp": "", "stk_cd": "",
+                                   "oppo_trde_tp": "%", "fr_ord_no": ""})
+        return self._sum_fills(d.get("result_list"), "cntr_qty", "cntr_uv")
 
     @_empty_ok
     def us_unfilled(self):

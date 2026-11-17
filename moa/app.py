@@ -412,18 +412,41 @@ def create_app(rt, updater=None):
                 and st["kiwoom"]["scalp"].get("appkey") == st["kiwoom"]["dca"].get("appkey")
                 and bool(st["kiwoom"]["scalp"].get("mock")) == bool(st["kiwoom"]["dca"].get("mock")))
 
-    def settle_orders(eng, ok_kr, ok_us, items):
-        """미체결 목록에 없는 오늘 '접수' 주문은 체결된 것으로 바꾼다(조회가 성공한 시장만)."""
+    def settle_orders(eng, ok_kr, ok_us, items, cl=None):
+        """오늘 '접수' 주문을 키움 체결 내역과 맞춰 실제 체결가·체결 수량을 반영한다.
+        체결 내역 조회가 안 되면 미체결 목록에 없는 주문을 체결로만 표시한다(가격은 예상가 유지)."""
         today = rt.feed.now().date().isoformat()
         open_nos = {str(o["ord_no"]).lstrip("0") for o in items}
         engines = ("scalp", "dca") if eng == "scalp" and same_account() else (eng,)
-        for o in rt.db.q("SELECT id, code, broker_no, ts FROM orders WHERE status='accepted' AND ts >= ? AND engine IN (%s)"
-                         % ",".join("?" * len(engines)), (today,) + engines):
+        rows = rt.db.q("SELECT id, code, qty, broker_no, msg FROM orders WHERE status IN ('accepted','partial') AND ts >= ? "
+                       "AND engine IN (%s)" % ",".join("?" * len(engines)), (today,) + engines)
+        if not rows:
+            return
+        fills = {"kr": None, "us": None}
+        if cl is not None:
+            try:
+                fills["kr"] = cl.fills_today()
+            except Exception:
+                pass
+            if any(not str(o["code"]).isdigit() for o in rows):
+                try:
+                    fills["us"] = cl.us_fills_today()
+                except Exception:
+                    pass
+        for o in rows:
             no = str(o["broker_no"] or "").split("|")[0].lstrip("0")
             us = not str(o["code"]).isdigit()
-            if not no or (us and not ok_us) or (not us and not ok_kr):
+            if not no:
                 continue
-            if no not in open_nos:
+            f = (fills["us"] if us else fills["kr"])
+            if f is not None and no in f:
+                st = "filled" if f[no]["qty"] >= o["qty"] else "partial"
+                unit = "달러" if us else "원"
+                px = f[no]["price"]
+                msg = (o["msg"] or "").split(" · 체결")[0] + f" · 체결 {f[no]['qty']}주 {px:,.2f}{unit}" if us else \
+                      (o["msg"] or "").split(" · 체결")[0] + f" · 체결 {f[no]['qty']}주 {px:,.0f}{unit}"
+                rt.db.x("UPDATE orders SET status=?, fill_price=?, msg=? WHERE id=?", (st, px, msg, o["id"]))
+            elif ((us and ok_us) or (not us and ok_kr)) and no not in open_nos:  # 체결 내역엔 아직 없지만 미체결도 아님
                 rt.db.x("UPDATE orders SET status='filled' WHERE id=?", (o["id"],))
 
     @app.get("/api/orders/open")
@@ -449,7 +472,7 @@ def create_app(rt, updater=None):
                 except Exception as e:
                     errors.setdefault(eng, f"미국 미체결 조회 실패: {e}")
                 try:
-                    settle_orders(eng, ok_kr, ok_us, mine)
+                    settle_orders(eng, ok_kr, ok_us, mine, cl)
                 except Exception:
                     pass
             out += mine

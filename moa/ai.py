@@ -128,6 +128,35 @@ class AI:
                 "exhausted": bool(self.rt.db.get_setting("ai_credit_low")),
                 "source": "콘솔 전체(Admin API)" if admin is not None and admin >= moa else "moa 사용분"}
 
+    # 화면 공통 비용 표시: 예상 비용 + 현재 잔액
+    KIND_TOK = {"stock": (9000, 1500), "portfolio": (7000, 1600), "review": (9000, 1500), "sweep": (7000, 1500),
+                "chat": (6000, 1200), "pick": (14000, 2200), "test": (30, 10)}
+
+    def fx(self):
+        try:
+            return float(self.rt.market.yh_quote("USDKRW=X")["price"]) or FX_DEFAULT
+        except Exception:
+            return FX_DEFAULT
+
+    def meter(self, kind="chat", model=None, web=None):
+        c = self.conf()
+        model = model if model in MODELS else (c.get("model") or "claude-sonnet-5-5")
+        web = c.get("web_search", True) if web is None else web
+        if kind == "sweep" or kind == "test":
+            web = False
+        pi, po = _model_price(model)
+        tin, tout = self.KIND_TOK.get(kind, (6000, 1200))
+        lo = (tin * pi + tout * po) / 1e6
+        hi = ((tin + (30000 if web else 0)) * pi + tout * 1.8 * po) / 1e6 + (3 * SEARCH_USD if web else 0)
+        rows = self.rt.db.q("SELECT usd FROM ai_usage WHERE kind=? AND model=? ORDER BY id DESC LIMIT 10", (kind, model))
+        avg = sum(r["usd"] for r in rows) / len(rows) if rows else None
+        fx = self.fx()
+        cr = self.credit()
+        return {"kind": kind, "model": model, "model_name": MODELS.get(model, (model,))[0].split(" · ")[0], "web": bool(web),
+                "usd_lo": round(lo, 4), "usd_hi": round(hi, 4), "avg_usd": None if avg is None else round(avg, 4), "n": len(rows),
+                "fx": fx, "configured": self.configured(), "credit": cr,
+                "month_usd": round(self.month_usd()[0], 4), "budget_usd": c.get("budget_usd")}
+
     def status(self):
         c = self.conf()
         used, n = self.month_usd()
@@ -305,7 +334,7 @@ class AI:
                 yield {"t": "status", "msg": f"추천 결과 정리 실패: {e}"}
             yield {"t": "picks", **(res or {"picks": [], "stance": None, "view": "", "note": "AI 답이 비어 있어요. 다시 받아 보세요"})}
         cr = self.credit()
-        yield {"t": "done", "title": title, "usd": round(usd, 4), "krw": int(round(usd * fx)), "model": model,
+        yield {"t": "done", "fx": fx, "credit": cr, "title": title, "usd": round(usd, 4), "krw": int(round(usd * fx)), "model": model,
                "searches": usage["searches"], "in": usage["in"], "out": usage["out"],
                "left": cr.get("left") if cr.get("set") else None}
 

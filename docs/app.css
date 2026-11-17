@@ -1163,3 +1163,25 @@ details.card>summary::after{border-color:var(--sec-i)}
 .as-badge.r-시간.정리,.as-badge[class*="시간"]{background:var(--amber-s);color:var(--amber-i)}
 .as-badge.r-진행.중,.as-badge[class*="진행"]{background:var(--violet-s);color:var(--violet-i)}
 .as-r{text-decoration:none;color:inherit}
+
+/* ===== AI 비용 표시(공통) ===== */
+.cm{display:grid;grid-template-columns:1fr 1fr;gap:0;border-radius:14px;overflow:hidden;border:1px solid color-mix(in srgb,var(--violet) 18%,transparent);
+  background:linear-gradient(120deg,color-mix(in srgb,var(--violet-s) 85%,transparent),rgba(255,255,255,.7));box-shadow:var(--glass-hi);
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);animation:rise .4s var(--spring) both}
+.cm>div,.cm>a{display:flex;flex-direction:column;gap:1px;padding:9px 12px;min-width:0;text-decoration:none;color:inherit}
+.cm-r{border-left:1px solid color-mix(in srgb,var(--violet) 14%,transparent);position:relative}
+.cm span{font-size:9.5px;font-weight:700;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cm b{font-size:15px;font-weight:900;letter-spacing:-0.03em;color:var(--violet-i)}
+.cm small{font-size:9.5px;font-weight:600;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cm .cm-na{color:var(--ink3);font-size:13px}
+.cm-g{display:block;height:4px;border-radius:2px;background:color-mix(in srgb,var(--violet) 14%,#fff);margin-top:4px;overflow:hidden}
+.cm-g i{display:block;height:100%;border-radius:2px;background:linear-gradient(90deg,var(--violet),var(--pink))}
+.cm.used{background:linear-gradient(120deg,rgba(255,255,255,.75),color-mix(in srgb,var(--violet-s) 70%,transparent))}
+.cm.used .cm-l b{color:var(--ink)}
+.cm.low .cm-r b{color:var(--up)}.cm.low .cm-g i{background:var(--up)}
+.cm-slot:empty{display:none}
+#apMeter{margin-top:2px}
+.ai-btn{flex-wrap:wrap;row-gap:1px}
+.ai-btn .ai-est{flex-basis:100%;text-align:center;font-size:9.5px;font-weight:600;color:rgba(255,255,255,.72);letter-spacing:0}
+.ai-turn .ai-cost{margin-top:6px}
+#oErr .notice{white-space:pre-line}

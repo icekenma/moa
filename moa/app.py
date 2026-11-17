@@ -354,6 +354,18 @@ def create_app(rt, updater=None):
             raise OrderError("미국 종목 기호(예: AAPL)를 넣어 주세요")
         return sym
 
+    def us_hint(msg):
+        """키움 미국 주문 거절 사유에 바로 할 일을 붙인다(계좌 쪽 설정이라 앱에서 대신 못 하는 것들)."""
+        tips = [("571771", "키움에서 '해외증권 위험고지' 확인이 한 번 필요해요. 영웅문S# → 메뉴 → 해외주식 → 해외주식 위험고지(또는 키움 홈페이지 → 해외주식 → 위험고지 확인)에서 동의한 뒤 다시 주문하세요."),
+                ("위험고지", "키움에서 '해외증권 위험고지' 확인이 한 번 필요해요. 영웅문S# 해외주식 메뉴에서 동의한 뒤 다시 주문하세요."),
+                ("주문가능", "달러가 부족해요. 영웅문S#에서 환전하거나 '원화주문(통합증거금)' 서비스를 신청하세요."),
+                ("증거금", "달러가 부족해요. 영웅문S#에서 환전하거나 '원화주문(통합증거금)' 서비스를 신청하세요."),
+                ("약정", "해외주식 거래 약정(신청)이 필요해요. 영웅문S# → 해외주식 → 해외주식 거래 신청을 먼저 해 주세요.")]
+        for k, t in tips:
+            if k in msg:
+                return f"{t}\n(키움 응답: {msg})"
+        return msg
+
     def us_order(eng, b, d):
         cl = us_client(b)
         sym = us_sym(d.get("code"))
@@ -374,7 +386,7 @@ def create_app(rt, updater=None):
             try:
                 no, exch = cl.us_order(side, sym, qty, price, exch)
             except Exception as e:
-                raise OrderError(str(e))
+                raise OrderError(us_hint(str(e)))
             est = price
             if est is None:
                 try:
@@ -829,6 +841,12 @@ def create_app(rt, updater=None):
     @app.get("/api/ai/status")
     def ai_status():
         return jsonify(rt.ai.status())
+
+    @app.get("/api/ai/meter")
+    def ai_meter():
+        w = request.args.get("web")
+        return jsonify(rt.ai.meter(request.args.get("kind") or "chat", request.args.get("model"),
+                                   None if w is None else w == "1"))
 
     @app.get("/api/ai/credit")
     def ai_credit():

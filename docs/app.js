@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2150";
+const UI_VERSION = "261117.2220";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1257,6 +1257,7 @@ pages.invest = {
           <div class="ap-models" id="apModels"><div class="empty small loading">불러오는 중</div></div>
           <label class="ap-web"><input type="checkbox" id="apWeb" ${A.web ? "checked" : ""}><span><b>오늘 뉴스·공시 확인</b><small>웹 검색 최대 3회 · 재료 확인으로 정확도↑ · 비용↑</small></span></label>
           <button type="button" class="btn ap-go wide" id="apGo">지금 추천 받기</button>
+          <div id="apMeter" class="cm-slot"></div>
           <div class="tiny" id="apWarn"></div>
         </section>
         <div id="apOut"></div>
@@ -1313,14 +1314,15 @@ pages.invest = {
     $("#apFx").textContent = E.fx ? `환율 ${won(E.fx)}원 기준` : "";
     const go = $("#apGo");
     go.disabled = A.busy || !E.configured || !E.kiwoom;
-    go.innerHTML = A.busy ? "AI가 고르는 중…" : `<span class="ai-spark" aria-hidden="true">✦</span> 지금 추천 받기 <small>${this.apCost(cur)}</small>`;
+    go.innerHTML = A.busy ? "AI가 고르는 중…" : `<span class="ai-spark" aria-hidden="true">✦</span> 지금 추천 받기`;
+    aiMeter.get("pick", A.model, A.web).then((m) => { A.meter = m; if ($("#apMeter")) $("#apMeter").innerHTML = meterHTML(m); }).catch(() => {});
     if (!E.configured) $("#apWarn").innerHTML = `Claude API 키가 필요해요. <a href="#settings/ai">설정 → AI</a>`;
     else if (!E.kiwoom) $("#apWarn").innerHTML = `실시간 순위를 쓰려면 키움 계좌 연결이 필요해요. <a href="#settings/accounts">연결하기</a>`;
   },
   async apRun() {
     const A = this.ap;
     if (A.busy) return;
-    A.busy = true; A.res = null; A.text = ""; A.shown = false; A.src = []; A.status = "실시간 순위와 분봉을 모으는 중"; A.cost = "";
+    A.busy = true; A.res = null; A.text = ""; A.shown = false; A.used = null; A.src = []; A.status = "실시간 순위와 분봉을 모으는 중";
     this.apModels(); this.apDraw();
     let raf = 0;
     try {
@@ -1330,7 +1332,7 @@ pages.invest = {
         else if (ev.t === "source") { A.src.push(ev); }
         else if (ev.t === "picks") { A.res = ev; }
         else if (ev.t === "error") { A.err = ev.msg; }
-        else if (ev.t === "done") { A.cost = `실제 비용 약 ${won(ev.krw)}원($${ev.usd}) · ${ev.model.replace("claude-", "")}${ev.searches ? ` · 웹 검색 ${ev.searches}회` : ""}${ev.left != null ? ` · 남은 크레딧 $${Number(ev.left).toFixed(2)}` : ""}`; }
+        else if (ev.t === "done") { A.used = ev; aiMeter.clear(); }
       });
     } catch (e) { if (e instanceof NeedConnect) { location.hash = "#connect"; return; } A.err = e.message; }
     finally { if (raf) cancelAnimationFrame(raf); A.busy = false; A.status = ""; this.apDraw(); this.apEstimate(); this.apHistory(); }
@@ -1350,7 +1352,7 @@ pages.invest = {
       ${body ? `<div class="ai-ans ap-text">${mdLite(body)}</div>` : ""}
       ${A.err ? `<div class="notice warn">${esc(A.err)}</div>` : ""}
       ${A.src.length ? `<details class="ap-src"><summary class="tiny">찾아본 뉴스·자료 ${A.src.length}건</summary>${A.src.map((x) => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>`).join("")}</details>` : ""}
-      ${A.cost ? `<div class="tiny">${esc(A.cost)}</div>` : ""}
+      ${A.used ? meterHTML(A.meter || { fx: A.used.fx, credit: A.used.credit }, A.used) : ""}
     </section>
     ${R ? (R.picks.length ? R.picks.map((p, i) => {
       const fresh = A.shown ? "" : "fresh";
@@ -2523,12 +2525,16 @@ function aiSheet(kind, payload = {}) {
   const S = { history: [], ctl: null, busy: false };
   openSheet(AI_TITLES[kind] || "AI", `
     <div class="ai-box">
+      <div id="aiMeterTop" class="cm-slot"></div>
       <div id="aiThread" class="ai-thread"></div>
       ${chat ? `<div class="ai-chips">${["내 포트폴리오에서 가장 위험한 부분은?", "관심종목 중 이번 주 뉴스가 큰 종목은?", "오늘 미국장 주요 이슈 정리해 줘"].map((q) => `<button type="button" class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
         <div class="ai-ask"><textarea id="aiQ" rows="2" placeholder="예: 엔비디아 실적 발표 전에 볼 점은?"></textarea><button class="btn dark" id="aiSend">묻기</button></div>` : ""}
       <div class="tiny">AI 답변은 참고용이에요. 틀릴 수 있고 매수·매도 지시가 아니에요. AI는 주문하지 않아요.</div>
     </div>`, (box) => {
     const thread = $("#aiThread", box);
+    let M = null;
+    const top = async () => { try { M = await aiMeter.get(kind); if ($("#aiMeterTop")) $("#aiMeterTop").innerHTML = meterHTML(M); } catch (e) { /* 생략 */ } };
+    top();
     const ask = async (extra) => {
       if (S.busy) return;
       S.busy = true;
@@ -2553,7 +2559,8 @@ function aiSheet(kind, payload = {}) {
             ans.innerHTML += `<div class="notice warn">${esc(ev.msg)}${/키를 넣어/.test(ev.msg) ? ` <a href="#settings/ai" onclick="closeSheet()">AI 설정 열기</a>` : ""}</div>`;
           } else if (ev.t === "done") {
             paint();
-            cost.textContent = `약 ${won(ev.krw)}원($${ev.usd}) · ${ev.model.replace("claude-", "")}${ev.searches ? ` · 웹 검색 ${ev.searches}회` : ""}${ev.left != null ? ` · 남은 크레딧 $${Number(ev.left).toFixed(2)}` : ""}`;
+            cost.innerHTML = meterHTML(M || { fx: ev.fx, credit: ev.credit }, ev);
+            aiMeter.clear(); top();
           }
         }, S.ctl.signal);
         if (text) S.history.push({ role: "user", content: extra.question || AI_TITLES[kind] }, { role: "assistant", content: text });
@@ -2582,6 +2589,47 @@ document.addEventListener("click", (e) => {
   e.preventDefault(); e.stopPropagation();
   aiSheet(b.dataset.ai, b.dataset.sym ? { sym: b.dataset.sym, mkt: b.dataset.mkt } : {});
 }, true);
+
+// ---------- AI 비용 표시(앱 전체 공통): 예상/실제 비용 + Claude 잔액 ----------
+const aiMeter = {
+  c: {},
+  async get(kind, model, web) {
+    const k = `${kind}|${model || ""}|${web == null ? "" : web ? 1 : 0}`, hit = this.c[k];
+    if (hit && Date.now() - hit.t < 30000) return hit.v;
+    const v = await GET(`/api/ai/meter?kind=${kind}${model ? `&model=${encodeURIComponent(model)}` : ""}${web == null ? "" : `&web=${web ? 1 : 0}`}`);
+    this.c[k] = { t: Date.now(), v }; return v;
+  },
+  clear() { this.c = {}; },
+};
+const krw = (usd, fx) => `${won(Math.max(1, Math.round((usd || 0) * (fx || 1400))))}원`;
+function meterEst(m) {
+  if (m.avg_usd != null) return { main: `약 ${krw(m.avg_usd, m.fx)}`, sub: `지난 ${m.n}회 평균 · $${m.avg_usd.toFixed(3)}` };
+  return { main: `${krw(m.usd_lo, m.fx)}~${krw(m.usd_hi, m.fx).replace("원", "")}원`, sub: `1회 예상 · $${m.usd_lo.toFixed(3)}~${m.usd_hi.toFixed(3)}` };
+}
+function meterHTML(m, used) {
+  if (!m) return "";
+  const cr = (used && used.credit) || m.credit || {}, fx = (used && used.fx) || m.fx;
+  const L = used ? { main: krw(used.usd, fx), sub: `$${Number(used.usd).toFixed(4)} · ${esc((used.model || m.model || "").replace("claude-", ""))}${used.searches ? ` · 웹 검색 ${used.searches}회` : ""}` } : meterEst(m);
+  const low = cr.set && (cr.left_pct < 15 || cr.exhausted);
+  return `<div class="cm ${used ? "used" : ""} ${low ? "low" : ""}">
+    <div class="cm-l"><span>${used ? "이번 사용" : "예상 비용"}${!used ? ` · ${esc(m.model_name || "")}${m.web ? " · 뉴스 검색" : ""}` : ""}</span><b>${L.main}</b><small>${L.sub}</small></div>
+    <a class="cm-r" href="#settings/ai">${cr.set ? `<span>Claude 잔액</span><b>$${Number(cr.left).toFixed(2)}</b><small>약 ${won(Math.round(cr.left * fx))}원 · ${cr.left_pct}% 남음</small>
+      <i class="cm-g"><i style="width:${Math.max(2, Math.min(100, cr.left_pct))}%"></i></i>`
+      : `<span>Claude 잔액</span><b class="cm-na">미설정</b><small>설정 → AI에서 맞추기 ›</small>`}</a></div>`;
+}
+// AI 버튼마다 예상 비용·잔액을 작게 붙인다(화면이 다시 그려져도 자동으로)
+function fillAiBtns(root = document) {
+  $$(".ai-btn[data-ai]:not([data-cm])", root).forEach(async (b) => {
+    b.dataset.cm = "1";
+    try {
+      const m = await aiMeter.get(b.dataset.ai);
+      if (!m.configured) return;
+      const e = meterEst(m), cr = m.credit || {};
+      b.insertAdjacentHTML("beforeend", `<small class="ai-est">${e.main}${cr.set ? ` · 잔액 $${Number(cr.left).toFixed(2)}` : ""}</small>`);
+    } catch (err) { /* 표시만 생략 */ }
+  });
+}
+new MutationObserver(() => { clearTimeout(fillAiBtns._t); fillAiBtns._t = setTimeout(() => fillAiBtns(), 120); }).observe(document.getElementById("view") || document.body, { childList: true, subtree: true });
 const AI_BTN = (kind, label, attrs = "") => `<button type="button" class="btn ai-btn wide" data-ai="${kind}" ${attrs}><span class="ai-spark" aria-hidden="true">✦</span>${esc(label)}</button>`;
 
 function resultBar(a) {

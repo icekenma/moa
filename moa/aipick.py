@@ -188,14 +188,12 @@ class AIPick:
         except Exception:
             pass
         out = []
+        web = self.rt.ai.conf().get("web_search", True)
         for mid, (label, pi, po) in MODELS.items():
-            rows = self.rt.db.q("SELECT usd FROM ai_usage WHERE kind='pick' AND model=? ORDER BY id DESC LIMIT 10", (mid,))
-            lo = (14000 * pi + 1800 * po) / 1e6           # 검색 없이
-            hi = (45000 * pi + 3000 * po) / 1e6 + 3 * SEARCH_USD  # 검색 3회(검색 결과도 입력 토큰)
-            avg = sum(r["usd"] for r in rows) / len(rows) if rows else None
-            out.append({"id": mid, "label": label, "usd_lo": round(lo, 4), "usd_hi": round(hi, 4),
-                        "krw_lo": int(lo * fx), "krw_hi": int(hi * fx),
-                        "avg_krw": int(avg * fx) if avg is not None else None, "n": len(rows)})
+            m = self.rt.ai.meter("pick", mid, web)  # 앱 공통 비용 계산과 같은 값
+            out.append({"id": mid, "label": label, "usd_lo": m["usd_lo"], "usd_hi": m["usd_hi"],
+                        "krw_lo": int(m["usd_lo"] * fx), "krw_hi": int(m["usd_hi"] * fx),
+                        "avg_krw": int(m["avg_usd"] * fx) if m["avg_usd"] is not None else None, "n": m["n"]})
         c = self.rt.ai.conf()
         return {"models": out, "fx": fx, "default": c.get("model") or "claude-sonnet-5-5",
                 "configured": self.rt.ai.configured(), "web_search": c.get("web_search", True),

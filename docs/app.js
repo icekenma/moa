@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.0725";
+const UI_VERSION = "261118.0730";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2501,6 +2501,20 @@ const mkt = {
       <div class="small ${tone(hd.pnl)}" style="font-weight:700">평가손익 ${signed(hd.pnl)}원 (${pct(hd.pnl_pct, 2)})</div></section>` : "";
     this.drawChart();
   },
+  dayStats(pts, c, pmax, pmin) {
+    const D = this.d, q = D.q, cur = q.currency, M = (v) => v == null ? "-" : this.money(v, cur);
+    const hi = Math.max(q.high || pmax, pmax), lo = Math.min(q.low || pmin, pmin), now = q.price, prev = c.prev || q.prev;
+    const pos = hi > lo ? Math.min(100, Math.max(0, (now - lo) / (hi - lo) * 100)) : 50;
+    const r = (a, b) => b ? (a / b - 1) * 100 : null, P = (v) => v == null ? "-" : pct(v, 2);
+    const avg = pts.reduce((a, x) => a + x.c, 0) / pts.length;
+    const half = pts.slice(Math.floor(pts.length / 2)), mom = r(now, half[0].c);
+    const cells = [["전일 대비", r(now, prev)], ["시가 대비", r(now, q.open)], ["고점 대비", r(now, hi)], ["저점 대비", r(now, lo)], ["오늘 평균가 대비", r(now, avg)], ["최근 흐름", mom]];
+    return `<div class="ds">
+      <div class="ds-range"><span class="down">저 ${M(lo)}</span><div class="ds-bar"><i style="left:${pos}%"></i></div><span class="up">고 ${M(hi)}</span></div>
+      <div class="ds-grid">${cells.map(([k, v]) => `<div><span>${k}</span><b class="${tone(v)}">${P(v)}</b></div>`).join("")}</div>
+      <div class="ds-row"><span>시가 <b>${M(q.open)}</b></span><span>전일 <b>${M(prev)}</b></span><span>변동폭 <b>${prev ? ((hi - lo) / prev * 100).toFixed(2) + "%" : "-"}</b></span><span>거래량 <b>${q.volume != null ? bigNum(q.volume) : "-"}</b></span></div>
+    </div>`;
+  },
   drawChart() {
     const D = this.d, el = $("#mkChart");
     if (!el) return;
@@ -2513,26 +2527,51 @@ const mkt = {
     const last = pts[pts.length - 1].c, up = last >= base, col = up ? "var(--up)" : "var(--down)";
     const vals = pts.map((p) => p.c).concat(D.range === "1d" && c.prev ? [c.prev] : []);
     const lo = Math.min(...vals), hi = Math.max(...vals), rr = hi - lo || 1;
-    const W = 340, H = 180, pad = 8;
-    const X = (i) => (i / (pts.length - 1)) * W, Y = (v) => pad + (1 - (v - lo) / rr) * (H - pad * 2);
+    const W = 340, PW = 296, H = 170, VH = 26, pad = 8;
+    const X = (i) => (i / (pts.length - 1)) * PW, Y = (v) => pad + (1 - (v - lo) / rr) * (H - pad * 2);
     const line = pts.map((p, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(p.c).toFixed(1)}`).join("");
-    const hiI = pts.findIndex((p) => p.c === Math.max(...pts.map((x) => x.c))), loI = pts.findIndex((p) => p.c === Math.min(...pts.map((x) => x.c)));
-    const cur = D.q.currency;
-    const lab = (i, v, below) => { const x = X(i), anchor = x < 50 ? "start" : x > W - 50 ? "end" : "middle"; return `<text x="${x.toFixed(1)}" y="${(Y(v) + (below ? 14 : -6)).toFixed(1)}" text-anchor="${anchor}" class="mk-lab">${below ? "최저" : "최고"} ${this.money(v, cur)}</text>`; };
+    const pmax = Math.max(...pts.map((x) => x.c)), pmin = Math.min(...pts.map((x) => x.c));
+    const hiI = pts.findIndex((p) => p.c === pmax), loI = pts.findIndex((p) => p.c === pmin);
+    const cur = D.q.currency, us = D.m === "us";
+    const short = (v) => us ? Number(v).toFixed(2) : won(Math.round(v));
+    const lab = (i, v, below) => { const x = X(i), anchor = x < 50 ? "start" : x > PW - 50 ? "end" : "middle"; return `<text x="${x.toFixed(1)}" y="${(Y(v) + (below ? 13 : -5)).toFixed(1)}" text-anchor="${anchor}" class="mk-lab">${below ? "최저" : "최고"} ${short(v)}</text>`; };
+    // 가로 눈금 4줄: 가격 + 전일 대비 %
+    const grid = [0, 1, 2, 3].map((k) => { const v = hi - (rr * k) / 3, y = Y(v), r = c.prev ? (v / c.prev - 1) * 100 : null;
+      return `<line class="ax-g" x1="0" x2="${PW}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/><text class="ax-t" x="${PW + 5}" y="${(y + 1).toFixed(1)}">${short(v)}</text>${r == null ? "" : `<text class="ax-p ${r > 0 ? "up" : r < 0 ? "down" : ""}" x="${PW + 5}" y="${(y + 9).toFixed(1)}">${pct(r, 1)}</text>`}`; }).join("");
+    // 시간 눈금
+    const tl = (p) => String(p.t || "").slice(-5);
+    const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => { const i = Math.round(f * (pts.length - 1)); return `<text class="ax-x" x="${X(i).toFixed(1)}" y="${H + VH + 12}" text-anchor="${f === 0 ? "start" : f === 1 ? "end" : "middle"}">${esc(pts[i].t === "지금" ? "지금" : tl(pts[i]))}</text>`; }).join("");
+    // 거래량(오늘 5분봉)
+    const vb = (D.vol || []), vmax = Math.max(1, ...vb.map((x) => x.v));
+    const vols = vb.length ? vb.map((x, i) => { const w = PW / vb.length, hh = x.v / vmax * VH; return `<rect x="${(i * w + w * 0.15).toFixed(1)}" y="${(H + VH - hh).toFixed(1)}" width="${(w * 0.7).toFixed(1)}" height="${Math.max(0.5, hh).toFixed(1)}" fill="${x.c >= x.o ? "var(--up)" : "var(--down)"}" opacity=".45"/>`; }).join("") : "";
+    const yl = Y(last), tagY = Math.max(8, Math.min(H - 8, yl));
     const anim = !$("svg", el);
-    el.innerHTML = `<svg viewBox="0 -14 ${W} ${H + 28}" class="mk-svg ${anim ? "anim" : ""}" role="img" aria-label="가격 차트">
+    el.innerHTML = `<svg viewBox="0 -12 ${W} ${H + VH + 28}" class="mk-svg ${anim ? "anim" : ""}" role="img" aria-label="가격 차트">
       <defs><linearGradient id="mkG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".28"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>
-      ${D.range === "1d" && c.prev ? `<line x1="0" x2="${W}" y1="${Y(c.prev).toFixed(1)}" y2="${Y(c.prev).toFixed(1)}" stroke="var(--line2)" stroke-dasharray="3 4"/>` : ""}
-      <path d="${line}L${W},${H}L0,${H}Z" fill="url(#mkG)"/>
+      ${grid}
+      ${D.range === "1d" && c.prev ? `<line x1="0" x2="${PW}" y1="${Y(c.prev).toFixed(1)}" y2="${Y(c.prev).toFixed(1)}" stroke="var(--ink3)" stroke-dasharray="3 4" stroke-width=".8"/><text class="ax-prev" x="2" y="${(Y(c.prev) - 3).toFixed(1)}">전일 종가 ${short(c.prev)}</text>` : ""}
+      <path d="${line}L${PW},${H}L0,${H}Z" fill="url(#mkG)"/>
       <path class="ln" pathLength="1" d="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
       ${lab(hiI, pts[hiI].c, false)}${lab(loI, pts[loI].c, true)}
-      <line class="lv-line" x1="0" x2="${W}" y1="${Y(last).toFixed(1)}" y2="${Y(last).toFixed(1)}" stroke="${col}"/>
-      <circle class="lv-ring" cx="${W}" cy="${Y(last).toFixed(1)}" r="5" fill="${col}"/><circle cx="${W - 0.5}" cy="${Y(last).toFixed(1)}" r="3.6" fill="${col}" stroke="var(--card)" stroke-width="1.5"/>
-      <g id="mkCur" visibility="hidden"><line y1="0" y2="${H}" stroke="var(--ink3)" stroke-width="1"/><circle r="4.5" fill="${col}" stroke="#fff" stroke-width="2"/></g>
-    </svg><div class="mk-tip" id="mkTip" hidden></div><div class="lv-badge"><i></i>실시간</div>`;
+      <line class="lv-line" x1="0" x2="${PW}" y1="${yl.toFixed(1)}" y2="${yl.toFixed(1)}" stroke="${col}"/>
+      <circle class="lv-ring" cx="${PW}" cy="${yl.toFixed(1)}" r="5" fill="${col}"/><circle cx="${PW - 0.5}" cy="${yl.toFixed(1)}" r="3.6" fill="${col}" stroke="var(--card)" stroke-width="1.5"/>
+      <rect class="lv-tag" x="${PW + 3}" y="${(tagY - 7).toFixed(1)}" width="${W - PW - 3}" height="14" rx="4" fill="${col}"/><text class="lv-tagt" x="${PW + 6}" y="${(tagY + 3).toFixed(1)}">${short(last)}</text>
+      <line class="ax-g" x1="0" x2="${PW}" y1="${H + 2}" y2="${H + 2}"/>${vols}${vb.length ? `<text class="ax-t" x="${PW + 5}" y="${H + VH - 2}">거래량</text>` : ""}
+      ${ticks}
+      <g id="mkCur" visibility="hidden"><line y1="0" y2="${H + VH}" stroke="var(--ink3)" stroke-width="1"/><circle r="4.5" fill="${col}" stroke="#fff" stroke-width="2"/></g>
+    </svg><div class="mk-tip" id="mkTip" hidden></div><div class="lv-badge"><i></i>실시간</div>
+    ${this.dayStats(pts, c, pmax, pmin)}`;
+    if (D.range === "1d" && (!D.volAt || Date.now() - D.volAt > 60000)) {
+      D.volAt = Date.now();
+      GET(`/api/invest/candles/${D.m}/${encodeURIComponent(D.sym)}?tf=m5`).then((cd) => {
+        const bs = cd.bars || [], day = bs.length ? bs[bs.length - 1].t.slice(0, 5) : "";
+        D.vol = bs.filter((x) => x.t.slice(0, 5) === day);
+        if (this.d === D && D.range === "1d" && $("#mkChart")) this.drawChart();
+      }).catch(() => {});
+    }
     const svg = $("svg", el), g = $("#mkCur", el), tip = $("#mkTip", el);
     const at = (ev) => {
-      const r = svg.getBoundingClientRect(), x = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left) / r.width;
+      const r = svg.getBoundingClientRect(), x = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left) / (r.width * PW / W);
       const i = Math.max(0, Math.min(pts.length - 1, Math.round(x * (pts.length - 1))));
       g.setAttribute("visibility", "visible");
       $("line", g).setAttribute("x1", X(i)); $("line", g).setAttribute("x2", X(i));

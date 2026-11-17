@@ -259,10 +259,18 @@ def create_app(rt, updater=None):
     @app.get("/api/stocks")
     def stocks():
         out = []
+        st = rt.settings.all()
+        same = (st["trade_mode"]["scalp"] == st["trade_mode"]["dca"] == "kiwoom"
+                and st["kiwoom"]["scalp"].get("appkey") == st["kiwoom"]["dca"].get("appkey")
+                and bool(st["kiwoom"]["scalp"].get("mock")) == bool(st["kiwoom"]["dca"].get("mock")))
         for eng, label in (("scalp", "단타 계좌"), ("dca", "장기투자 계좌")):
             b = rt.brokers.get(eng)
             item = {"engine": eng, "label": label, "error": rt.errors.get(eng),
                     "mode_label": b.label if b else None, "holdings": [], "cash": None}
+            if eng == "dca" and same and b:  # 두 엔진이 같은 키움 계좌 키를 쓰면 한 번만 조회해 겹쳐 보이지 않게
+                item.update(same_as="scalp", cash=out[0]["cash"], error=out[0]["error"])
+                out.append(item)
+                continue
             if b:
                 try:
                     item["cash"] = b.cash()

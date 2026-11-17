@@ -21,6 +21,8 @@ from moa.trading.strategy import orb_vwap  # noqa: E402
 
 @pytest.fixture
 def rt():
+    from moa.broker import kiwoom as _kw
+    _kw._SHARED.clear()
     r = Runtime(DB(":memory:"), start_thread=False)
     yield r
     r.stop()
@@ -575,6 +577,8 @@ def test_myaccount_keeps_last_snapshot_and_acct_no(rt):
     snap = rt.account.snapshot(force=True)
     assert snap["acct_no"] == "5012345611" and snap["ok"]
     from moa.myaccount import AccountView
+    from moa.broker import kiwoom as _kw
+    _kw._SHARED.clear()
     v2 = AccountView(rt.settings)  # 서버를 다시 켠 상황
     v2.client().session = type("Down", (), {"post": lambda *a, **k: (_ for _ in ()).throw(OSError("down"))})()
     s2 = v2.snapshot(force=True)
@@ -604,3 +608,25 @@ def test_kiwoom_feed_falls_back_to_view_keys(rt):
     c = create_app(rt).test_client()
     r = c.post("/api/order", json={"engine": "scalp", "side": "buy", "code": "005930", "qty": 1})
     assert r.status_code == 200 and r.get_json()["fill_price"] >= 70100  # 앱 내 모의가 실제 시세로 체결
+
+
+def test_kiwoom_clients_share_token_throttle_and_cache(rt):
+    from moa.broker.kiwoom import KiwoomClient
+    a = KiwoomClient("k", "s", False)
+    b = KiwoomClient("k", "s", False, read_only=True)
+    fake = _FakeKiwoom()
+    a.session = b.session = fake
+    a.cash(); b.cash(); a.cash()
+    assert fake.calls.count("kt00001") == 1  # 2.5초 안의 같은 조회는 한 번만
+    assert a.token() == b.token()
+
+    class Busy(_FakeKiwoom):
+        n = 0
+        def post(self, url, json=None, headers=None, timeout=None):
+            if headers and headers.get("api-id") == "kt00018" and Busy.n == 0:
+                Busy.n = 1
+                return _Resp({"return_code": 5, "return_msg": "허용된 요청 개수를 초과하였습니다[1700:...]"})
+            return super().post(url, json, headers, timeout)
+    c = KiwoomClient("k2", "s", False)
+    c.session = Busy()
+    assert c.holdings()[0]["code"] == "005930"  # 한도 초과는 한 번 쉬고 다시

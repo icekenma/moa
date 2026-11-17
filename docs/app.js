@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1148";
+const UI_VERSION = "261117.1201";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -898,8 +898,10 @@ pages.invest = {
     const rows = d.accounts.flatMap((a) => a.holdings.map((x) => ({ ...x, eng: a.engine })));
     box.innerHTML = `
       ${demoNotice(d.data_source)}
-      ${d.accounts.filter((a) => a.error).map((a) => `<div class="notice warn">${esc(a.label)}: ${esc(a.error)}</div>`).join("")}
+      ${d.accounts.filter((a) => a.error && !a.same_as).map((a) => `<div class="notice warn">${esc(a.label)}: ${esc(a.error)}</div>`).join("")}
       <div class="grid2">${d.accounts.map((a) => {
+        if (a.same_as) return `<div class="tile"><div class="lbl">${esc(a.label)}</div><div class="val" style="font-size:15px">단타 계좌와 같은 계좌</div>
+          <div class="tiny">같은 키움 앱키라 같은 계좌예요. 잔고는 왼쪽에 함께 보여요.</div></div>`;
         const val = a.holdings.reduce((s, x) => s + x.value, 0), pnl = a.holdings.reduce((s, x) => s + x.pnl, 0);
         return `<div class="tile"><div class="lbl">${esc(a.label)}</div><div class="val">${won(val + (a.cash || 0))}</div>
           <div class="tiny">현금 ${won(a.cash)}</div><div class="tiny ${tone(pnl)}" style="font-weight:700">평가손익 ${signed(pnl)}</div></div>`;

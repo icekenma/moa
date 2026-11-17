@@ -23,7 +23,17 @@ API = {
     "balance": ("/api/dostk/acnt", "kt00018"),      # 계좌평가잔고내역요청
     "deposit": ("/api/dostk/acnt", "kt00001"),      # 예수금상세현황요청
 }
-MIN_INTERVAL = 0.25  # 호출 간 최소 간격(초). 유량 제한 대비.
+MIN_INTERVAL = 0.25  # 같은 앱키의 호출 간 최소 간격(초). 키움 조회 한도(초당 약 5회) 대비.
+SLOW_APIS = {"kt00001": 1.1, "kt00018": 1.1}  # 계좌 조회는 같은 TR을 1초에 한 번만
+CACHE_APIS = {"kt00001": 2.5, "kt00018": 2.5}  # 여러 화면·엔진이 동시에 물어도 키움에는 한 번만
+_SHARED = {}  # (앱키, 모의 여부) -> 토큰·호출 간격·응답 저장을 앱키 하나당 하나로 공유
+_SHARED_LOCK = threading.Lock()
+
+
+def _shared(appkey, mock):
+    with _SHARED_LOCK:
+        return _SHARED.setdefault((appkey, bool(mock)), {
+            "lock": threading.Lock(), "last": 0.0, "token": None, "exp": 0.0, "api_last": {}, "cache": {}})
 
 
 class KiwoomError(RuntimeError):
@@ -71,43 +81,63 @@ class KiwoomClient:
         self.read_only = read_only  # True면 주문 함수가 아예 동작하지 않는다(조회 전용)
         self.last_headers = {}
         self.timeout = timeout
-        self._token, self._exp = None, 0.0
-        self._lock = threading.Lock()
-        self._last = 0.0
+        self._sh = _shared(appkey, self.mock)
         self.session = requests.Session()
 
     def token(self):
-        if self._token and time.time() < self._exp - 60:
-            return self._token
+        sh = self._sh
+        if sh["token"] and time.time() < sh["exp"] - 60:
+            return sh["token"]
         r = self.session.post(self.base + API["token"], timeout=self.timeout, json={
             "grant_type": "client_credentials", "appkey": self.appkey, "secretkey": self.secretkey})
         data = r.json() if r.content else {}
         if r.status_code != 200 or not data.get("token"):
             raise KiwoomError(f"토큰 발급 실패: {data.get('return_msg') or r.status_code}")
-        self._token = data["token"]
+        sh["token"] = data["token"]
         exp = data.get("expires_dt")
         try:
-            self._exp = datetime.strptime(exp, "%Y%m%d%H%M%S").timestamp()
+            sh["exp"] = datetime.strptime(exp, "%Y%m%d%H%M%S").timestamp()
         except (TypeError, ValueError):
-            self._exp = time.time() + 3600
-        return self._token
+            sh["exp"] = time.time() + 3600
+        return sh["token"]
 
     def call(self, key, body, cont_key=None):
         path, api_id = API[key]
-        with self._lock:
-            wait = MIN_INTERVAL - (time.time() - self._last)
-            if wait > 0:
-                time.sleep(wait)
-            headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": api_id,
-                       "authorization": f"Bearer {self.token()}"}
-            if cont_key:
-                headers.update({"cont-yn": "Y", "next-key": cont_key})
-            r = self.session.post(self.base + path, json=body, headers=headers, timeout=self.timeout)
-            self._last = time.time()
-            self.last_headers = {k.lower(): v for k, v in getattr(r, "headers", {}).items()}
-        data = r.json() if r.content else {}
-        if r.status_code != 200 or str(data.get("return_code", "0")) not in ("0", ""):
-            raise KiwoomError(f"{api_id} 실패: {data.get('return_msg') or r.status_code}")
+        sh = self._sh
+        ckey = (api_id, repr(sorted(body.items())), cont_key)
+        ttl = CACHE_APIS.get(api_id)
+        if ttl:
+            hit = sh["cache"].get(ckey)
+            if hit and time.time() - hit[0] < ttl:
+                self.last_headers = hit[2]
+                return hit[1]
+        for attempt in range(2):
+            with sh["lock"]:
+                now = time.time()
+                wait = max(MIN_INTERVAL - (now - sh["last"]),
+                           SLOW_APIS.get(api_id, 0) - (now - sh["api_last"].get(api_id, 0)))
+                if wait > 0:
+                    time.sleep(wait)
+                headers = {"Content-Type": "application/json;charset=UTF-8", "api-id": api_id,
+                           "authorization": f"Bearer {self.token()}"}
+                if cont_key:
+                    headers.update({"cont-yn": "Y", "next-key": cont_key})
+                r = self.session.post(self.base + path, json=body, headers=headers, timeout=self.timeout)
+                sh["last"] = sh["api_last"][api_id] = time.time()
+                self.last_headers = {k.lower(): v for k, v in getattr(r, "headers", {}).items()}
+            data = r.json() if r.content else {}
+            code = str(data.get("return_code", "0"))
+            msg = str(data.get("return_msg") or "")
+            if attempt == 0 and ("1700" in msg or code == "5"):  # 요청 한도 초과: 잠깐 쉬고 한 번 더
+                time.sleep(1.2)
+                continue
+            break
+        if r.status_code != 200 or code not in ("0", ""):
+            raise KiwoomError(f"{api_id} 실패: {msg or r.status_code}")
+        if ttl:
+            sh["cache"][ckey] = (time.time(), data, self.last_headers)
+        if key in ("buy", "sell"):
+            sh["cache"].clear()  # 주문 뒤에는 잔고·예수금을 새로 받는다
         return data
 
     # ---- 시세 ----

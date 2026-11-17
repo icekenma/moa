@@ -1207,3 +1207,10 @@ details.card>summary::after{border-color:var(--sec-i)}
 .dv-star[aria-pressed="true"]{color:var(--amber)}
 .dv-star[aria-pressed="true"] svg{fill:currentColor;animation:selPop .32s var(--pop)}
 .dv-kind{scrollbar-width:none}.dv-kind::-webkit-scrollbar{display:none}.dv-kind .chip{flex:0 0 auto;white-space:nowrap}
+/* 관심 탭 지수 칩: 밝은 바탕 위라 밝은 유리 카드 + 진한 글자 */
+.mk-i{background:var(--glass)!important;border:1px solid var(--glass-b)!important;box-shadow:var(--glass-hi),var(--shadow);color:var(--ink)}
+.mk-i span{color:var(--ink3)}
+.mk-i b{color:var(--ink)}
+.mk-i em{color:var(--ink3)}
+.mk-i em.up{color:var(--up)}.mk-i em.down{color:var(--down)}
+.mk-idx{padding-top:4px;padding-bottom:6px}

@@ -41,6 +41,7 @@ DEFAULTS = {
     # 휴대폰에서 GitHub Pages 화면으로 접속할 때 허용할 출처와, 이 서버의 바깥 주소
     "allowed_origins": ["https://icekenma.github.io"],
     "public_url": "",
+    "auto_update": True,            # GitHub에 새 버전이 올라오면 노트북 서버가 알아서 받아 다시 시작
 }
 
 SECRET_PATHS = [("kiwoom", "scalp", "secretkey"), ("kiwoom", "dca", "secretkey")]

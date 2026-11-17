@@ -1,4 +1,5 @@
 @echo off
+setlocal
 cd /d "%~dp0"
 if not exist ".venv\Scripts\python.exe" (
   echo Creating virtual environment...
@@ -14,5 +15,17 @@ if exist "wheels" (
 ) else (
   ".venv\Scripts\python.exe" -m pip install -r requirements.txt -q
 )
-".venv\Scripts\python.exe" run.py %*
+set "EXTRA="
+:start
+".venv\Scripts\python.exe" run.py %* %EXTRA%
+if errorlevel 4 goto end
+if errorlevel 3 (
+  echo.
+  echo Updated from GitHub. Restarting moa...
+  echo.
+  set "EXTRA=--no-browser"
+  timeout /t 2 /nobreak >nul
+  goto start
+)
+:end
 pause

@@ -200,7 +200,7 @@ pages.connect = {
         <h2>처음 한 번 준비</h2>
         <div class="small muted" style="line-height:1.7">
           1. 노트북과 휴대폰에 Tailscale을 설치하고 같은 계정으로 로그인해요.<br>
-          2. 노트북에서 moa를 켜고, 명령창에 <span class="code" style="padding:2px 6px;white-space:nowrap">tailscale serve --bg 8765</span> 를 한 번 실행해요.<br>
+          2. 노트북에서 moa를 켜고, 명령창에 <span class="code" style="padding:2px 6px;white-space:nowrap">tailscale serve --bg 8780</span> 를 한 번 실행해요.<br>
           3. 나오는 https 주소를 위 서버 주소에 넣어요.<br>
           노트북 화면의 설정 탭에서 휴대폰 연결 링크를 만들면 주소와 토큰이 한 번에 들어가요.</div>
       </section>`;
@@ -828,6 +828,7 @@ pages.settings = {
     const s = await GET("/api/settings");
     const ping = await GET("/api/ping").catch(() => ({}));
     const info = ping.local ? await GET("/api/connect-info").catch(() => null) : null;
+    const up = await GET("/api/update").catch(() => ({ available: false, message: "" }));
     const acct = (k, label) => {
       const kw = s.kiwoom[k];
       return `<details class="card"><summary>${label} <span class="tiny" style="margin-left:auto;margin-right:12px">${s.trade_mode[k] === "kiwoom" ? (kw.mock ? "키움 모의투자" : "키움 실전") : "앱 내 모의"}</span></summary>
@@ -855,6 +856,7 @@ pages.settings = {
           <div class="btns"><button class="btn sm" id="copyLink">링크 복사</button><button class="btn sm soft" id="rotate">토큰 새로 만들기</button></div>`
         : `<div class="small muted">이 서버에 직접 연결돼 있어요.</div>`}
       </section>
+      <section class="card" id="upCard">${updateCard(up)}</section>
       <section class="card"><h2>시세</h2>
         ${seg("시세 출처", [["demo", "가상 시세"], ["kiwoom", "키움 시세"]], s.data_source, "on-card")}
         <div class="tiny">가상 시세는 장 시간이 아니어도 시험할 수 있게 빠르게 흐르는 무작위 가격이에요. 실제 검증은 <b>키움 시세 + 앱 내 모의</b>로 하세요.</div>
@@ -920,6 +922,24 @@ pages.settings = {
       if (!confirmTap(e.target, "한 번 더 누르면 끊어요")) return;
       store.set("server", ""); store.set("token", ""); location.hash = "#connect";
     });
+    const bindUp = () => {
+      $("#upAuto")?.addEventListener("click", async (e) => {
+        const on = e.currentTarget.getAttribute("aria-checked") !== "true";
+        await run(() => api("PUT", "/api/update/auto", { auto: on }), on ? "자동 업데이트를 켰어요" : "자동 업데이트를 껐어요");
+        $("#upCard").innerHTML = updateCard(await GET("/api/update")); bindUp();
+      });
+      $("#upCheck")?.addEventListener("click", async () => {
+        const r = await run(() => api("POST", "/api/update/check", {}));
+        $("#upCard").innerHTML = updateCard(r); bindUp();
+      });
+      $("#upApply")?.addEventListener("click", async () => {
+        const r = await run(() => api("POST", "/api/update/check", { apply: true }));
+        toast(r.msg, !r.applied);
+        if (r.applied) setTimeout(route, 8000);
+        $("#upCard").innerHTML = updateCard(r); bindUp();
+      });
+    };
+    bindUp();
     $("#saveSet").onclick = async () => { const r = await run(() => api("PUT", "/api/settings", collect()), "설정을 저장했어요"); errs(r.errors); };
     view.onclick = async (e) => {
       const t = e.target.closest("[data-test]"), rs = e.target.closest("[data-reset]");
@@ -937,6 +957,16 @@ pages.settings = {
     };
   },
 };
+
+function updateCard(u) {
+  if (!u.available) return `<h2>업데이트</h2><div class="small muted">${esc(u.message || "자동 업데이트를 쓸 수 없어요")}</div>`;
+  const when = u.checked_at ? u.checked_at.slice(5, 16).replace("T", " ") : "-";
+  return `<div class="card-head"><div><h2>업데이트</h2><div class="tiny">버전 ${esc(u.current)} · 확인 ${esc(when)}</div></div>
+      <button class="switch" role="switch" id="upAuto" aria-checked="${!!u.auto}" aria-label="GitHub 자동 업데이트"><span></span></button></div>
+    <div class="small muted">${esc(u.message || "")}${u.behind && u.latest_subject ? `<br>새 버전: ${esc(u.latest_subject)}` : ""}</div>
+    <div class="tiny">켜 두면 ${u.interval_min}분마다 GitHub를 확인해, 종목을 들고 있지 않을 때 노트북 서버가 스스로 새 버전으로 바뀌어요. 가계부 데이터는 그대로예요.</div>
+    <div class="btns"><button class="btn sm" id="upCheck">지금 확인</button>${u.behind ? `<button class="btn sm dark" id="upApply">지금 업데이트</button>` : ""}</div>`;
+}
 
 // ---------- 시작 ----------
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});

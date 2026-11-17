@@ -34,7 +34,7 @@ def is_local_direct():
     return not any(request.headers.get(h) for h in FORWARD_HEADERS)
 
 
-def create_app(rt):
+def create_app(rt, updater=None):
     app = Flask(__name__, static_folder=None)
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
@@ -105,9 +105,36 @@ def create_app(rt):
         return send_from_directory(WEB, p)
 
     # ---------- 연결 ----------
+    def version():
+        if updater and updater.state.get("current"):
+            return updater.state["current"]
+        return VERSION
+
     @app.get("/api/ping")
     def ping():
-        return jsonify(ok=True, app="moa", version=VERSION, local=is_local_direct())
+        return jsonify(ok=True, app="moa", version=version(), local=is_local_direct())
+
+    # ---------- 업데이트 ----------
+    @app.get("/api/update")
+    def update_status():
+        if not updater:
+            return jsonify(available=False, message="업데이트 기능이 꺼져 있어요")
+        return jsonify(updater.status())
+
+    @app.post("/api/update/check")
+    def update_check():
+        if not updater:
+            raise RuntimeError("업데이트 기능이 꺼져 있어요")
+        d = body()
+        if d.get("apply"):
+            ok, msg = updater.apply()
+            return jsonify(updater.status(), applied=ok, msg=msg)
+        return jsonify(updater.check())
+
+    @app.put("/api/update/auto")
+    def update_auto():
+        rt.settings.update({"auto_update": bool(body().get("auto"))})
+        return jsonify(ok=True)
 
     @app.get("/api/connect-info")
     def connect_info():

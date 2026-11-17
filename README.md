@@ -16,7 +16,7 @@
    → 1~2분 뒤 `https://icekenma.github.io/moa/` 가 열림
 2. **Tailscale**: 노트북과 휴대폰에 설치하고 같은 계정으로 로그인
    - 관리 화면(login.tailscale.com) → DNS → MagicDNS와 HTTPS Certificates 켜기
-3. 노트북에서 moa 실행 후 명령창에서 한 번: `tailscale serve --bg 8765`
+3. 노트북에서 moa 실행 후 명령창에서 한 번: `tailscale serve --bg 8780`
    → `https://노트북이름.xxxx.ts.net` 주소가 나옴(재부팅 후에도 유지)
 4. 노트북 브라우저의 moa → 설정 → 연결 → 바깥 주소에 위 주소 입력 → **링크 복사** → 카톡 나에게 보내기 등으로 휴대폰에 전달 → 휴대폰에서 링크 열기
 5. 휴대폰 브라우저 메뉴 → **홈 화면에 추가** → 앱처럼 사용
@@ -25,12 +25,18 @@
 - 토큰이 새면 노트북 설정 화면에서 **토큰 새로 만들기**.
 - 다른 주소(GitHub Pages 외)에서 접속하려면 설정의 `allowed_origins`에 추가.
 
-## 업데이트 올리기
-고친 파일을 moa 폴더에 덮어쓰고 `upload_github.bat` 실행 → `run.bat` 다시 실행. 화면은 GitHub에 올라가면 휴대폰에도 자동 반영.
+## 업데이트(자동)
+- 고친 버전이 GitHub `main`에 올라가면
+  - 휴대폰 화면: GitHub Pages가 1~2분 안에 반영
+  - 노트북 서버: 5분마다 GitHub를 확인해 **스스로 받아서 다시 시작**(`run.bat` 창은 그대로)
+- 단타 엔진이 종목을 들고 있거나 장중에 돌고 있으면 청산·장 마감 뒤로 미룸
+- `data/`(가계부·설정·토큰)는 GitHub에 없으므로 업데이트해도 그대로
+- 설정 → 업데이트에서 끄기/지금 확인/지금 업데이트 가능
+- 노트북 moa 폴더의 파일은 직접 고치지 말 것(고쳐도 업데이트 때 한쪽으로 치워 둠)
 
 ## 실행
 1. Python 3.10 이상 설치
-2. `run.bat` 더블클릭 → 브라우저에서 `http://127.0.0.1:8765`가 열림
+2. `run.bat` 더블클릭 → 브라우저에서 `http://127.0.0.1:8780`가 열림
    - 처음 한 번만 가상환경을 만들고 flask, requests를 설치함
    - 인터넷이 없는 PC: 다른 PC에서 `pip download -r requirements.txt -d wheels` 후 `wheels` 폴더째 복사
 3. 데이터는 `data/moa.db` 파일 하나에 저장됨 → 이 파일만 백업하면 됨
@@ -86,11 +92,12 @@ date,time,open,high,low,close,volume
 `datetime`(YYYYMMDDHHMMSS) 한 열도 가능. 한 파일에 한 종목, 여러 날.
 
 ## 테스트
-`run_tests.bat` (pytest 20개: 비용·전략·청산·비중·진입 제한·백테스트·CSV·적립 일정·비중 배분·모의 브로커·엔진 시뮬레이션·API·원격 접속 인증)
+`run_tests.bat` (pytest 21개: 비용·전략·청산·비중·진입 제한·백테스트·CSV·적립 일정·비중 배분·모의 브로커·엔진 시뮬레이션·API·원격 접속 인증)
 
 ## 폴더
 ```
-run.py            실행
+run.py            실행(기본 포트 8780)
+moa/updater.py    GitHub 자동 업데이트
 moa/app.py        웹 API
 moa/runtime.py    시세·브로커·엔진 구성, 백그라운드 반복
 moa/ledger.py     가계부      moa/assets.py  자산

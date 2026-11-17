@@ -263,3 +263,38 @@ def test_remote_access_requires_token(rt):
     evil = c.options("/api/home", headers={"Origin": "https://evil.example"})
     assert "Access-Control-Allow-Origin" not in evil.headers
     assert c.get("/api/connect-info").get_json()["token"] == tok
+
+
+def test_updater_pulls_new_version(rt, tmp_path):
+    import subprocess
+    from moa.updater import Updater
+
+    def g(cwd, *a):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True,
+                       capture_output=True)
+    origin, laptop, dev = tmp_path / "origin.git", tmp_path / "laptop", tmp_path / "dev"
+    g(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+    g(tmp_path, "clone", "-q", str(origin), str(dev))
+    (dev / "requirements.txt").write_text("flask\n")
+    (dev / "a.txt").write_text("v1")
+    g(dev, "add", "-A"); g(dev, "commit", "-qm", "v1"); g(dev, "push", "-q", "origin", "main")
+    g(tmp_path, "clone", "-q", str(origin), str(laptop))
+    (laptop / "data").mkdir(); (laptop / "data" / "moa.db").write_text("keep")
+    exits = []
+    up = Updater(rt, str(laptop), exit_fn=lambda: exits.append(1))
+    assert up.available and up.check()["behind"] == 0
+    (dev / "a.txt").write_text("v2")
+    g(dev, "commit", "-qam", "v2 화면 수정"); g(dev, "push", "-q", "origin", "main")
+    st = up.check()
+    assert st["behind"] == 1 and st["latest_subject"] == "v2 화면 수정"
+    # 단타 엔진이 종목을 들고 있으면 미룬다
+    rt.db.x("INSERT INTO trades(engine,mode,strategy,code,name,qty,session,entry_ts,entry_price,stop,stop0,target) "
+            "VALUES('scalp','paper','orb_vwap','005930','삼성전자',1,'2026-11-17','2026-11-17T10:00:00',100,99,99,102)")
+    ok, why = up.apply()
+    assert not ok and "종목" in why and (laptop / "a.txt").read_text() == "v1"
+    rt.db.x("UPDATE trades SET exit_ts='2026-11-17T10:05:00', pnl=0, fees=0")
+    ok, _ = up.apply()
+    import time as _t
+    _t.sleep(1.3)
+    assert ok and (laptop / "a.txt").read_text() == "v2" and exits == [1]
+    assert (laptop / "data" / "moa.db").read_text() == "keep"

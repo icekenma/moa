@@ -7,6 +7,7 @@
 import json
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 from datetime import datetime, timedelta
 
@@ -26,21 +27,68 @@ class MarketError(RuntimeError):
 
 
 class Cache:
-    def __init__(self):
-        self.d, self.lock = {}, threading.Lock()
+    """짧은 저장 + 오래된 값 먼저 주기(stale-while-revalidate).
 
-    def get(self, key, ttl, fn):
-        with self.lock:
-            hit = self.d.get(key)
-            if hit and time.time() - hit[0] < ttl:
-                return hit[1]
-        val = fn()
+    - 신선하면 바로 준다
+    - 조금 지났으면(stale 안) 저장본을 바로 주고 뒤에서 새로 받는다(화면이 기다리지 않음)
+    - 아예 없거나 너무 오래되면 그때만 기다려 받는다. 같은 키를 동시에 받지 않는다(single-flight)
+    """
+    def __init__(self):
+        self.d, self.lock, self.busy = {}, threading.Lock(), {}
+
+    def peek(self, key):
+        hit = self.d.get(key)
+        return hit[1] if hit else None
+
+    def fresh(self, key, ttl):
+        hit = self.d.get(key)
+        return bool(hit) and time.time() - hit[0] < ttl
+
+    def put(self, key, val):
         with self.lock:
             self.d[key] = (time.time(), val)
-            if len(self.d) > 800:
-                for k in list(self.d)[:200]:
+            if len(self.d) > 1500:
+                for k in list(self.d)[:300]:
                     self.d.pop(k, None)
-        return val
+
+    def _load(self, key, fn):
+        with self.lock:
+            ev = self.busy.get(key)
+            mine = ev is None
+            if mine:
+                ev = self.busy[key] = threading.Event()
+        if not mine:  # 다른 요청이 받는 중이면 그 결과를 기다린다
+            ev.wait(15)
+            hit = self.d.get(key)
+            if hit:
+                return hit[1]
+            raise MarketError("시세를 받는 중이에요. 잠시 뒤 다시 시도해 주세요")
+        try:
+            val = fn()
+            self.put(key, val)
+            return val
+        finally:
+            with self.lock:
+                self.busy.pop(key, None)
+            ev.set()
+
+    def get(self, key, ttl, fn, stale=None):
+        stale = ttl * 15 if stale is None else stale
+        hit = self.d.get(key)
+        age = time.time() - hit[0] if hit else None
+        if hit and age < ttl:
+            return hit[1]
+        if hit and age < stale:
+            if key not in self.busy:
+                threading.Thread(target=self._bg, args=(key, fn), daemon=True).start()
+            return hit[1]
+        return self._load(key, fn)
+
+    def _bg(self, key, fn):
+        try:
+            self._load(key, fn)
+        except Exception:
+            pass
 
 
 class Market:
@@ -120,7 +168,7 @@ class Market:
                     "high52": m.get("fiftyTwoWeekHigh"), "low52": m.get("fiftyTwoWeekLow"),
                     "currency": m.get("currency") or "USD", "exchange": m.get("exchangeName") or "",
                     "spark": pts[-78:]}
-        return self.cache.get(("yq", sym), 10, load)
+        return self.cache.get(("yq", sym), 8, load, stale=600)
 
     def yh_chart(self, sym, rng):
         r, iv = RANGES.get(rng, RANGES["1d"])
@@ -168,7 +216,7 @@ class Market:
                     "open": num(d.get("open_pric")), "high": num(d.get("high_pric")), "low": num(d.get("low_pric")),
                     "volume": int(num(d.get("trde_qty"))), "high52": num(d.get("250hgst")),
                     "low52": num(d.get("250lwst")), "currency": "KRW", "exchange": self.kr_market(code)}
-        return self.cache.get(("kq", code), 4, load)
+        return self.cache.get(("kq", code), 3, load, stale=600)
 
     def _kr_yahoo(self, code):
         last = None
@@ -181,14 +229,51 @@ class Market:
                 last = e
         raise MarketError(f"{code} 시세를 찾지 못했어요: {last}")
 
+    def kr_board(self, codes):
+        """관심종목 시세를 한 번에(ka10095 관심종목정보). 안 되면 종목별(ka10001)로."""
+        if not codes:
+            return {}
+        cl = self.kr_client()
+        key = ("kb", tuple(codes))
+
+        def load():
+            out = {}
+            if cl is not None:
+                try:
+                    d = cl.call("watchinfo", {"stk_cd": "|".join(codes)})
+                    for r in d.get("atn_stk_infr") or []:
+                        c = code6(r.get("stk_cd", ""))
+                        price = num(r.get("cur_prc"))
+                        if not c or not price:
+                            continue
+                        out[c] = {"sym": c, "name": r.get("stk_nm") or self.kr_name(c), "price": price,
+                                  "change": snum(r.get("pred_pre")), "change_pct": snum(r.get("flu_rt")),
+                                  "volume": int(num(r.get("trde_qty"))), "currency": "KRW",
+                                  "exchange": self.kr_market(c)}
+                except Exception:
+                    out = {}
+            for c in codes:  # 한 번에 못 받은 종목만 하나씩
+                if c not in out:
+                    try:
+                        out[c] = self.kr_quote(c)
+                    except Exception as e:
+                        out[c] = {"sym": c, "name": self.kr_name(c), "price": None, "error": str(e)}
+            return out
+        return self.cache.get(key, 3, load, stale=600)
+
     def kr_spark(self, code):
         def load():
             cl = self.kr_client()
             if cl is None:
                 return []
             return [b["c"] for b in self._kr_minutes(cl, code)][::5][-78:]
+        k = ("ks", code)
+        if self.cache.peek(k) is None:
+            if k not in self.cache.busy:
+                threading.Thread(target=self.cache._bg, args=(k, load), daemon=True).start()
+            return []
         try:
-            return self.cache.get(("ks", code), 60, load)
+            return self.cache.get(k, 90, load, stale=3600)
         except Exception:
             return []
 
@@ -230,17 +315,13 @@ class Market:
                     except Exception:
                         out.append({"name": name, "price": None, "change": 0, "change_pct": 0})
             return out
-        return self.cache.get(("ki",), 10, load)
+        return self.cache.get(("ki",), 5, load, stale=600)
 
     def us_indices(self):
-        out = []
-        for name, sym in US_INDICES:
-            try:
-                q = self.yh_quote(sym)
-                out.append({"name": name, "price": q["price"], "change": q["change"], "change_pct": q["change_pct"]})
-            except Exception:
-                out.append({"name": name, "price": None, "change": 0, "change_pct": 0})
-        return out
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            res = list(ex.map(self._safe_yq, [s for _, s in US_INDICES]))
+        return [{"name": n, "price": q.get("price"), "change": q.get("change", 0), "change_pct": q.get("change_pct", 0)}
+                for (n, _), q in zip(US_INDICES, res)]
 
     # ---------- 국내 종목 목록(검색용, 하루 한 번 받아 저장) ----------
     def _master_path(self):
@@ -335,26 +416,47 @@ class Market:
 
     # ---------- 화면용 ----------
     def overview(self, mkt):
-        syms = self.watch()[mkt]
-        items, errors = [], []
-        for s in syms:
-            try:
-                q = dict(self.kr_quote(s) if mkt == "kr" else self.yh_quote(s))
-                if mkt == "kr" and "spark" not in q:
-                    q["spark"] = self.kr_spark(s)
+        syms = list(self.watch()[mkt])
+        errors, fx = [], None
+        if mkt == "kr":
+            board = self.kr_board(syms)
+            items = []
+            for c in syms:
+                q = dict(board.get(c) or {"sym": c, "name": self.kr_name(c), "price": None})
+                q["spark"] = self.kr_spark(c)
                 items.append(q)
-            except Exception as e:
-                items.append({"sym": s, "name": self.kr_name(s) if mkt == "kr" else s, "price": None, "error": str(e)})
-                errors.append(f"{s}: {e}")
-        fx = None
-        if mkt == "us":
+            indices = self.kr_indices()
+        else:  # 미국: 여러 종목을 동시에 받는다
+            want = syms + [s for _, s in US_INDICES]
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                res = dict(zip(want, ex.map(self._safe_yq, want)))
+            items = [res[s] if "error" not in res[s] else dict(res[s], name=s) for s in syms]
+            indices = [{"name": n, "price": res[s].get("price"), "change": res[s].get("change", 0),
+                        "change_pct": res[s].get("change_pct", 0)} for n, s in US_INDICES]
+            fx = res["USDKRW=X"].get("price")
+        errors = [f"{q['sym']}: {q['error']}" for q in items if q.get("error")]
+        return {"mkt": mkt, "indices": indices, "items": items, "fx": fx, "kiwoom": self.kr_client() is not None,
+                "errors": errors[:5], "updated_at": datetime.now().isoformat(timespec="seconds")}
+
+    def _safe_yq(self, sym):
+        try:
+            return self.yh_quote(sym)
+        except Exception as e:
+            return {"sym": sym, "price": None, "error": str(e)}
+
+    def warm(self):
+        """서버를 켜자마자 관심종목·지수를 미리 받아 두어 첫 화면이 기다리지 않게."""
+        def run():
+            for m in ("kr", "us"):
+                try:
+                    self.overview(m)
+                except Exception:
+                    pass
             try:
-                fx = self.yh_quote("USDKRW=X")["price"]
+                self.kr_master()
             except Exception:
                 pass
-        return {"mkt": mkt, "indices": self.kr_indices() if mkt == "kr" else self.us_indices(), "items": items,
-                "fx": fx, "kiwoom": self.kr_client() is not None, "errors": errors[:5],
-                "updated_at": datetime.now().isoformat(timespec="seconds")}
+        threading.Thread(target=run, daemon=True).start()
 
     def holding(self, code):
         if not self.rt.account.configured():

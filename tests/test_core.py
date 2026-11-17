@@ -630,3 +630,36 @@ def test_kiwoom_clients_share_token_throttle_and_cache(rt):
     c = KiwoomClient("k2", "s", False)
     c.session = Busy()
     assert c.holdings()[0]["code"] == "005930"  # 한도 초과는 한 번 쉬고 다시
+
+
+def test_market_board_bulk_and_stale_while_revalidate(rt):
+    import time as _t
+    from moa.market import Cache
+    rt.settings.update({"kiwoom_view": {"appkey": "kb", "secretkey": "s", "mock": False}})
+
+    class Bulk(_FakeMarketKiwoom):
+        def post(self, url, json=None, headers=None, timeout=None):
+            if headers and headers.get("api-id") == "ka10095":
+                self.calls.append("ka10095")
+                return _Resp({"return_code": 0, "atn_stk_infr": [
+                    {"stk_cd": "005930", "stk_nm": "삼성전자", "cur_prc": "+192800", "pred_pre": "+2300", "flu_rt": "+1.21"},
+                    {"stk_cd": "000660", "stk_nm": "SK하이닉스", "cur_prc": "-198000", "pred_pre": "-500", "flu_rt": "-0.25"}]})
+            return super().post(url, json, headers, timeout)
+    fake = Bulk()
+    rt.account.client().session = fake
+    b = rt.market.kr_board(["005930", "000660", "035420"])
+    assert b["005930"]["price"] == 192800 and b["000660"]["change"] == -500
+    assert b["035420"]["price"] == 70100  # 한 번에 못 받은 종목은 따로
+    assert fake.calls.count("ka10095") == 1 and fake.calls.count("ka10001") == 1
+    c, n = Cache(), [0]
+
+    def slow():
+        n[0] += 1
+        _t.sleep(0.3)
+        return n[0]
+    assert c.get("x", 0.05, slow) == 1
+    _t.sleep(0.1)
+    t0 = _t.time()
+    assert c.get("x", 0.05, slow) == 1 and _t.time() - t0 < 0.1  # 지난 값은 바로, 새 값은 뒤에서
+    _t.sleep(0.5)
+    assert c.peek("x") == 2

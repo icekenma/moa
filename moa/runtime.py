@@ -41,6 +41,7 @@ class Runtime:
         if start_thread:
             self._thread = threading.Thread(target=self._loop, name="moa-engine", daemon=True)
             self._thread.start()
+            self.market.warm()
 
     # ---------- 구성 ----------
     def _client(self, engine):

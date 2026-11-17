@@ -15,7 +15,8 @@ API = {
     "quote": ("/api/dostk/stkinfo", "ka10001"),     # 주식기본정보요청
     "minute": ("/api/dostk/chart", "ka10080"),      # 주식분봉차트조회요청
     "daily": ("/api/dostk/chart", "ka10081"),
-    "acctno": ("/api/dostk/acnt", "ka00001"),      # 계좌번호조회       # 주식일봉차트조회요청
+    "acctno": ("/api/dostk/acnt", "ka00001"),      # 계좌번호조회
+    "watchinfo": ("/api/dostk/stkinfo", "ka10095"), # 관심종목정보요청(여러 종목 | 로 한 번에)      # 계좌번호조회       # 주식일봉차트조회요청
     "index": ("/api/dostk/sect", "ka20001"),        # 업종현재가요청(코스피 001, 코스닥 101)
     "stocklist": ("/api/dostk/stkinfo", "ka10099"), # 종목정보 리스트(코스피 0, 코스닥 10, ETF 8)
     "buy": ("/api/dostk/ordr", "kt10000"),          # 주식 매수주문
@@ -23,7 +24,7 @@ API = {
     "balance": ("/api/dostk/acnt", "kt00018"),      # 계좌평가잔고내역요청
     "deposit": ("/api/dostk/acnt", "kt00001"),      # 예수금상세현황요청
 }
-MIN_INTERVAL = 0.25  # 같은 앱키의 호출 간 최소 간격(초). 키움 조회 한도(초당 약 5회) 대비.
+MIN_INTERVAL = 0.21  # 같은 앱키의 호출 간 최소 간격(초). 키움 조회 한도(초당 약 5회) 대비.
 SLOW_APIS = {"kt00001": 1.1, "kt00018": 1.1}  # 계좌 조회는 같은 TR을 1초에 한 번만
 CACHE_APIS = {"kt00001": 2.5, "kt00018": 2.5}  # 여러 화면·엔진이 동시에 물어도 키움에는 한 번만
 _SHARED = {}  # (앱키, 모의 여부) -> 토큰·호출 간격·응답 저장을 앱키 하나당 하나로 공유

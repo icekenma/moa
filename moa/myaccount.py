@@ -42,6 +42,14 @@ class AccountView:
     def snapshot(self, force=False):
         if not self.configured():
             return {"configured": False}
+        age = time.time() - self._at
+        if not force and self._cache and age < CACHE_SEC:
+            return self._cache
+        if not force and self._cache and age < 120 and self._cache.get("key_fp") == self._fp():
+            # 조금 지난 값은 바로 주고 뒤에서 새로 받는다(화면이 키움 응답을 기다리지 않게)
+            if not self._lock.locked():
+                threading.Thread(target=self.snapshot, kwargs={"force": True}, daemon=True).start()
+            return self._cache
         with self._lock:
             if not force and self._cache and time.time() - self._at < CACHE_SEC:
                 return self._cache

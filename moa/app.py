@@ -10,6 +10,7 @@ from flask import Flask, jsonify, make_response, request, send_from_directory
 from .assets import AssetError
 from .broker.brokers import OrderError
 from .ledger import LedgerError
+from .market import Cache
 from .settings import MASK
 from .trading import backtest as BT
 from .trading.strategy import STRATEGIES
@@ -256,8 +257,16 @@ def create_app(rt, updater=None):
         return jsonify(ok=True)
 
     # ---------- 주식 ----------
+    stocks_cache = Cache()
+
     @app.get("/api/stocks")
     def stocks():
+        # 키움 계좌면 잔고 조회가 1~2초 걸려서, 직전 결과를 바로 주고 뒤에서 새로 받는다
+        d = dict(stocks_cache.get("s", 2, stocks_payload, stale=60))
+        d["orders"] = rt.db.q("SELECT * FROM orders ORDER BY id DESC LIMIT 30")
+        return jsonify(d)
+
+    def stocks_payload():
         out = []
         st = rt.settings.all()
         same = (st["trade_mode"]["scalp"] == st["trade_mode"]["dca"] == "kiwoom"
@@ -282,9 +291,8 @@ def create_app(rt, updater=None):
                 except Exception as e:
                     item["error"] = f"잔고 조회 실패: {e}"
             out.append(item)
-        orders = rt.db.q("SELECT * FROM orders ORDER BY id DESC LIMIT 30")
-        return jsonify(accounts=out, orders=orders, data_source=rt.feed.kind,
-                       market_open=rt.feed.market_open(), now=rt.feed.now().isoformat(timespec="minutes"))
+        return dict(accounts=out, data_source=rt.feed.kind,
+                    market_open=rt.feed.market_open(), now=rt.feed.now().isoformat(timespec="minutes"))
 
     @app.get("/api/quote/<code>")
     def quote(code):
@@ -316,6 +324,7 @@ def create_app(rt, updater=None):
                     "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     (rt.feed.now().isoformat(timespec="seconds"), eng, b.mode, code, res["name"], side, qty, price,
                      res["status"], res["fill_price"], res.get("broker_no", ""), "직접 주문"))
+        stocks_cache.d.clear()
         return jsonify(res)
 
     # ---------- 문자·알림톡 자동 기록 ----------
@@ -562,6 +571,7 @@ def create_app(rt, updater=None):
 
     @app.put("/api/settings")
     def settings_put():
+        stocks_cache.d.clear()
         d = body()
         allowed = {"data_source", "demo_speed", "trade_mode", "kiwoom", "kiwoom_view", "real_orders_allowed", "paper_start_cash",
                    "costs", "holidays", "ntfy_topic", "dca_window", "public_url", "allowed_origins"}
@@ -575,6 +585,7 @@ def create_app(rt, updater=None):
 
     @app.post("/api/paper/reset")
     def paper_reset():
+        stocks_cache.d.clear()
         eng = body().get("engine")
         b = rt.brokers.get(eng)
         if not b or b.mode != "paper":

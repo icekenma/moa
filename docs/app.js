@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1201";
+const UI_VERSION = "261117.1208";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -11,6 +11,10 @@ const view = $("#view");
 const store = {
   get(k) { try { return localStorage.getItem("moa." + k) || ""; } catch (e) { return ""; } },
   set(k, v) { try { v ? localStorage.setItem("moa." + k, v) : localStorage.removeItem("moa." + k); } catch (e) { /* 저장 불가 */ } },
+};
+const memo = {  // 마지막으로 받은 화면 자료(앱을 다시 열어도 바로 보이게)
+  get(k) { try { return JSON.parse(localStorage.getItem("moa.m." + k) || "null"); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem("moa.m." + k, JSON.stringify(v)); } catch (e) { /* 저장 불가 */ } },
 };
 const ON_PAGES = location.hostname.endsWith("github.io") || location.protocol === "file:" || store.get("remote") === "1";
 class NeedConnect extends Error {}
@@ -852,8 +856,12 @@ pages.invest = {
 
   // ---------- 내 계좌(조회 전용) ----------
   async account(box) {
+    if (!box.children.length) { const c = kwCache.load(); if (c) await this.accountRender(box, { ...c, ok: true }); }
     const d = await kwFetch();
     if (investState.tab !== "account") return;
+    return this.accountRender(box, d);
+  },
+  async accountRender(box, d) {
     $(".fab")?.remove();
     if (!d.configured) {
       box.innerHTML = `<section class="card">
@@ -893,8 +901,13 @@ pages.invest = {
 
   // ---------- 매매 ----------
   async trade(box) {
+    if (!box.children.length) { const c = memo.get("stocks"); if (c) this.tradeRender(box, c); }
     const d = await GET("/api/stocks");
+    memo.set("stocks", d);
     if (investState.tab !== "trade") return;
+    this.tradeRender(box, d);
+  },
+  tradeRender(box, d) {
     const rows = d.accounts.flatMap((a) => a.holdings.map((x) => ({ ...x, eng: a.engine })));
     box.innerHTML = `
       ${demoNotice(d.data_source)}
@@ -1187,7 +1200,12 @@ const mkt = {
         <section class="card tight"><div class="mk-head"><span>관심종목</span><button type="button" class="link" id="mkToggle"></button></div><div class="list" id="mkList"><div class="empty">불러오는 중</div></div></section>
         <div class="tiny" id="mkFoot" style="padding:0 4px"></div>
       </div>`;
-      bindSeg(box, "시장", (v) => { this.m = v; store.set("mkt", v === "us" ? "us" : ""); this.last = {}; $("#mkList").innerHTML = `<div class="empty">불러오는 중</div>`; $("#mkIdx").innerHTML = ""; this.board(box); });
+      bindSeg(box, "시장", (v) => {
+        this.m = v; store.set("mkt", v === "us" ? "us" : ""); this.last = {};
+        const c = this.snap[v] || memo.get("mk." + v);
+        if (c) this.renderBoard(c, v); else { $("#mkList").innerHTML = `<div class="empty">불러오는 중</div>`; $("#mkIdx").innerHTML = ""; }
+        this.board(box);
+      });
       $("#mkFind").onclick = () => this.search();
       $("#mkToggle").onclick = () => { this.showAmt = !this.showAmt; store.set("mktAmt", this.showAmt ? "1" : ""); this.board(box); };
       $("#mkList").onclick = (e) => {
@@ -1196,8 +1214,15 @@ const mkt = {
       };
     }
     const m = this.m;
+    if (first || !this.snap[m]) { const c = this.snap[m] || memo.get("mk." + m); if (c) this.renderBoard(c, m); }
     const d = await GET(`/api/market/overview?mkt=${m}`);
+    this.snap[m] = d; memo.set("mk." + m, d);
     if (investState.tab !== "market" || m !== this.m || !$("#mkList")) return;
+    this.renderBoard(d, m);
+  },
+  snap: {},
+  renderBoard(d, m) {
+    if (!$("#mkList")) return;
     $("#mkToggle").textContent = this.showAmt ? "등락폭" : "등락률";
     $("#mkIdx").innerHTML = d.indices.map((x) => `<div class="mk-i"><span>${esc(x.name)}</span>
       <b>${x.price == null ? "-" : x.name.includes("환율") ? won(x.price) : Number(x.price).toLocaleString("en-US", { maximumFractionDigits: 2 })}</b>
@@ -1260,19 +1285,24 @@ const mkt = {
     this.d = { m, sym, range: "1d", q: null, chart: null };
     setTop("시세", { back: "#invest/market", menu: "invest", sub: "stock", right: `<button type="button" class="star on-deep" id="mkStar" aria-pressed="false" aria-label="관심종목">${STAR}</button>` });
     view.innerHTML = `<div class="mk-d" id="mkD"><div class="empty">불러오는 중</div></div>`;
-    await this.refreshDetail(true);
+    // 목록에서 이미 받은 값이 있으면 먼저 그려 둔다
+    const pre = this.qmemo[m + sym] || ((this.snap[m] || {}).items || []).find((x) => x.sym === sym);
+    const D = this.d;
+    if (pre && pre.price != null) { D.q = { currency: m === "us" ? "USD" : "KRW", ...pre }; D.chart = this.cmemo[m + sym + "1d"] || null; this.drawDetail(true); }
+    await this.refreshDetail(!pre);
   },
+  qmemo: {}, cmemo: {},
   async refreshDetail(full) {
     const D = this.d;
     if (!D || !$("#mkD")) return;
-    const q = await GET(`/api/market/quote/${D.m}/${encodeURIComponent(D.sym)}`);
+    const needChart = full || !D.chart || D.range === "1d";
+    const [q, ch] = await Promise.all([
+      GET(`/api/market/quote/${D.m}/${encodeURIComponent(D.sym)}`),
+      needChart ? GET(`/api/market/chart/${D.m}/${encodeURIComponent(D.sym)}?range=${D.range}`).catch((e) => ({ points: [], error: e.message })) : null]);
     if (this.d !== D) return;
-    D.q = q;
-    if (full || !D.chart || D.range === "1d") {
-      try { D.chart = await GET(`/api/market/chart/${D.m}/${encodeURIComponent(D.sym)}?range=${D.range}`); } catch (e) { D.chart = { points: [], error: e.message }; }
-      if (this.d !== D) return;
-    }
-    this.drawDetail(full);
+    D.q = q; this.qmemo[D.m + D.sym] = q;
+    if (ch) { D.chart = ch; this.cmemo[D.m + D.sym + D.range] = ch; }
+    this.drawDetail(full || !$("#mkPrice"));
   },
   drawDetail(full) {
     const D = this.d, q = D.q, m = D.m, cur = q.currency, usd = m === "us";
@@ -1303,8 +1333,11 @@ const mkt = {
         ${usd ? `<div class="tiny" style="padding:0 4px">미국 주식 주문은 아직 지원하지 않아요. 시세는 공개 시세(최대 15분 지연)예요.</div>` : ""}
         ${usd ? "" : `<div class="mk-act"><button type="button" class="btn blue" data-o="sell">매도</button><button type="button" class="btn red" data-o="buy">매수</button></div>`}`;
       bindSeg(box, "기간", async (v) => {
-        D.range = v; $("#mkChart").innerHTML = `<div class="empty small">불러오는 중</div>`;
-        try { D.chart = await GET(`/api/market/chart/${m}/${encodeURIComponent(D.sym)}?range=${v}`); } catch (e) { D.chart = { points: [], error: e.message }; }
+        D.range = v;
+        const cm = this.cmemo[m + D.sym + v];
+        if (cm) { D.chart = cm; this.drawChart(); } else $("#mkChart").innerHTML = `<div class="empty small">불러오는 중</div>`;
+        try { D.chart = await GET(`/api/market/chart/${m}/${encodeURIComponent(D.sym)}?range=${v}`); this.cmemo[m + D.sym + v] = D.chart; } catch (e) { if (!cm) D.chart = { points: [], error: e.message }; }
+        if (D.range !== v) return;
         if (this.d === D) this.drawChart();
       });
       $$("[data-o]", box).forEach((b) => b.onclick = () => orderSheet({ code: D.sym, side: b.dataset.o, qty: b.dataset.o === "sell" && hd ? hd.qty : 1 }));

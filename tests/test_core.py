@@ -357,3 +357,19 @@ def test_myaccount_read_only(rt):
     assert c.get("/api/assets").get_json()["net"] == 6166000
     assert c.get("/api/myaccount").get_json()["total"] == 6166000
     assert c.get("/api/settings").get_json()["kiwoom_view"]["secretkey"] == "********"
+
+
+def test_sample_budgets_cleared_once(tmp_path):
+    p = str(tmp_path / "m.db")
+    db = DB(p)
+    assert sum(c["budget"] for c in db.q("SELECT budget FROM categories")) == 0
+    # 예전 버전처럼 예시 예산이 들어 있던 DB
+    for k, v in DB.SAMPLE_BUDGETS.items():
+        db.x("UPDATE categories SET budget=? WHERE name=?", (v, k))
+    db.set_setting("sample_budgets_cleared", False)
+    db2 = DB(p)
+    assert sum(c["budget"] for c in db2.q("SELECT budget FROM categories")) == 0
+    # 사용자가 정한 예산은 다시 열어도 그대로
+    db2.x("UPDATE categories SET budget=300000 WHERE name='식비'")
+    db3 = DB(p)
+    assert db3.one("SELECT budget FROM categories WHERE name='식비'")["budget"] == 300000

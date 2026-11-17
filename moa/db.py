@@ -65,9 +65,9 @@ CREATE TABLE IF NOT EXISTS engine_log(
 """
 
 DEFAULT_CATEGORIES = [
-    ("식비", "out", 450000), ("외식", "out", 200000), ("교통", "out", 150000),
-    ("주거·통신", "out", 520000), ("생활용품", "out", 100000), ("의료", "out", 50000),
-    ("취미", "out", 200000), ("경조사", "out", 0), ("기타지출", "out", 0),
+    ("식비", "out", 0), ("외식", "out", 0), ("교통", "out", 0),
+    ("주거·통신", "out", 0), ("생활용품", "out", 0), ("의료", "out", 0),
+    ("취미", "out", 0), ("경조사", "out", 0), ("기타지출", "out", 0),
     ("급여", "in", 0), ("부수입", "in", 0), ("이자·배당", "in", 0), ("기타수입", "in", 0),
 ]
 
@@ -88,6 +88,19 @@ class DB:
                     self.x("INSERT INTO categories(name,kind,budget,sort) VALUES(?,?,?,?)",
                            (name, kind, budget, i))
             self.conn.commit()
+            self._clear_sample_budgets()
+
+    # v0.4: 처음 버전에 예시로 넣었던 예산(합계 167만 원)이 그대로면 0으로 지운다. 사용자가 바꾼 값은 두지 않는다.
+    SAMPLE_BUDGETS = {"식비": 450000, "외식": 200000, "교통": 150000, "주거·통신": 520000,
+                      "생활용품": 100000, "의료": 50000, "취미": 200000}
+
+    def _clear_sample_budgets(self):
+        if self.get_setting("sample_budgets_cleared"):
+            return
+        rows = {r["name"]: r["budget"] for r in self.q("SELECT name, budget FROM categories WHERE kind='out'")}
+        if all(rows.get(k) == v for k, v in self.SAMPLE_BUDGETS.items()):
+            self.x("UPDATE categories SET budget=0 WHERE kind='out'")
+        self.set_setting("sample_budgets_cleared", True)
 
     def q(self, sql, args=()):
         with self.lock:

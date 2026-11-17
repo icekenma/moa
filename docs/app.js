@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1006";
+const UI_VERSION = "261117.1018";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -231,6 +231,7 @@ pages.home = {
       ? (L.remaining > 0 ? `${m}월은 ${L.days_left}일 남았고,<br>하루 <span class="hl">${won(L.per_day)}원</span>씩 쓸 수 있어요`
         : `${m}월 예산을 <span class="hl">${won(-L.remaining)}원</span> 넘게 썼어요`)
       : `${m}월에 <span class="hl">${won(L.expense)}원</span> 썼어요`;
+    const noBudget = L.budget > 0 ? "" : `<div class="notice" style="display:flex;align-items:center;gap:10px;justify-content:space-between"><span>한 달 예산을 정하면 하루에 쓸 수 있는 돈을 알려 드려요</span><a class="btn sm dark" href="#ledger?budget=1" style="flex:0 0 auto">예산 정하기</a></div>`;
     const used = L.budget ? Math.min(100, (L.expense / L.budget) * 100) : 0;
     const near = L.categories.filter((c) => c.budget > 0).map((c) => ({ ...c, p: c.used / c.budget })).sort((a, b) => b.p - a.p).slice(0, 3);
     view.innerHTML = `
@@ -239,6 +240,7 @@ pages.home = {
         <h1 class="hero">${hero}</h1>
         ${L.budget ? `<div class="bar thick ${L.remaining < 0 ? "over" : ""}" role="img" aria-label="예산 ${Math.round(used)}% 사용"><div style="width:${used}%"></div></div>
           <div class="kv"><div>예산<b>${won(L.budget)}</b></div><div>쓴 돈<b>${won(L.expense)}</b></div><div>남은 예산<b>${won(Math.max(0, L.remaining))}</b></div></div>` : ""}
+        ${noBudget}
         ${dayBars(L)}
       </section>
       <div class="btns"><button class="btn dark" data-add="out">지출 기록</button><button class="btn" data-add="in">수입 기록</button></div>
@@ -337,7 +339,7 @@ async function txSheet(e, done) {
 // =====================================================================
 const ledgerState = { month: thisMonth(), kind: "all" };
 pages.ledger = {
-  async mount() {
+  async mount(h) {
     const S = ledgerState;
     setTop("가계부");
     const d = await GET(`/api/ledger?month=${S.month}${S.kind !== "all" ? "&kind=" + S.kind : ""}`);
@@ -371,6 +373,7 @@ pages.ledger = {
           <div class="bar ${c.budget && c.used > c.budget ? "over" : ""}"><div style="width:${(c.used / maxc) * 100}%"></div></div></div>`).join("") : `<div class="tiny">지출이 생기면 분류별로 보여드려요</div>`}
       </section>`;
     bindSeg(view, "내역 종류", (v) => { S.kind = v; route(); });
+    if (h && h.params && h.params.get("budget")) { history.replaceState(null, "", "#ledger"); this.budgetSheet(d); }
     fab("기록", () => txSheet({ kind: S.kind === "in" ? "in" : "out", date: S.month === thisMonth() ? localToday() : S.month + "-01" }, (b) => { if (b && b.date.slice(0, 7) !== S.month) S.month = b.date.slice(0, 7); route(); }));
     view.onclick = async (e) => {
       const b = e.target.closest("[data-act],[data-edit]");
@@ -387,7 +390,7 @@ pages.ledger = {
   },
   budgetSheet(d) {
     openSheet("분류와 예산", `
-      <div class="small muted">매달 같은 예산을 써요. 0이면 예산 없이 기록만 해요.</div>
+      <div class="small muted">분류마다 한 달에 쓸 금액을 넣어요. 매달 같은 예산을 쓰고, 0이면 예산 없이 기록만 해요.</div>
       ${d.categories.filter((c) => c.kind === "out").map((c) => `<label class="field" style="flex-direction:row;align-items:center;justify-content:space-between;gap:12px">
         <span style="font-size:15px;color:var(--ink)">${esc(c.name)}</span>
         <input class="r" style="max-width:160px" inputmode="numeric" data-budget="${c.id}" data-name="${esc(c.name)}" value="${won(c.budget)}"></label>`).join("")}

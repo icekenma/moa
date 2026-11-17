@@ -1721,3 +1721,58 @@ def test_swing_guard_holds_overnight_until_last_day(rt, monkeypatch):
     monkeypatch.setattr(AP, "session", lambda m: {"open": True, "left_min": 5})
     ap.check(force=True)
     assert sold == [(3, "기간 정리", 10100)]             # 보유 기간 마지막 날 장 마감 직전에만
+
+
+def test_ai_job_survives_disconnect_and_resumes(rt, monkeypatch):
+    """휴대폰 연결이 끊겨도 AI 작업은 끝까지 돌고, 같은 작업에 다시 붙어 남은 부분을 이어 받는다."""
+    import time as _t
+    ran = []
+
+    def slow(kind, d):
+        for i in range(4):
+            _t.sleep(0.05)
+            yield {"t": "text", "text": f"p{i}"}
+        ran.append(kind)                      # 저장·비용 기록이 일어나는 자리
+        yield {"t": "done", "usd": 0.1}
+    monkeypatch.setattr(rt.ai, "stream", slow)
+    c = create_app(rt).test_client()
+    r = c.post("/api/ai/ask", json={"kind": "pick"}, buffered=False)
+    it = r.response
+    first = json.loads(next(it))
+    assert first["t"] == "job" and first["id"]
+    assert json.loads(next(it)) == {"t": "text", "text": "p0"}
+    r.close()                                  # 화면이 꺼짐(연결 끊김)
+    for _ in range(100):
+        if ran:
+            break
+        _t.sleep(0.02)
+    assert ran == ["pick"]                     # 그래도 끝까지 돌았다
+    lines = [json.loads(x) for x in c.get(f"/api/ai/job/{first['id']}?from=1").get_data(as_text=True).splitlines()]
+    assert [x.get("text") for x in lines[:3]] == ["p1", "p2", "p3"] and lines[-1]["t"] == "done"
+    assert c.get("/api/ai/job/nope").status_code == 404
+    # 사용자가 멈추면 작업도 멈춘다
+    r2 = c.post("/api/ai/ask", json={"kind": "chat"}, buffered=False)
+    jid = json.loads(next(r2.response))["id"]
+    assert c.post(f"/api/ai/job/{jid}/cancel").get_json()["ok"]
+    r2.close()
+    _t.sleep(0.4)
+    assert ran == ["pick"]
+
+
+def test_ai_job_sends_heartbeat_while_quiet(rt, monkeypatch):
+    import time as _t
+    import threading
+    gate = threading.Event()
+
+    def quiet(kind, d):
+        gate.wait(8)
+        yield {"t": "done"}
+    monkeypatch.setattr(rt.ai, "stream", quiet)
+    monkeypatch.setattr(threading.Condition, "wait", lambda self, timeout=None: _t.sleep(0.05))
+    c = create_app(rt).test_client()
+    r = c.post("/api/ai/ask", json={"kind": "pick"}, buffered=False)
+    it = r.response
+    assert json.loads(next(it))["t"] == "job" and json.loads(next(it)) == {"t": "ping"}
+    gate.set()
+    rest = [json.loads(x) for x in it]
+    assert rest[-1] == {"t": "done"}

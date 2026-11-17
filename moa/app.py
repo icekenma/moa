@@ -1024,19 +1024,79 @@ def create_app(rt, updater=None):
     def ai_guard_del(gid):
         return jsonify(rt.aipick.cancel_guard(gid))
 
+    # AI 요청은 화면 연결과 따로 뒤에서 끝까지 돈다(작업). 휴대폰이 화면을 끄거나 연결이 잠깐 끊겨도
+    # 결과(추천 저장·비용 기록)가 사라지지 않고, 화면은 같은 작업에 다시 붙어 이어 받는다.
+    import threading
+    import time as _time
+    jobs, jobs_lock = {}, threading.Lock()
+
+    def job_start(kind, d):
+        now = _time.time()
+        job = {"id": secrets.token_urlsafe(12), "events": [], "done": False, "cancel": False, "at": now, "cv": threading.Condition()}
+        with jobs_lock:
+            for k in [k for k, v in jobs.items() if v["done"] and now - v["at"] > 900]:
+                jobs.pop(k, None)
+            jobs[job["id"]] = job
+
+        def push(ev):
+            with job["cv"]:
+                job["events"].append(ev)
+                job["cv"].notify_all()
+
+        def run():
+            try:
+                for ev in rt.ai.stream(kind, d):
+                    if job["cancel"]:
+                        break
+                    push(ev)
+            except Exception as e:
+                app.logger.exception(e)
+                push({"t": "error", "msg": f"AI 처리 중 오류가 났어요 ({type(e).__name__})"})
+            finally:
+                with job["cv"]:
+                    job["done"], job["at"] = True, _time.time()
+                    job["cv"].notify_all()
+        threading.Thread(target=run, daemon=True).start()
+        return job
+
+    def job_follow(job, start=0, head=True):
+        if head:
+            yield json.dumps({"t": "job", "id": job["id"]}) + "\n"
+        i = max(0, start)
+        while True:
+            with job["cv"]:
+                if i >= len(job["events"]) and not job["done"]:
+                    job["cv"].wait(5)
+                chunk, done = job["events"][i:], job["done"]
+            if chunk:
+                for ev in chunk:
+                    yield json.dumps(ev, ensure_ascii=False) + "\n"
+                i += len(chunk)
+            elif done:
+                break
+            else:  # 조용한 동안에도 5초마다 신호를 보내 중간 연결이 끊기지 않게 한다
+                yield '{"t":"ping"}\n'
+
+    NDJSON = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
     @app.post("/api/ai/ask")
     def ai_ask():
         d = body()
-        kind = d.get("kind")
+        return app.response_class(job_follow(job_start(d.get("kind"), d)), mimetype="application/x-ndjson", headers=NDJSON)
 
-        def gen():
-            try:
-                for ev in rt.ai.stream(kind, d):
-                    yield json.dumps(ev, ensure_ascii=False) + "\n"
-            except Exception as e:  # 중간에 끊겨도 화면이 이유를 알 수 있게
-                yield json.dumps({"t": "error", "msg": f"AI 처리 중 오류: {e}"}, ensure_ascii=False) + "\n"
-        return app.response_class(gen(), mimetype="application/x-ndjson",
-                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    @app.get("/api/ai/job/<jid>")
+    def ai_job(jid):
+        job = jobs.get(jid)
+        if not job:
+            return jsonify(error="작업을 찾지 못했어요(끝난 지 오래됐거나 서버가 다시 켜졌어요)"), 404
+        return app.response_class(job_follow(job, int(request.args.get("from") or 0), head=False), mimetype="application/x-ndjson", headers=NDJSON)
+
+    @app.post("/api/ai/job/<jid>/cancel")
+    def ai_job_cancel(jid):
+        job = jobs.get(jid)
+        if job:
+            job["cancel"] = True
+        return jsonify(ok=True)
 
     # ---------- 단타 조건 대량 훑기(vectorbt) ----------
     @app.get("/api/sweep")

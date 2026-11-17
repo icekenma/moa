@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.0829";
+const UI_VERSION = "261118.0850";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2947,30 +2947,63 @@ const STAR = `<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"
 // =====================================================================
 // Claude AI 도우미(투자): 답변을 글자가 나오는 대로 보여 준다
 // =====================================================================
+// AI 요청은 서버에서 '작업'으로 끝까지 돈다. 연결이 끊기면(화면 꺼짐, 앱 전환, 통신 불안) 같은 작업에 다시 붙어 이어 받는다.
 async function aiStream(payload, onEvent, signal) {
   if (ON_PAGES && !store.get("server")) throw new NeedConnect("서버 주소를 먼저 넣어 주세요");
   if (lock.on) throw new Locked("잠겨 있어요");
-  const headers = authHeaders({ "Content-Type": "application/json" });
-  let res;
-  try { res = await fetch(apiBase() + "/api/ai/ask", { method: "POST", headers, body: JSON.stringify(payload), signal }); }
-  catch (e) { if (e.name === "AbortError") return; throw new Error("서버에 연결하지 못했어요"); }
-  if (res.status === 401) {
-    const d = await res.json().catch(() => ({}));
-    if (d.code === "locked" || d.code === "setup") { lock.show(d.code === "setup" ? "setup" : "unlock"); throw new Locked(d.error || "잠겨 있어요"); }
-    throw new NeedConnect("접속 토큰이 맞지 않아요");
-  }
-  if (!res.ok || !res.body) throw new Error(`AI 요청이 실패했어요 (${res.status})`);
-  const reader = res.body.getReader(), dec = new TextDecoder();
-  let buf = "";
+  let job = "", got = 0, finished = false;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  if (signal) signal.addEventListener("abort", () => { if (job) fetch(apiBase() + `/api/ai/job/${job}/cancel`, { method: "POST", headers: authHeaders() }).catch(() => {}); });
+  const open = async (resume) => {
+    const res = resume
+      ? await fetch(apiBase() + `/api/ai/job/${job}?from=${got}`, { headers: authHeaders(), signal })
+      : await fetch(apiBase() + "/api/ai/ask", { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(payload), signal });
+    if (res.status === 401) {
+      const d = await res.json().catch(() => ({}));
+      if (d.code === "locked" || d.code === "setup") { lock.show(d.code === "setup" ? "setup" : "unlock"); throw new Locked(d.error || "잠겨 있어요"); }
+      throw new NeedConnect("접속 토큰이 맞지 않아요");
+    }
+    if (res.status === 404 && resume) { const e = new Error("연결이 끊긴 사이 서버가 다시 켜져서 이어 받지 못했어요. 다시 받아 주세요"); e.fatal = true; throw e; }
+    if (!res.ok || !res.body) { const e = new Error(`AI 요청이 실패했어요 (${res.status})`); e.fatal = !resume; throw e; }
+    return res.body.getReader();
+  };
+  const pump = async (reader) => {
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const r = await reader.read();
+      if (r.done) return;
+      buf += dec.decode(r.value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+        if (!line) continue;
+        let ev;
+        try { ev = JSON.parse(line); } catch (e) { continue; }  // 깨진 줄은 건너뜀
+        if (ev.t === "ping") continue;
+        if (ev.t === "job") { job = ev.id; continue; }
+        got += 1;
+        if (ev.t === "done" || ev.t === "error") finished = true;
+        try { onEvent(ev); } catch (e) { /* 화면 그리기 오류는 흐름을 막지 않게 */ }
+      }
+    }
+  };
+  let reader;
+  try { reader = await open(false); }
+  catch (e) { if (e.name === "AbortError") return; if (e instanceof NeedConnect || e instanceof Locked || e.fatal) throw e; throw new Error("서버에 연결하지 못했어요"); }
+  let tries = 0;
   for (;;) {
-    let r;
-    try { r = await reader.read(); } catch (e) { if (e.name === "AbortError") return; throw e; }
-    if (r.done) break;
-    buf += dec.decode(r.value, { stream: true });
-    let i;
-    while ((i = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
-      if (line) { try { onEvent(JSON.parse(line)); } catch (e) { /* 깨진 줄은 건너뜀 */ } }
+    try { await pump(reader); if (finished || !job) return; }           // 서버가 끝까지 보냈으면 끝
+    catch (e) { if (e.name === "AbortError" || (signal && signal.aborted)) return; if (!job) throw new Error("연결이 끊겼어요. 다시 받아 주세요"); }
+    // 여기 왔으면 도중에 끊긴 것: 같은 작업에 다시 붙는다(화면이 꺼져 있는 동안은 기다린다)
+    for (;;) {
+      if (signal && signal.aborted) return;
+      while (document.hidden) await sleep(700);
+      if (++tries > 40) throw new Error("연결이 계속 끊겨요. 추천은 노트북에서 끝까지 만들고 있으니, 잠시 뒤 '지난 추천'에서 확인해 주세요");
+      try { onEvent({ t: "status", msg: "연결이 끊겨 다시 붙는 중" }); } catch (e) { /* 무시 */ }
+      await sleep(Math.min(4000, 600 * tries));
+      try { reader = await open(true); break; }
+      catch (e) { if (e.name === "AbortError") return; if (e instanceof NeedConnect || e instanceof Locked || e.fatal) throw e; }
     }
   }
 }

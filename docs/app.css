@@ -1458,3 +1458,11 @@ html.dark-theme .hl{-webkit-background-clip:text!important;background-clip:text!
 
 .ap-statbtn{width:100%;min-height:38px;text-decoration:none;font-weight:800;background:rgba(255,255,255,.12)!important;border:1px solid rgba(255,255,255,.2)!important;color:#fff!important;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
 .ih-quick{grid-template-columns:repeat(4,1fr)}.ih-quick .btn{padding:0 4px;font-size:11px}
+
+/* 시트: 안쪽만 스크롤, 뒤 화면은 고정(글자 크기 확대 때도 화면 높이를 넘지 않게) */
+html.modal-open,html.modal-open body{overflow:hidden;overscroll-behavior:none}
+dialog.sheet{max-height:calc(92dvh / var(--zoom,1));overflow:hidden;overscroll-behavior:contain}
+.sheet-in{max-height:calc(92dvh / var(--zoom,1));overflow:hidden}
+.sheet-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+.sheet-body>*{flex-shrink:0}
+dialog.upd{overscroll-behavior:contain}

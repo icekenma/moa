@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.0636";
+const UI_VERSION = "261118.0647";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -17,6 +17,7 @@ function applyFontSize(id) {
   const f = FONT_SIZES.find((x) => x[0] === id) || FONT_SIZES[0];
   store.set("fontSize", f[0] === "s" ? "" : f[0]);
   document.documentElement.style.zoom = f[2] === 1 ? "" : String(f[2]);
+  document.documentElement.style.setProperty("--zoom", String(f[2]));
 }
 const memo = {  // 마지막으로 받은 화면 자료(앱을 다시 열어도 바로 보이게)
   get(k) { try { return JSON.parse(localStorage.getItem("moa.m." + k) || "null"); } catch (e) { return null; } },
@@ -253,11 +254,13 @@ function openSheet(title, html, mount) {
   $("#sheetTitle").textContent = title;
   $("#sheetBody").innerHTML = html;
   if (!sheet.open) sheet.showModal();
+  document.documentElement.classList.add("modal-open");  // 뒤 화면이 같이 스크롤되지 않게
   $("#sheetBody").scrollTop = 0;
   if (mount) mount($("#sheetBody"));
 }
 function closeSheet() { if (sheet.open) sheet.close(); }
 $("#sheetClose").onclick = closeSheet;
+sheet.addEventListener("close", () => document.documentElement.classList.remove("modal-open"));
 [sheet, $("#updDlg")].forEach((d) => d && d.addEventListener("close", () => document.body.appendChild($("#toast"))));
 sheet.addEventListener("click", (e) => { if (e.target === sheet) closeSheet(); });
 

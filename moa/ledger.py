@@ -31,6 +31,7 @@ def validate_tx(d):
         "category_id": int(d["category_id"]) if d.get("category_id") else None,
         "memo": (d.get("memo") or "").strip()[:100],
         "method": (d.get("method") or "").strip()[:20],
+        "transfer": 1 if d.get("transfer") else 0,  # 내 계좌끼리 옮긴 돈: 기록은 남기되 수입·지출에서 뺀다
     }
 
 
@@ -62,15 +63,16 @@ class Ledger:
     def add(self, d):
         t = validate_tx(d)
         return self.db.x(
-            "INSERT INTO transactions(date,kind,amount,category_id,memo,method,created_at) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (t["date"], t["kind"], t["amount"], t["category_id"], t["memo"], t["method"],
-             datetime.now().isoformat(timespec="seconds")))
+            "INSERT INTO transactions(date,kind,amount,category_id,memo,method,created_at,transfer) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (t["date"], t["kind"], t["amount"], None if t["transfer"] else t["category_id"], t["memo"], t["method"],
+             datetime.now().isoformat(timespec="seconds"), t["transfer"]))
 
     def update(self, tid, d):
         t = validate_tx(d)
-        self.db.x("UPDATE transactions SET date=?,kind=?,amount=?,category_id=?,memo=?,method=? WHERE id=?",
-                  (t["date"], t["kind"], t["amount"], t["category_id"], t["memo"], t["method"], tid))
+        self.db.x("UPDATE transactions SET date=?,kind=?,amount=?,category_id=?,memo=?,method=?,transfer=? WHERE id=?",
+                  (t["date"], t["kind"], t["amount"], None if t["transfer"] else t["category_id"], t["memo"], t["method"],
+                   t["transfer"], tid))
 
     def delete(self, tid):
         self.db.x("DELETE FROM transactions WHERE id=?", (tid,))
@@ -81,8 +83,10 @@ class Ledger:
                "LEFT JOIN categories c ON c.id=t.category_id WHERE t.date BETWEEN ? AND ?")
         args = [start, end]
         if kind in ("in", "out"):
-            sql += " AND t.kind=?"
+            sql += " AND t.kind=? AND t.transfer=0"
             args.append(kind)
+        elif kind == "transfer":
+            sql += " AND t.transfer=1"
         sql += " ORDER BY t.date DESC, t.id DESC"
         if limit:
             sql += f" LIMIT {int(limit)}"
@@ -97,22 +101,24 @@ class Ledger:
         today = today or date.today()
         start, end, ndays = _month_bounds(month)
         tot = {r["kind"]: r["s"] for r in self.db.q(
-            "SELECT kind, SUM(amount) AS s FROM transactions WHERE date BETWEEN ? AND ? GROUP BY kind",
+            "SELECT kind, SUM(amount) AS s FROM transactions WHERE transfer=0 AND date BETWEEN ? AND ? GROUP BY kind",
             (start, end))}
         income, expense = tot.get("in") or 0, tot.get("out") or 0
         cats = self.db.q(
             "SELECT c.id, c.name, c.budget, COALESCE(SUM(t.amount),0) AS used FROM categories c "
-            "LEFT JOIN transactions t ON t.category_id=c.id AND t.kind='out' AND t.date BETWEEN ? AND ? "
+            "LEFT JOIN transactions t ON t.category_id=c.id AND t.kind='out' AND t.transfer=0 AND t.date BETWEEN ? AND ? "
             "WHERE c.kind='out' GROUP BY c.id ORDER BY c.sort, c.id", (start, end))
         uncategorized = self.db.one(
             "SELECT COALESCE(SUM(amount),0) AS s FROM transactions "
-            "WHERE kind='out' AND category_id IS NULL AND date BETWEEN ? AND ?", (start, end))["s"]
+            "WHERE kind='out' AND transfer=0 AND category_id IS NULL AND date BETWEEN ? AND ?", (start, end))["s"]
         if uncategorized:
             cats.append({"id": None, "name": "분류 없음", "budget": 0, "used": uncategorized})
         budget = sum(c["budget"] for c in cats)
+        moved = self.db.one("SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN kind='out' THEN amount END),0) AS s "
+                            "FROM transactions WHERE transfer=1 AND date BETWEEN ? AND ?", (start, end))
         daily = [0] * ndays
         for r in self.db.q("SELECT date, SUM(amount) AS s FROM transactions "
-                           "WHERE kind='out' AND date BETWEEN ? AND ? GROUP BY date", (start, end)):
+                           "WHERE kind='out' AND transfer=0 AND date BETWEEN ? AND ? GROUP BY date", (start, end)):
             daily[int(r["date"][8:]) - 1] = r["s"]
         y, m = map(int, month.split("-"))
         if (today.year, today.month) == (y, m):
@@ -128,7 +134,7 @@ class Ledger:
             "month": month, "income": income, "expense": expense, "net": income - expense,
             "budget": budget, "remaining": remaining, "days_left": days_left,
             "per_day": per_day, "daily": daily, "today_idx": today_idx,
-            "categories": cats,
+            "categories": cats, "transfer_count": moved["n"], "transfer_out": moved["s"],
         }
 
     def trend(self, months=6, today=None):
@@ -141,7 +147,7 @@ class Ledger:
             y, m = (y - 1, 12) if m == 1 else (y, m - 1)
         keys.reverse()
         rows = self.db.q("SELECT substr(date,1,7) AS mon, kind, SUM(amount) AS s FROM transactions "
-                         "WHERE date >= ? GROUP BY mon, kind", (keys[0] + "-01",))
+                         "WHERE transfer=0 AND date >= ? GROUP BY mon, kind", (keys[0] + "-01",))
         out = {k: {"month": k, "income": 0, "expense": 0} for k in keys}
         for r in rows:
             if r["mon"] in out:

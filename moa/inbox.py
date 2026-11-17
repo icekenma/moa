@@ -172,6 +172,96 @@ class Inbox:
         cols = {r["name"] for r in db.q("PRAGMA table_info(inbox)")}
         if "prev_balance" not in cols:
             db.x("ALTER TABLE inbox ADD COLUMN prev_balance INTEGER")
+        if "transfer" not in cols:
+            db.x("ALTER TABLE inbox ADD COLUMN transfer INTEGER NOT NULL DEFAULT 0")
+
+    # ---------- 내 계좌끼리 옮긴 돈(이체) 찾기 ----------
+    PAIR_MINUTES = 30
+
+    @staticmethod
+    def _norm(x):
+        return re.sub(r"[\s()\[\]·*_-]", "", str(x or "")).lower()
+
+    def _own_tokens(self):
+        """받는 분·보낸 분 이름이 이 중 하나면 내 계좌로 본다: 설정한 내 이름 + 내 증권 계좌(키움 등) 이름."""
+        toks = {self._norm(n) for n in self.settings.get("my_names") or []}
+        for a in self.db.q("SELECT name, bank, linked, type FROM accounts WHERE linked IS NOT NULL OR type IN ('stock','pension')"):
+            for t in (a["bank"], a["name"]):
+                t = self._norm(t)
+                if len(t) >= 2:
+                    toks.add(t)
+                    if t.endswith("증권"):
+                        toks.add(t[:-2])
+        if self.db.get_setting("kiwoom_asset_auto") or self.db.one("SELECT 1 AS x FROM accounts WHERE linked='kiwoom'"):
+            toks.add("키움")
+        return {t for t in toks if len(t) >= 2}
+
+    def _name_says_own(self, it, toks=None):
+        m = self._norm(it.get("merchant"))
+        if not m:
+            return False
+        if "본인" in m or "내계좌" in m:
+            return True
+        return any(t in m for t in (toks if toks is not None else self._own_tokens()))
+
+    def _when(self, it):
+        try:
+            return datetime.strptime(f"{it['date']} {(it.get('time') or '00:00')[:5]}", "%Y-%m-%d %H:%M")
+        except (TypeError, ValueError):
+            try:
+                return datetime.fromisoformat(it["received_at"])
+            except (TypeError, ValueError, KeyError):
+                return None
+
+    def _pair_of(self, it):
+        """같은 금액이 내 다른 계좌에서 나가고(출금) 들어온(입금) 짝을 30분 안에서 찾는다."""
+        if it["kind"] != "bank" or it["action"] not in ("income", "outflow"):
+            return None
+        other = "outflow" if it["action"] == "income" else "income"
+        t0 = self._when(it)
+        if not t0:
+            return None
+        for c in self.db.q("SELECT * FROM inbox WHERE kind='bank' AND action=? AND amount=? AND id!=? "
+                           "AND status!='ignored' AND transfer=0 ORDER BY id DESC LIMIT 20",
+                           (other, it["amount"], it["id"])):
+            t1 = self._when(c)
+            if not t1 or abs((t1 - t0).total_seconds()) > self.PAIR_MINUTES * 60:
+                continue
+            same_acct = (c.get("acct_tail") and c.get("acct_tail") == it.get("acct_tail")
+                         and (c.get("issuer") or "") == (it.get("issuer") or ""))
+            if not same_acct:
+                return c
+        return None
+
+    def _mark_transfer(self, it, why):
+        """이 알림을 '내 계좌 이체'로: 가계부에 이미 있으면 이체로 바꾸고, 없으면 이체로 넣는다."""
+        self.db.x("UPDATE inbox SET transfer=1, note=? WHERE id=?", (why, it["id"]))
+        if it.get("tx_id"):
+            self.db.x("UPDATE transactions SET transfer=1, category_id=NULL WHERE id=?", (it["tx_id"],))
+        elif it["status"] == "pending":
+            self.apply(it["id"], transfer=True)
+
+    def detect_transfer(self, iid):
+        it = self.get(iid)
+        if not it or it["kind"] != "bank" or it.get("transfer") or it["status"] == "ignored":
+            return False
+        if self._name_says_own(it):
+            self._mark_transfer(it, "내 계좌로 옮긴 돈이라 수입·지출에서 뺐어요")
+            return True
+        pair = self._pair_of(it)
+        if pair:
+            self._mark_transfer(it, "다른 내 계좌와 짝이 맞아 수입·지출에서 뺐어요")
+            self._mark_transfer(self.get(pair["id"]), "다른 내 계좌와 짝이 맞아 수입·지출에서 뺐어요")
+            return True
+        return False
+
+    def retag(self):
+        """지난 입출금 알림을 다시 살펴 내 계좌 이체를 찾는다(이름 설정을 바꿨을 때)."""
+        n = 0
+        for r in self.db.q("SELECT id FROM inbox WHERE kind='bank' AND transfer=0 AND status!='ignored' ORDER BY id"):
+            if self.detect_transfer(r["id"]):
+                n += 1
+        return n
 
     def _cat_id(self, name, kind):
         if not name:
@@ -202,7 +292,7 @@ class Inbox:
             (h, received.isoformat(timespec="seconds"), source, p["kind"], p["action"], p["amount"], p["merchant"],
              p["issuer"], p["date"], p["time"], p["balance"], p["acct_tail"], p["category"], p["raw"], "pending"))
         note = []
-        if self._auto(p):
+        if not self.detect_transfer(iid) and self._auto(p):
             self.apply(iid)
         if p["balance"] is not None:
             a = self._update_asset(p)
@@ -210,7 +300,8 @@ class Inbox:
                 self.db.x("UPDATE inbox SET asset_id=?, prev_balance=? WHERE id=?", (a["id"], a["balance"], iid))
                 note.append(f"{a['name']} 잔액 {p['balance']:,}원으로 갱신")
         if note:
-            self.db.x("UPDATE inbox SET note=? WHERE id=?", (" · ".join(note), iid))
+            prev = (self.get(iid) or {}).get("note") or ""
+            self.db.x("UPDATE inbox SET note=? WHERE id=?", (" · ".join(([prev] if prev else []) + note), iid))
         return self.get(iid)
 
     def _update_asset(self, p):
@@ -244,7 +335,7 @@ class Inbox:
             out.append({**a, "last_alert": last})
         return out
 
-    def apply(self, iid, category=None):
+    def apply(self, iid, category=None, transfer=None):
         """확인 필요 항목을 가계부에 넣는다(취소는 같은 금액·가맹점 기록을 지운다)."""
         it = self.get(iid)
         if not it or it["status"] == "added":
@@ -263,12 +354,15 @@ class Inbox:
                 self.db.x("UPDATE inbox SET status='added', tx_id=? WHERE id=?", (tid, iid))
             return self.get(iid)
         kind = "in" if it["action"] == "income" else "out"
-        cat = category or it["category"]
+        xfer = bool(it.get("transfer")) if transfer is None else bool(transfer)
+        cat = None if xfer else (category or it["category"])
         method = ("신용카드" if it["kind"] == "card" else "계좌이체")
         memo = it["merchant"] or (f"{it['issuer']} 입금" if kind == "in" else f"{it['issuer']} 출금")
         tid = self.ledger.add({"date": it["date"], "kind": kind, "amount": it["amount"],
-                               "category_id": self._cat_id(cat, kind), "memo": memo, "method": method})
-        self.db.x("UPDATE inbox SET status='added', tx_id=?, category=? WHERE id=?", (tid, cat, iid))
+                               "category_id": None if xfer else self._cat_id(cat, kind), "memo": memo,
+                               "method": method, "transfer": xfer})
+        self.db.x("UPDATE inbox SET status='added', tx_id=?, category=?, transfer=? WHERE id=?",
+                  (tid, cat, 1 if xfer else 0, iid))
         return self.get(iid)
 
     def ignore(self, iid):
@@ -290,7 +384,8 @@ class Inbox:
         rows = self.db.q("SELECT * FROM inbox ORDER BY id DESC LIMIT ?", (limit,))
         stat = {r["status"]: r["n"] for r in self.db.q("SELECT status, COUNT(*) AS n FROM inbox GROUP BY status")}
         return {"items": rows, "pending": stat.get("pending", 0), "added": stat.get("added", 0),
-                "ignored": stat.get("ignored", 0), "auto": self.settings.get("inbox_auto")}
+                "ignored": stat.get("ignored", 0), "auto": self.settings.get("inbox_auto"),
+                "my_names": self.settings.get("my_names") or []}
 
     def import_bulk(self, text, source="import"):
         res = {"total": 0, "financial": 0, "added": 0, "pending": 0, "duplicate": 0}

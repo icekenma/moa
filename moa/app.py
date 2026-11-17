@@ -195,7 +195,7 @@ def create_app(rt, updater=None):
                          "ON c.id=t.category_id ORDER BY t.id DESC LIMIT 20"):
             items.append({"ts": t["created_at"], "kind": "ledger", "title": t["memo"] or t["category"] or "내역",
                           "sub": f"{t['category'] or '분류 없음'} · {t['date'][5:].replace('-', '.')}",
-                          "amount": t["amount"] if t["kind"] == "in" else -t["amount"]})
+                          "amount": None if t.get("transfer") else (t["amount"] if t["kind"] == "in" else -t["amount"])})
         eng_name = {"scalp": "단타", "dca": "적립"}
         for o in rt.db.q("SELECT * FROM orders ORDER BY id DESC LIMIT 20"):
             items.append({"ts": o["ts"], "kind": "order", "title": f"{o['name'] or o['code']} {'매수' if o['side'] == 'buy' else '매도'}",
@@ -395,7 +395,8 @@ def create_app(rt, updater=None):
 
     @app.post("/api/inbox/<int:iid>/apply")
     def inbox_apply(iid):
-        return jsonify(rt.inbox.apply(iid, body().get("category")))
+        d = body()
+        return jsonify(rt.inbox.apply(iid, d.get("category"), transfer=bool(d.get("transfer"))))
 
     @app.post("/api/inbox/<int:iid>/ignore")
     def inbox_ignore(iid):
@@ -411,6 +412,12 @@ def create_app(rt, updater=None):
         if not text.strip():
             raise ValueError("가져올 내용이 없어요")
         return jsonify(rt.inbox.import_bulk(text[:5_000_000]))
+
+    @app.put("/api/inbox/names")
+    def inbox_names():
+        names = [n.strip()[:20] for n in (body().get("names") or []) if isinstance(n, str) and len(n.strip()) >= 2][:5]
+        rt.settings.update({"my_names": names})
+        return jsonify(names=names, retagged=rt.inbox.retag())
 
     @app.put("/api/inbox/auto")
     def inbox_auto():

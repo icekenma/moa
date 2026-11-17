@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1214";
+const UI_VERSION = "261117.1649";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -478,33 +478,39 @@ function budgetBar(c) {
 function txItem(t, btn = true) {
   const tag = btn ? "button" : "div";
   return `<${tag} ${btn ? `type="button" data-edit="${t.id}"` : ""} class="item">
-    <span class="ico ${t.kind === "in" ? "y" : ""}">${esc((t.category || "기타").slice(0, 2))}</span>
-    <span class="main"><b>${esc(t.memo || t.category || "-")}</b><span class="sub">${btn ? "" : t.date.slice(5).replace("-", ".") + " · "}${esc(t.category || "분류 없음")}${t.method ? " · " + esc(t.method) : ""}</span></span>
-    <span class="end"><b class="${t.kind === "in" ? "inc" : ""}">${t.kind === "in" ? "+" : "-"}${won(t.amount)}</b></span></${tag}>`;
+    <span class="ico ${t.transfer ? "xf" : t.kind === "in" ? "y" : ""}">${t.transfer ? "이체" : esc((t.category || "기타").slice(0, 2))}</span>
+    <span class="main"><b>${esc(t.memo || t.category || "-")}</b><span class="sub">${btn ? "" : t.date.slice(5).replace("-", ".") + " · "}${t.transfer ? `내 계좌 ${t.kind === "in" ? "입금" : "출금"} · 합계 제외` : esc(t.category || "분류 없음")}${t.method && !t.transfer ? " · " + esc(t.method) : ""}</span></span>
+    <span class="end"><b class="${t.transfer ? "xf-amt" : t.kind === "in" ? "inc" : ""}">${t.transfer ? "" : t.kind === "in" ? "+" : "-"}${won(t.amount)}</b></span></${tag}>`;
 }
 
 // ---------- 내역 입력 시트 ----------
 async function txSheet(e, done) {
   const cats = await run(() => categories());
   let kind = e.kind || "out";
+  let xfer = !!e.transfer;
   let cat = e.category_id || null;
   const methods = ["신용카드", "체크카드", "현금", "계좌이체", "자동이체", "간편결제"];
   let method = e.method || (kind === "in" ? "계좌이체" : "신용카드");
   const draw = () => {
     const list = cats.filter((c) => c.kind === kind);
     if (!list.some((c) => c.id === cat)) cat = list[0]?.id;
-    openSheet(e.id ? "내역 고치기" : kind === "out" ? "지출 기록" : "수입 기록", `
-      ${seg("수입 또는 지출", [["out", "지출"], ["in", "수입"]], kind, "on-card")}
+    openSheet(e.id ? "내역 고치기" : xfer ? "내 계좌 이체 기록" : kind === "out" ? "지출 기록" : "수입 기록", `
+      ${seg("수입 또는 지출", [["out", "지출"], ["in", "수입"], ["xfer", "내 계좌 이체"]], xfer ? "xfer" : kind, "on-card")}
       <input class="amount-in" id="tAmt" inputmode="numeric" placeholder="0원" aria-label="금액" value="${e.amount ? won(e.amount) : ""}">
-      <label class="field">내용<input id="tMemo" placeholder="${kind === "out" ? "어디에 썼나요" : "어디서 들어왔나요"}" value="${esc(e.memo || "")}"></label>
-      <div class="field">분류<div class="chips" role="group" aria-label="분류">${list.map((c) => `<button type="button" class="chip" data-cat="${c.id}" aria-pressed="${c.id === cat}">${esc(c.name)}</button>`).join("")}</div></div>
-      <div class="field">결제수단<div class="chips" role="group" aria-label="결제수단">${methods.map((x) => `<button type="button" class="chip" data-m="${x}" aria-pressed="${x === method}">${x}</button>`).join("")}</div></div>
+      ${xfer ? `<div class="small muted">내 계좌끼리 옮긴 돈은 기록만 남기고 수입·지출 합계, 예산, 분석에서 빼요.</div>` : ""}
+      <label class="field">내용<input id="tMemo" placeholder="${xfer ? "예: 하나 → 키움" : kind === "out" ? "어디에 썼나요" : "어디서 들어왔나요"}" value="${esc(e.memo || "")}"></label>
+      ${xfer ? "" : `<div class="field">분류<div class="chips" role="group" aria-label="분류">${list.map((c) => `<button type="button" class="chip" data-cat="${c.id}" aria-pressed="${c.id === cat}">${esc(c.name)}</button>`).join("")}</div></div>
+      <div class="field">결제수단<div class="chips" role="group" aria-label="결제수단">${methods.map((x) => `<button type="button" class="chip" data-m="${x}" aria-pressed="${x === method}">${x}</button>`).join("")}</div></div>`}
       <label class="field">날짜<input type="date" id="tDate" value="${e.date || localToday()}"></label>
       <button class="btn dark wide" id="tSave">${e.id ? "고친 내용 저장" : "저장"}</button>
       ${e.id ? `<button class="btn soft wide" id="tDel">이 내역 지우기</button>` : ""}`, (box) => {
       moneyInput($("#tAmt", box));
       if (!e.id) setTimeout(() => $("#tAmt", box).focus(), 250);
-      bindSeg(box, "수입 또는 지출", (v) => { e = { ...e, amount: num($("#tAmt").value), memo: $("#tMemo").value, date: $("#tDate").value }; kind = v; method = v === "in" ? "계좌이체" : "신용카드"; draw(); });
+      bindSeg(box, "수입 또는 지출", (v) => {
+        e = { ...e, amount: num($("#tAmt").value), memo: $("#tMemo").value, date: $("#tDate").value };
+        if (v === "xfer") { xfer = true; method = "계좌이체"; } else { xfer = false; kind = v; method = v === "in" ? "계좌이체" : "신용카드"; }
+        draw();
+      });
       box.onclick = async (ev) => {
         const c = ev.target.closest("[data-cat]"), m = ev.target.closest("[data-m]");
         if (c) { cat = Number(c.dataset.cat); $$("[data-cat]", box).forEach((x) => x.setAttribute("aria-pressed", String(x === c))); }
@@ -514,7 +520,7 @@ async function txSheet(e, done) {
           await run(() => api("DELETE", `/api/tx/${e.id}`), "지웠어요"); closeSheet(); done && done();
         }
         if (ev.target.id === "tSave") {
-          const body = { kind, amount: num($("#tAmt").value), memo: $("#tMemo").value, category_id: cat, method, date: $("#tDate").value };
+          const body = { kind, amount: num($("#tAmt").value), memo: $("#tMemo").value, category_id: xfer ? null : cat, method, date: $("#tDate").value, transfer: xfer };
           await run(() => (e.id ? api("PUT", `/api/tx/${e.id}`, body) : api("POST", "/api/tx", body)), e.id ? "고쳤어요" : "저장했어요");
           closeSheet(); done && done(body);
         }
@@ -537,6 +543,7 @@ function monthNav(S, sum) {
       <button class="icon-btn" style="background:var(--bg)" data-mon="1" aria-label="다음 달">›</button>
     </div>
     <div class="kv"><div>수입<b class="inc">+${won(sum.income)}</b></div><div>지출<b>-${won(sum.expense)}</b></div><div>남은 돈<b>${won(sum.net)}</b></div></div>
+    ${sum.transfer_count ? `<div class="tiny">내 계좌끼리 옮긴 ${sum.transfer_count}건은 수입·지출에서 뺐어요</div>` : ""}
   </section>`;
 }
 function shiftMonth(S, by) {
@@ -566,10 +573,10 @@ pages.ledger = {
     const byDay = {};
     d.rows.forEach((t) => (byDay[t.date] = byDay[t.date] || []).push(t));
     view.innerHTML = `${monthNav(S, d.summary)}
-      ${seg("내역 종류", [["all", "전체"], ["out", "지출"], ["in", "수입"]], S.kind)}
+      ${seg("내역 종류", [["all", "전체"], ["out", "지출"], ["in", "수입"], ["transfer", "이체"]], S.kind)}
       <section class="card tight">
         ${Object.keys(byDay).length ? Object.entries(byDay).map(([date, rows]) => {
-          const out = rows.filter((r) => r.kind === "out").reduce((a, r) => a + r.amount, 0);
+          const out = rows.filter((r) => r.kind === "out" && !r.transfer).reduce((a, r) => a + r.amount, 0);
           return `<div class="day-head"><span>${korDate(date)}</span><span>${out ? "-" + won(out) : ""}</span></div><div class="list">${rows.map((t) => txItem(t)).join("")}</div>`;
         }).join("") : `<div class="empty">이 달에는 내역이 없어요</div>`}
       </section>`;
@@ -582,7 +589,7 @@ pages.ledger = {
     const first = new Date(y, m - 1, 1).getDay();
     const ndays = new Date(y, m, 0).getDate();
     const inc = {}, out = {};
-    d.rows.forEach((t) => { const k = Number(t.date.slice(8)); (t.kind === "in" ? inc : out)[k] = ((t.kind === "in" ? inc : out)[k] || 0) + t.amount; });
+    d.rows.filter((t) => !t.transfer).forEach((t) => { const k = Number(t.date.slice(8)); (t.kind === "in" ? inc : out)[k] = ((t.kind === "in" ? inc : out)[k] || 0) + t.amount; });
     const today = localToday();
     let cells = "";
     for (let i = 0; i < first; i++) cells += `<div class="cal-cell empty-cell"></div>`;
@@ -617,7 +624,7 @@ pages.ledger = {
     const trend = await GET("/api/ledger/trend?months=6");
     const cats = sum.categories.filter((c) => c.used > 0).sort((a, b) => b.used - a.used);
     const maxc = Math.max(1, ...cats.map((c) => c.used));
-    const outs = d.rows.filter((t) => t.kind === "out");
+    const outs = d.rows.filter((t) => t.kind === "out" && !t.transfer);
     const byMethod = {};
     outs.forEach((t) => (byMethod[t.method || "기타"] = (byMethod[t.method || "기타"] || 0) + t.amount));
     const methods = Object.entries(byMethod).sort((a, b) => b[1] - a[1]);
@@ -650,8 +657,8 @@ pages.ledger = {
     const st = { added: ["기록됨", "g"], pending: ["확인 필요", "warn"], ignored: ["무시함", ""] };
     const item = (x) => `<button type="button" class="item" data-inbox="${x.id}">
       <span class="ico ${x.status === "pending" ? "warn" : x.kind === "card" ? "" : "y"}">${esc((x.issuer || (x.kind === "card" ? "카드" : "은행")).slice(0, 2))}</span>
-      <span class="main"><b>${esc(x.merchant || label[x.action])}</b><span class="sub">${esc(label[x.action])} · ${esc(x.date.slice(5).replace("-", "."))} ${esc(x.time || "")}${x.note ? " · " + esc(x.note) : ""}</span></span>
-      <span class="end"><b class="${x.action === "income" || x.action === "cancel" ? "inc" : ""}">${x.action === "income" || x.action === "cancel" ? "+" : "-"}${won(x.amount)}</b><span class="tag ${st[x.status][1]}">${st[x.status][0]}</span></span></button>`;
+      <span class="main"><b>${esc(x.merchant || label[x.action])}</b><span class="sub">${x.transfer ? "내 계좌 이체" : esc(label[x.action])} · ${esc(x.date.slice(5).replace("-", "."))} ${esc(x.time || "")}${x.note ? " · " + esc(x.note) : ""}</span></span>
+      <span class="end"><b class="${x.transfer ? "xf-amt" : x.action === "income" || x.action === "cancel" ? "inc" : ""}">${x.transfer ? "" : x.action === "income" || x.action === "cancel" ? "+" : "-"}${won(x.amount)}</b><span class="tag ${x.transfer ? "" : st[x.status][1]}">${x.transfer ? "이체" : st[x.status][0]}</span></span></button>`;
     const pend = d.items.filter((x) => x.status === "pending"), rest = d.items.filter((x) => x.status !== "pending");
     view.innerHTML = `
       <section class="card">
@@ -667,6 +674,15 @@ pages.ledger = {
           <div class="card-head" style="min-height:52px"><div><b style="font-size:15px">${t}</b><div class="tiny">${desc}</div></div>
           <button class="switch" role="switch" data-auto="${k}" aria-checked="${!!d.auto[k]}" aria-label="${t} 바로 기록"><span></span></button></div>`).join("")}
       </section>
+      <section class="card"><h2>내 계좌끼리 옮긴 돈</h2>
+        <div class="small muted">내 계좌 사이에서 오간 돈은 기록만 남기고 수입·지출에서 빼요. 이렇게 알아봐요.</div>
+        <ul class="xf-rules">
+          <li>받는 분·보낸 분이 <b>내 이름</b>이거나 '본인'일 때</li>
+          <li>내 증권 계좌(키움 등)로 보낸 돈일 때</li>
+          <li>같은 금액이 내 다른 계좌에서 30분 안에 나가고 들어왔을 때</li></ul>
+        <label class="field">입출금 알림에 찍히는 내 이름<input id="myNames" placeholder="예: 홍길동, 홍길동(급여)" value="${esc((d.my_names || []).join(", "))}"></label>
+        <button class="btn wide" id="myNamesSave">저장하고 지난 내역 다시 살피기</button>
+      </section>
       <section class="card"><h2>지난 알림 가져오기</h2>
         <div class="small muted">카카오톡 카드사·은행 알림 대화방의 <b>대화 내용 내보내기</b> 파일이나, 복사한 문자들을 넣으면 한꺼번에 기록해요. 이미 들어온 알림은 다시 넣지 않아요.</div>
         <label class="field">카톡 내보내기 파일(.txt)<input type="file" id="ibFile" accept=".txt,text/plain" style="padding:12px"></label>
@@ -680,6 +696,12 @@ pages.ledger = {
       if (a) {
         const on = a.getAttribute("aria-checked") !== "true";
         await run(() => api("PUT", "/api/inbox/auto", { [a.dataset.auto]: on }), on ? "바로 기록하게 했어요" : "확인 후 기록하게 했어요");
+        return this.auto();
+      }
+      if (e.target.id === "myNamesSave") {
+        const names = $("#myNames").value.split(/[,，]/).map((x) => x.trim()).filter(Boolean);
+        const r = await run(() => api("PUT", "/api/inbox/names", { names }));
+        toast(r.retagged ? `지난 내역 ${r.retagged}건을 내 계좌 이체로 바꿨어요` : "저장했어요. 새로 바꿀 지난 내역은 없어요");
         return this.auto();
       }
       if (e.target.id === "ibImport") {
@@ -698,11 +720,13 @@ pages.ledger = {
           <div class="small muted">${esc(x.merchant || "")} · ${esc(x.date)} ${esc(x.time || "")} · ${esc(x.issuer || "")}</div>
           <div class="code" style="white-space:pre-wrap;user-select:text">${esc(x.raw)}</div>
           ${x.action === "spend" || x.action === "outflow" ? `<div class="field">분류<div class="chips">${cats.map((c) => `<button type="button" class="chip" data-c="${esc(c.name)}" aria-pressed="${c.name === cat}">${esc(c.name)}</button>`).join("")}</div></div>` : ""}
-          ${x.status === "added" ? `<div class="notice">이미 가계부에 들어갔어요. 고치려면 가계부 내역에서 눌러 주세요.</div>` : `<div class="btns"><button class="btn soft" id="ibIgnore">무시</button><button class="btn dark" id="ibApply">가계부에 넣기</button></div>`}`, (box) => {
+          ${x.status === "added" ? `<div class="notice">이미 가계부에 들어갔어요. 고치려면 가계부 내역에서 눌러 주세요.</div>` : `<div class="btns"><button class="btn soft" id="ibIgnore">무시</button><button class="btn dark" id="ibApply">가계부에 넣기</button></div>
+            ${x.kind === "bank" ? `<button class="btn wide" id="ibXfer">내 계좌끼리 옮긴 돈 (수입·지출에서 빼기)</button>` : ""}`}`, (box) => {
           box.onclick = async (ev) => {
             const c = ev.target.closest("[data-c]");
             if (c) { cat = c.dataset.c; $$("[data-c]", box).forEach((z) => z.setAttribute("aria-pressed", String(z === c))); }
             if (ev.target.id === "ibApply") { await run(() => api("POST", `/api/inbox/${x.id}/apply`, { category: cat }), "가계부에 넣었어요"); closeSheet(); this.auto(); }
+            if (ev.target.id === "ibXfer") { await run(() => api("POST", `/api/inbox/${x.id}/apply`, { transfer: true }), "내 계좌 이체로 기록했어요"); closeSheet(); this.auto(); }
             if (ev.target.id === "ibIgnore") { await run(() => api("POST", `/api/inbox/${x.id}/ignore`)); closeSheet(); this.auto(); }
           };
         });

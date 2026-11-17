@@ -46,6 +46,8 @@ DEFAULTS = {
     "watch": {"kr": ["005930", "000660", "035420", "005380", "069500", "360750"],
               "us": ["AAPL", "MSFT", "NVDA", "TSLA", "SPY", "QQQ"]},
     # 문자·알림톡 자동 기록: 카드 승인은 바로 넣고, 입금·출금은 확인 후 넣는 것이 기본
+    # 내 계좌 이체 구분: 입출금 알림에 찍히는 내 이름(예: 홍길동). 받는 분·보낸 분이 내 이름이면 이체로 본다
+    "my_names": [],
     "inbox_auto": {"card": True, "income": False, "outflow": False},
     # 내 계좌 보기(조회 전용): 주문은 절대 나가지 않는다
     "kiwoom_view": {"appkey": "", "secretkey": "", "mock": False},            # GitHub에 새 버전이 올라오면 노트북 서버가 알아서 받아 다시 시작

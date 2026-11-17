@@ -340,3 +340,9 @@ dialog.upd[open]{animation:pop .18s ease-out}
 .o-mode.real{background:#FDE7E4;color:#8C1D13}.o-mode.real b{color:#8C1D13}
 .sheet #toast{bottom:calc(24px + var(--safe-b))}
 .o-cancel{flex:0 0 auto;min-height:40px;padding:0 14px}
+
+/* 내 계좌 이체(수입·지출 합계 제외) */
+.ico.xf{background:var(--bg);color:var(--ink3);font-size:12px}
+.xf-amt{color:var(--ink3);font-weight:600}
+.xf-amt::before{content:"⇄ ";font-weight:500}
+.xf-rules{margin:0;padding-left:18px;font-size:13px;line-height:1.7;color:var(--ink2)}

@@ -711,3 +711,34 @@ def test_kiwoom_account_auto_added_to_assets(rt):
     assert rt.db.one("SELECT balance FROM accounts WHERE linked='kiwoom'")["balance"] == 6166000
     c.delete(f"/api/accounts/{acc[0]['id']}")
     assert c.get("/api/assets").get_json()["net"] == 0  # 지우면 다시 만들지 않음
+
+
+def test_own_account_transfers_excluded_from_income_expense(rt):
+    c = create_app(rt).test_client()
+    # 1) 하나 → 농협 같은 금액이 30분 안에 나가고 들어오면 짝으로 이체 처리
+    a = c.post("/api/inbox", json={"text": "[Web발신]\n하나,11/17 09:00\n123-******-12345\n출금300,000원\n잔액1,000,000원\n농협이체"}).get_json()["item"]
+    b = c.post("/api/inbox", json={"text": "[Web발신]\n농협 입금300,000원\n11/17 09:01 351-****-1234-56 하나송금 잔액500,000원"}).get_json()["item"]
+    a = rt.inbox.get(a["id"])  # 짝(입금)이 들어온 뒤 다시 보기
+    assert a["transfer"] == 1 and b["transfer"] == 1 and a["status"] == b["status"] == "added"
+    s = rt.ledger.summary("2026-11")
+    assert s["income"] == 0 and s["expense"] == 0 and s["transfer_count"] == 2
+    # 2) 받는 분이 내 이름이면 이체(이름을 나중에 넣어도 지난 알림을 다시 살핌)
+    o = c.post("/api/inbox", json={"text": "[Web발신]\n하나,11/17 12:00\n123-******-12345\n출금200,000원\n잔액800,000원\n홍길동"}).get_json()["item"]
+    assert o["transfer"] == 0 and o["status"] == "pending"
+    r = c.put("/api/inbox/names", json={"names": ["홍길동"]}).get_json()
+    assert r["retagged"] == 1 and rt.ledger.summary("2026-11")["expense"] == 0
+    # 3) 월급(다른 사람이 보낸 돈)은 그대로 수입
+    sal = c.post("/api/inbox", json={"text": "[Web발신]\n하나,11/17 13:00\n123-******-12345\n입금3,900,000원\n잔액4,700,000원\n인사혁신처"}).get_json()["item"]
+    assert sal["transfer"] == 0
+    c.post(f"/api/inbox/{sal['id']}/apply", json={})
+    assert rt.ledger.summary("2026-11")["income"] == 3900000
+    # 4) 직접 기록도 이체로 표시하면 합계에서 빠지고, 목록 필터에도 안 섞임
+    tid = c.post("/api/tx", json={"date": "2026-11-17", "kind": "out", "amount": 50000, "memo": "키움 입금", "transfer": True}).get_json()["id"]
+    s = rt.ledger.summary("2026-11")
+    assert s["expense"] == 0 and sum(s["daily"]) == 0 and rt.ledger.trend(1, date(2026, 11, 17))[0]["expense"] == 0
+    assert all(t["id"] != tid for t in rt.ledger.rows("2026-11", "out"))
+    assert any(t["id"] == tid for t in rt.ledger.rows("2026-11", "transfer"))
+    # 5) 키움을 연결해 두었으면 '키움증권'으로 보낸 돈은 이체
+    rt.db.set_setting("kiwoom_asset_auto", True)
+    k = c.post("/api/inbox", json={"text": "[Web발신]\n하나,11/17 15:00\n123-******-12345\n출금100,000원\n잔액600,000원\n키움증권"}).get_json()["item"]
+    assert k["transfer"] == 1

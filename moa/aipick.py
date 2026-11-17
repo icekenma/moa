@@ -493,14 +493,17 @@ def window_end(mkt, ts, exit_by=""):
     return close_et - timedelta(hours=off2) + timedelta(hours=9)
 
 
-def judge(bars, entry, tp, sl, entry_type="market", limit=None):
+FILL_BARS = 6  # 지정가는 추천 뒤 30분(5분봉 6개) 안에 닿아야 체결로 본다
+
+
+def judge(bars, entry, tp, sl, entry_type="market", limit=None, fill_bars=FILL_BARS):
     """bars: 추천 이후 시간순 [{o,h,l,c}]. 반환: (결과, 진입가, 청산가, 최대상승%, 최대하락%, 체결여부)."""
     if not bars:
         return None
     px, filled, i0 = entry, True, 0
     if entry_type == "limit" and limit and limit < entry * 0.999:
         filled = False
-        for i, b in enumerate(bars):
+        for i, b in enumerate(bars[:fill_bars]):
             if b["l"] <= limit:
                 filled, px, i0 = True, limit, i
                 break
@@ -558,8 +561,11 @@ def evaluate(self, force=False):
     self._ev_last = _t.time()
     _sync_outcomes(self)
     now = datetime.now()
-    rows = self.rt.db.q("SELECT * FROM ai_outcomes WHERE status='live' AND ts >= ?", ((now - timedelta(days=14)).isoformat(),))
+    _ensure_cols(self.rt.db)
+    rows = self.rt.db.q("SELECT * FROM ai_outcomes WHERE (status='live' OR gv IS NULL OR gv < ?) AND ts >= ?",
+                        (GRADE_V, (now - timedelta(days=14)).isoformat()))
     for r in rows:
+        regrade = r["status"] != "live"
         ts, end = datetime.fromisoformat(r["ts"]), datetime.fromisoformat(r["end_ts"])
         bars, src = [], ""
         try:
@@ -568,11 +574,17 @@ def evaluate(self, force=False):
             for b in cd:
                 dt = _bar_dt(b["t"], ts)
                 if dt and start - timedelta(minutes=4) <= dt < end:
+                    if dt < start:
+                        # 추천 시각이 낀 봉: 추천 전 움직임(고가·저가)이 섞여 있으니 그 봉의 종가만 쓴다
+                        b = dict(b, o=b["c"], h=b["c"], l=b["c"])
                     bars.append(b)
             src = "5분봉"
         except Exception:
             bars = []
         done = now >= end
+        if regrade and not bars:  # 다시 채점할 분봉이 이미 지나갔으면 예전 결과를 그대로 둔다
+            self.rt.db.x("UPDATE ai_outcomes SET gv=? WHERE pick_id=? AND idx=?", (GRADE_V, r["pick_id"], r["idx"]))
+            continue
         if done and not bars:  # 분봉이 지나가 버렸으면 일봉으로(같은 날 고가·저가)
             try:
                 day = end.strftime("%Y-%m-%d") if r["mkt"] == "kr" else (end - timedelta(hours=14)).strftime("%Y-%m-%d")
@@ -589,15 +601,21 @@ def evaluate(self, force=False):
         result, entry, exit_, mfe, mae, filled = res
         ret = (exit_ / entry - 1) * 100 if entry and exit_ else None
         net = ret - FEE[r["mkt"]] if ret is not None else None
-        final = done or result in ("익절", "손절")
+        final = done or result in ("익절", "손절") or (result == "미체결" and now >= ts + timedelta(minutes=5 * FILL_BARS + 5))
         if not final:
             result = "진행 중"
+        # 참고: 지정가를 기다리지 않고 추천 순간 시장가로 샀다면
+        alt = judge(bars, r["rec_price"], r["target_pct"], r["stop_pct"], "market")
+        alt_result, alt_net = None, None
+        if alt and (done or alt[0] in ("익절", "손절")):
+            alt_result, alt_net = alt[0], round((alt[2] / alt[1] - 1) * 100 - FEE[r["mkt"]], 3)
         self.rt.db.x("UPDATE ai_outcomes SET status=?, result=?, filled=?, entry=?, exit=?, ret_pct=?, net_pct=?, mfe=?, mae=?, "
-                     "last=?, src=?, updated_at=? WHERE pick_id=? AND idx=?",
+                     "last=?, src=?, updated_at=?, alt_result=?, alt_net=?, gv=? WHERE pick_id=? AND idx=?",
                      ("done" if final else "live", result, int(filled), entry, exit_,
                       None if ret is None else round(ret, 3), None if net is None else round(net, 3),
                       None if mfe is None else round(mfe, 3), None if mae is None else round(mae, 3),
-                      bars[-1]["c"] if bars else None, src, now.isoformat(timespec="seconds"), r["pick_id"], r["idx"]))
+                      bars[-1]["c"] if bars else None, src, now.isoformat(timespec="seconds"), alt_result, alt_net,
+                      GRADE_V if final else None, r["pick_id"], r["idx"]))
     try:
         self.auto_learn()
     except Exception:
@@ -642,6 +660,10 @@ def stats(self, days=0, mkt="", model=""):
                 "pred": round(sum(r["win_prob"] or 0 for r in fin) / len(fin), 1) if fin else None,
                 "mfe": round(sum(r["mfe"] or 0 for r in fin) / len(fin), 2) if fin else None,
                 "mae": round(sum(r["mae"] or 0 for r in fin) / len(fin), 2) if fin else None,
+                "alt_n": len([r for r in rs if r.get("alt_net") is not None]),
+                "alt_avg": (lambda xs: round(sum(xs) / len(xs), 2) if xs else None)([r["alt_net"] for r in rs if r.get("alt_net") is not None]),
+                "alt_tp_rate": (lambda xs: round(sum(1 for x in xs if x == "익절") / len(xs) * 100, 1) if xs else None)(
+                    [r["alt_result"] for r in rs if r.get("alt_net") is not None]),
                 "cost_usd": round(cost, 4)}
     ORDER = ["~40%", "40~50%", "50~60%", "60~70%", "70%~", "장 전", "장 초반(~10시)", "장 초반", "장 중반(~14시)", "장 중반", "장 후반", "장 마감 뒤",
              "공격", "보통", "관망", "지표 자동 선정", "샀음", "안 삼", "kr", "us"]
@@ -733,10 +755,14 @@ def _feat_of(c, ss):
             "left": ss.get("left_min"), "open": bool(ss.get("open"))}
 
 
+GRADE_V = 2  # 채점 방식 버전(바뀌면 최근 추천을 다시 채점)
+
+
 def _ensure_cols(db):
     cols = {r["name"] for r in db.q("PRAGMA table_info(ai_outcomes)")}
-    if "feat" not in cols:
-        db.x("ALTER TABLE ai_outcomes ADD COLUMN feat TEXT")
+    for name, typ in (("feat", "TEXT"), ("alt_result", "TEXT"), ("alt_net", "REAL"), ("gv", "INTEGER")):
+        if name not in cols:
+            db.x(f"ALTER TABLE ai_outcomes ADD COLUMN {name} {typ}")
 
 
 def _done_rows(self, mkt=None):

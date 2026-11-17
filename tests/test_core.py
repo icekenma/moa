@@ -1392,3 +1392,29 @@ def test_ai_self_learning_stats_calibration_and_prompt(rt):
     assert c.put("/api/ai/learn", json={"auto": False}).get_json()["auto"] is False
     t, ask, data = ap.learn_context()
     assert len(data["추천별 기록(최근 80건)"]) == 12
+
+
+def test_ai_outcome_ignores_pre_recommendation_bar_range(rt, monkeypatch):
+    """추천 시각(23:33)이 낀 5분봉(23:30)의 저가(추천 전 급락)는 손절로 치지 않는다. 지정가는 30분 안에 안 닿으면 미체결."""
+    db = rt.db
+    mk = lambda et, ep: db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text) VALUES(?,?,?,?,?,?,?,?)",
+        ("2026-11-12T23:33:00", "us", "claude-fable-5-2", 0.5, "보통", "", json.dumps([
+            {"sym": "AS", "name": "아머 스포츠", "price": 30.81, "entry_type": et, "entry_price": ep, "target_pct": 2.5, "stop_pct": 1.5, "win_prob": 45}]), ""))
+    mk("limit", 30.60)
+    mk("market", 30.81)
+    bars = [{"t": "11/12 23:30", "o": 30.42, "h": 30.95, "l": 29.63, "c": 30.85, "v": 1},
+            {"t": "11/12 23:35", "o": 30.85, "h": 31.30, "l": 30.80, "c": 31.25, "v": 1},
+            {"t": "11/12 23:40", "o": 31.25, "h": 31.97, "l": 31.20, "c": 31.80, "v": 1}] + \
+           [{"t": f"11/13 0{h}:00", "o": 31.5, "h": 31.6, "l": 31.3, "c": 31.4, "v": 1} for h in range(0, 5)] + \
+           [{"t": "11/13 05:50", "o": 30.7, "h": 30.7, "l": 30.45, "c": 30.48, "v": 1}]
+    monkeypatch.setattr(rt.invest, "candles", lambda m, s, tf: {"bars": bars})
+    rt.aipick.evaluate(force=True)
+    lim, mkt_ = rt.db.q("SELECT * FROM ai_outcomes ORDER BY pick_id")
+    assert lim["result"] == "미체결" and lim["status"] == "done" and lim["alt_result"] == "익절" and lim["alt_net"] == 2.25
+    assert mkt_["result"] == "익절" and mkt_["net_pct"] == 2.25 and mkt_["mae"] > -1
+    a = rt.aipick.stats()["all"]
+    assert a["unfilled"] == 1 and a["tp"] == 1 and a["alt_tp_rate"] == 100.0
+    # 예전 방식으로 잘못 채점된 기록도 다시 채점된다
+    db.x("UPDATE ai_outcomes SET result='손절', net_pct=-1.75, gv=NULL WHERE pick_id=?", (mkt_["pick_id"],))
+    rt.aipick.evaluate(force=True)
+    assert db.one("SELECT result FROM ai_outcomes WHERE pick_id=?", (mkt_["pick_id"],))["result"] == "익절"

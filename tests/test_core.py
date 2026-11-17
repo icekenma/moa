@@ -1206,3 +1206,63 @@ def test_invest_book_candles_rank_info_home_alerts(rt):
     rt.market.kr_quote = lambda s: {"price": 69900}
     assert len(rt.invest.check_alerts(force=True)) == 1 and "69,900원" in sent[0] and "이하" in sent[0]
     assert c.post("/api/invest/alerts", json={"mkt": "kr", "sym": "005930", "price": "abc"}).status_code == 400
+
+
+# ---------- AI 추천·자동 익절/손절 ----------
+def test_aipick_parse_guard_and_estimate(rt, monkeypatch):
+    import moa.aipick as AP
+    ap = rt.aipick
+    monkeypatch.setattr(ap, "quote", lambda m, s: {"price": 10000, "name": "테스트", "change_pct": 3.2})
+    text = ("오늘은 반도체 강세\n- 이유\n```json\n" + json.dumps({"stance": "보통", "market_view": "지수 강보합", "picks": [
+        {"sym": "A005930", "name": "삼성전자", "score": 80, "win_prob": 62, "entry_type": "limit", "entry_price": 10000,
+         "target_pct": 3, "stop_pct": 1.5, "trail_pct": 1, "exit_by": "15:10", "weight_pct": 20,
+         "reasons": ["a", "b"], "risks": ["c"]},
+        {"sym": "", "target_pct": 3, "stop_pct": 1}]}, ensure_ascii=False) + "\n```")
+    r = ap.parse(text, "kr", "claude-sonnet-5-5", 0.05)
+    assert r["stance"] == "보통" and len(r["picks"]) == 1 and r["picks"][0]["sym"] == "005930"
+    assert ap.history()[0]["picks"][0]["win_prob"] == 62
+    assert ap.parse("그냥 글", "kr", "m", 0) is None
+    # 감시 등록 → 정규장 가정 → 익절가 도달 시 매도
+    g = ap.add_guard({"mkt": "kr", "engine": "scalp", "sym": "005930", "name": "삼성전자", "qty": 5, "entry": 10000,
+                      "target_pct": 3, "stop_pct": 1.5, "trail_pct": 0, "exit_by": "15:10"})
+    assert g["status"] == "watching"
+    with pytest.raises(ValueError):
+        ap.add_guard({"mkt": "kr", "sym": "005930", "qty": 1, "entry": 100, "target_pct": 0, "stop_pct": 1})
+    monkeypatch.setattr(AP, "session", lambda m: {"open": True, "left_min": 120})
+    monkeypatch.setattr(AP, "kst_now", lambda: datetime(2026, 11, 17, 10, 0))
+    sold = []
+    monkeypatch.setattr(ap, "_position", lambda g: {"qty": 5, "avg_price": 10000})
+    monkeypatch.setattr(ap, "_sell", lambda g, q, why, p: sold.append((q, why, p)))
+    ap.check(force=True)
+    assert sold == []  # 0% → 그대로
+    monkeypatch.setattr(ap, "quote", lambda m, s: {"price": 10310})
+    ap.check(force=True)
+    assert sold == [(5, "익절", 10310)]
+    sold.clear()
+    monkeypatch.setattr(ap, "quote", lambda m, s: {"price": 9840})
+    ap.check(force=True)
+    assert sold and sold[0][1] == "손절"
+    sold.clear()
+    monkeypatch.setattr(ap, "quote", lambda m, s: {"price": 10050})
+    monkeypatch.setattr(AP, "kst_now", lambda: datetime(2026, 11, 17, 15, 11))
+    ap.check(force=True)
+    assert sold and sold[0][1] == "시간 정리"
+    # 실제 매도(앱 내 모의 계좌)도 한 번
+    rows = ap.guards(live=False)
+    assert rows[0]["tp_price"] == 10300 and rows[0]["sl_price"] == 9850
+    c = create_app(rt).test_client()
+    assert c.delete(f"/api/ai/guards/{g['id']}").get_json()["ok"]
+    assert c.get("/api/ai/guards").get_json()[0]["status"] == "cancelled"
+    e = c.get("/api/ai/pick/estimate?mkt=us").get_json()
+    assert len(e["models"]) == 3 and all(m["krw_hi"] > m["krw_lo"] > 0 for m in e["models"])
+
+
+def test_aipick_us_session_dst():
+    from datetime import timezone as tz
+    import moa.aipick as AP
+    assert AP._us_dst(datetime(2026, 7, 1, 12, tzinfo=tz.utc))
+    assert not AP._us_dst(datetime(2026, 11, 17, 12, tzinfo=tz.utc))
+    assert AP._us_dst(datetime(2026, 3, 8, 7, 1, tzinfo=tz.utc)) and not AP._us_dst(datetime(2026, 3, 8, 6, 59, tzinfo=tz.utc))
+    f = AP.bar_features([{"t": "11/17 09:00", "o": 100, "h": 102, "l": 99, "c": 101, "v": 10}] +
+                        [{"t": f"11/17 09:{5 * i:02d}", "o": 101, "h": 103, "l": 100, "c": 102, "v": 20} for i in range(1, 8)])
+    assert f["시가대비%"] == 2.0 and f["5분봉_개수"] == 8

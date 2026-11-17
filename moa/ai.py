@@ -211,6 +211,11 @@ class AI:
             ask = ("조건 훑기 결과를 해석해 줘. 학습/검증 성적 차이로 본 과최적화 가능성, 믿을 만한 조건과 그 이유, "
                    "지금 내 설정과 비교, 다음에 해 볼 검증(기간·종목·조건 범위)을 알려 줘. 웹 검색은 하지 마.")
             return "조건 훑기 해석", ask, {"결과": slim}
+        if kind == "pick":
+            try:
+                return self.rt.aipick.context(d)
+            except ValueError as e:
+                raise AIError(str(e))
         if kind == "chat":
             q = (d.get("question") or "").strip()
             if not q:
@@ -248,23 +253,36 @@ class AI:
                     for m in (d.get("history") or [])[-6:] if m.get("role") in ("user", "assistant")]
         messages.append({"role": "user", "content": user})
         model = c.get("model") or "claude-sonnet-5-5"
-        body = {"model": model, "max_tokens": 2500, "system": SYSTEM, "messages": messages, "stream": True}
-        if c.get("web_search", True) and kind != "sweep":
-            body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 4,
+        if d.get("model") in MODELS:  # 화면에서 고른 엔진
+            model = d["model"]
+        pick = kind == "pick"
+        if pick:
+            from .aipick import PICK_SYSTEM
+        body = {"model": model, "max_tokens": 4000 if pick else 2500, "system": PICK_SYSTEM if pick else SYSTEM,
+                "messages": messages, "stream": True}
+        web = d["web_search"] if isinstance(d.get("web_search"), bool) else c.get("web_search", True)
+        if web and kind != "sweep":
+            body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3 if pick else 4,
                               "user_location": {"type": "approximate", "country": "KR", "timezone": "Asia/Seoul"}}]
         usage = {"in": 0, "out": 0, "searches": 0}
         sources, seen = [], set()
+        buf = []
+
+        def run(b):
+            for ev in self._post(b):
+                for x in self._handle(ev, usage, sources, seen):
+                    if x["t"] == "text":
+                        buf.append(x["text"])
+                    yield x
         try:
-            for ev in self._post(body):
-                yield from self._handle(ev, usage, sources, seen)
+            yield from run(body)
         except AIError as e:
             if "tools" in body and "web_search" in str(e).lower():
                 # 조직에서 웹 검색을 안 켰으면 검색 없이 다시
                 body.pop("tools")
                 yield {"t": "status", "msg": "웹 검색을 쓸 수 없어 앱 데이터만으로 답할게요"}
                 try:
-                    for ev in self._post(body):
-                        yield from self._handle(ev, usage, sources, seen)
+                    yield from run(body)
                 except AIError as e2:
                     yield {"t": "error", "msg": str(e2)}
                     return
@@ -277,6 +295,13 @@ class AI:
             fx = float(self.rt.market.yh_quote("USDKRW=X")["price"]) or FX_DEFAULT
         except Exception:
             pass
+        if pick:
+            try:
+                res = self.rt.aipick.parse("".join(buf), "us" if d.get("mkt") == "us" else "kr", model, usd)
+            except Exception as e:
+                res = None
+                yield {"t": "status", "msg": f"추천 결과 정리 실패: {e}"}
+            yield {"t": "picks", **(res or {"picks": [], "stance": None, "view": "추천 결과를 읽지 못했어요. 다시 받아 보세요"})}
         cr = self.credit()
         yield {"t": "done", "title": title, "usd": round(usd, 4), "krw": int(round(usd * fx)), "model": model,
                "searches": usage["searches"], "in": usage["in"], "out": usage["out"],

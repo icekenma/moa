@@ -33,6 +33,8 @@ class Runtime:
         self.invest = Invest(self)
         from .ai import AI
         self.ai = AI(self)
+        from .aipick import AIPick
+        self.aipick = AIPick(self)
         from .trading.sweep import SweepJob
         self.sweep = SweepJob(self, data_dir or ".")
         self.assets = Assets(db, self.value_of, kiwoom_on=lambda: self.account.configured())
@@ -119,6 +121,10 @@ class Runtime:
             try:
                 with self._lock:
                     self.scalp.tick()
+                    try:
+                        self.aipick.check()  # AI 추천 종목 자동 익절·손절(5초마다)
+                    except Exception as e:
+                        self.db.log("system", "error", f"AI 익절·손절 확인 오류: {e}", datetime.now().isoformat(timespec="seconds"))
                     if time.time() - self._last_dca > 30:
                         self._last_dca = time.time()
                         try:

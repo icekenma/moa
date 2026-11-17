@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2024";
+const UI_VERSION = "261117.2035";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -281,7 +281,7 @@ const MENU = {
   home: { title: "홈", subs: [["summary", "요약"], ["activity", "최근 활동"]] },
   ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["fixed", "고정비"], ["cards", "카드"], ["analysis", "분석"], ["budget", "예산"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
-  invest: { title: "투자", subs: [["home", "홈"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["scalp", "단타"], ["dca", "적립"]], extra: { backtest: "scalp", rules: "scalp", sweep: "scalp", stock: "home", account: "home" } },
+  invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["scalp", "단타"], ["dca", "적립"]], extra: { backtest: "scalp", rules: "scalp", sweep: "scalp", stock: "home", account: "home" } },
   settings: { title: "설정", subs: [["connect", "서버"], ["accounts", "계좌 연결"], ["trading", "매매"], ["ai", "AI"], ["theme", "화면"], ["app", "앱 정보"]] },
 };
 const lastSub = {};
@@ -1109,7 +1109,7 @@ pages.invest = {
     if (sub === "rules") return this.rules();
     if (sub === "sweep") return this.sweep();
     if (sub === "stock") return mkt.detail(h);
-    investState.tab = ["home", "market", "discover", "account", "trade", "scalp", "dca"].includes(sub) ? sub : "home";
+    investState.tab = ["home", "ai", "market", "discover", "account", "trade", "scalp", "dca"].includes(sub) ? sub : "home";
     setTop("투자", { menu: "invest", sub: investState.tab });
     view.innerHTML = `<div id="iv" style="display:flex;flex-direction:column;gap:8.5px"></div>`;
     await this.fill();
@@ -1118,12 +1118,14 @@ pages.invest = {
     if (["backtest", "rules"].includes(h.sub)) return;
     if (h.sub === "stock") return mkt.refreshDetail();
     if (h.sub === "sweep") return this.sweepPoll();
+    if (investState.tab === "ai") { this.apSess(); if (!this._apT || Date.now() - this._apT > 5000) { this._apT = Date.now(); this.apGuards(); } return; }
     if (investState.tab !== "dca") await this.fill();
   },
   async fill() {
     const box = $("#iv");
     if (!box) return;
     if (investState.tab === "home") return this.home(box);
+    if (investState.tab === "ai") return this.aiPick(box);
     if (investState.tab === "discover") return this.discover(box);
     if (investState.tab === "market") return mkt.board(box);
     if (investState.tab === "account") return this.account(box);
@@ -1174,6 +1176,181 @@ pages.invest = {
     bindSeg(box, "정렬", (v) => { S.sort = v; this.homeRender(box, d); });
     $("#ihFind").onclick = () => mkt.search();
     fab("주문", () => orderSheet({}));
+  },
+
+  // ---------- AI 추천 ----------
+  async aiPick(box) {
+    const A = this.ap || (this.ap = { m: store.get("apMkt") === "us" ? "us" : "kr", model: store.get("apModel") || "", web: store.get("apWeb") !== "0", est: {}, busy: false, res: null, text: "", src: [] });
+    if (!$("#apRoot", box)) {
+      $(".fab")?.remove();
+      box.innerHTML = `<div id="apRoot" class="ap">
+        <section class="ap-hero">
+          <div class="ap-h1">지금 사면 오늘 안에 수익 낼 확률이 높은 종목</div>
+          <div class="ap-h2">누르는 순간의 실시간 순위·분봉 흐름·호가·뉴스를 Claude가 보고 최대 3종목을 골라요. 매수는 직접 고르고, 산 뒤에는 AI가 정한 값으로 자동 익절·손절해요.</div>
+          ${seg("AI시장", [["kr", "국내장"], ["us", "미국장"]], A.m, "ap-mkt")}
+          <div class="ap-sess" id="apSess"></div>
+        </section>
+        <section class="card"><div class="card-head"><h2>추천 엔진</h2><span class="tiny" id="apFx"></span></div>
+          <div class="ap-models" id="apModels"><div class="empty small">불러오는 중</div></div>
+          <label class="ap-web"><input type="checkbox" id="apWeb" ${A.web ? "checked" : ""}><span><b>오늘 뉴스·공시 확인</b><small>웹 검색 최대 3회 · 재료 확인으로 정확도↑ · 비용↑</small></span></label>
+          <button type="button" class="btn ap-go wide" id="apGo">지금 추천 받기</button>
+          <div class="tiny" id="apWarn"></div>
+        </section>
+        <div id="apOut"></div>
+        <div id="apGuards"></div>
+        <div id="apHist"></div>
+        <div class="tiny" style="padding:0 3px 6px">AI 추천은 실시간 자료로 낸 추정이라 틀릴 수 있어요. 승률은 AI가 매긴 추정치예요. 매수 여부는 직접 결정하고, 자동 매도는 켜 둔 종목만 정해진 값으로 실행돼요.</div>
+      </div>`;
+      bindSeg(box, "AI시장", (v) => { A.m = v; store.set("apMkt", v === "us" ? "us" : ""); this.apEstimate(); });
+      $("#apWeb").onchange = (e) => { A.web = e.target.checked; store.set("apWeb", A.web ? "" : "0"); this.apModels(); };
+      $("#apModels").onclick = (e) => { const b = e.target.closest("[data-model]"); if (b) { A.model = b.dataset.model; store.set("apModel", A.model); this.apModels(); } };
+      $("#apGo").onclick = () => this.apRun();
+      if (A.res || A.text) this.apDraw();
+      this.apEstimate();
+      this.apHistory();
+    }
+    this.apSess();
+    this.apGuards();
+  },
+  apSess() {
+    const A = this.ap, S = marketSession(A.m), el = $("#apSess");
+    if (!el) return;
+    el.innerHTML = `<span class="ss-chip ss-${S.phase}"><i></i>${esc(S.label)}</span><span>${esc(S.sub)}</span>`;
+    $("#apWarn").textContent = S.phase === "open" ? "" : S.phase === "closed"
+      ? "지금은 정규장이 아니라, 다음 정규장 시작 직후 기준으로 추천해요. 자동 익절·손절은 정규장에만 움직여요."
+      : "지금은 정규장 밖이에요. 시간외·프리마켓은 호가가 얇아 추천 정확도가 떨어져요. 자동 익절·손절은 정규장에만 움직여요.";
+  },
+  async apEstimate() {
+    const A = this.ap;
+    try { A.est = await GET(`/api/ai/pick/estimate?mkt=${A.m}`); } catch (e) { A.est = { error: e.message, models: [] }; }
+    if (!A.model || !A.est.models.some((x) => x.id === A.model)) A.model = A.est.default || (A.est.models[0] || {}).id;
+    this.apModels(); this.apSess();
+  },
+  apCost(x) {
+    const A = this.ap;
+    if (!x) return "";
+    if (x.avg_krw != null && A.web) return `약 ${won(x.avg_krw)}원`;
+    return A.web ? `약 ${won(x.krw_lo)}~${won(x.krw_hi)}원` : `약 ${won(Math.max(1, x.krw_lo))}원`;
+  },
+  apModels() {
+    const A = this.ap, E = A.est || {}, el = $("#apModels");
+    if (!el) return;
+    if (E.error) { el.innerHTML = `<div class="notice warn">${esc(E.error)}</div>`; return; }
+    const note = { "claude-opus-5-5": "후보를 가장 깊게 비교 · 느림", "claude-sonnet-5-5": "정확도·속도·비용 균형", "claude-haiku-4-5": "빠르고 싸지만 판단이 얕음" };
+    el.innerHTML = (E.models || []).map((x) => {
+      const [nm] = x.label.split(" · ");
+      return `<button type="button" class="ap-model" data-model="${esc(x.id)}" aria-pressed="${x.id === A.model}">
+        <span class="ap-radio" aria-hidden="true"></span>
+        <span class="ap-mn"><b>${esc(nm)}${x.id === "claude-sonnet-5-5" ? ` <span class="tag y">추천</span>` : ""}</b><small>${esc(note[x.id] || "")}</small></span>
+        <span class="ap-cost"><b>${this.apCost(x)}</b><small>${x.n ? `지난 ${x.n}회 평균` : "1회 예상"}</small></span></button>`;
+    }).join("");
+    const cur = (E.models || []).find((x) => x.id === A.model);
+    $("#apFx").textContent = E.fx ? `환율 ${won(E.fx)}원 기준` : "";
+    const go = $("#apGo");
+    go.disabled = A.busy || !E.configured || !E.kiwoom;
+    go.innerHTML = A.busy ? "AI가 고르는 중…" : `<span class="ai-spark" aria-hidden="true">✦</span> 지금 추천 받기 <small>${this.apCost(cur)}</small>`;
+    if (!E.configured) $("#apWarn").innerHTML = `Claude API 키가 필요해요. <a href="#settings/ai">설정 → AI</a>`;
+    else if (!E.kiwoom) $("#apWarn").innerHTML = `실시간 순위를 쓰려면 키움 계좌 연결이 필요해요. <a href="#settings/accounts">연결하기</a>`;
+  },
+  async apRun() {
+    const A = this.ap;
+    if (A.busy) return;
+    A.busy = true; A.res = null; A.text = ""; A.src = []; A.status = "실시간 순위와 분봉을 모으는 중"; A.cost = "";
+    this.apModels(); this.apDraw();
+    let raf = 0;
+    try {
+      await aiStream({ kind: "pick", mkt: A.m, model: A.model, web_search: A.web }, (ev) => {
+        if (ev.t === "status") { A.status = ev.msg; this.apDraw(); }
+        else if (ev.t === "text") { A.text += ev.text; A.status = "분석 중"; if (!raf) raf = requestAnimationFrame(() => { raf = 0; this.apDraw(); }); }
+        else if (ev.t === "source") { A.src.push(ev); }
+        else if (ev.t === "picks") { A.res = ev; }
+        else if (ev.t === "error") { A.err = ev.msg; }
+        else if (ev.t === "done") { A.cost = `실제 비용 약 ${won(ev.krw)}원($${ev.usd}) · ${ev.model.replace("claude-", "")}${ev.searches ? ` · 웹 검색 ${ev.searches}회` : ""}${ev.left != null ? ` · 남은 크레딧 $${Number(ev.left).toFixed(2)}` : ""}`; }
+      });
+    } catch (e) { if (e instanceof NeedConnect) { location.hash = "#connect"; return; } A.err = e.message; }
+    finally { if (raf) cancelAnimationFrame(raf); A.busy = false; A.status = ""; this.apDraw(); this.apEstimate(); this.apHistory(); }
+  },
+  apDraw() {
+    const A = this.ap, el = $("#apOut");
+    if (!el) return;
+    const body = A.text.split("```")[0];
+    const R = A.res, us = (R ? R.mkt : A.m) === "us";
+    const P = (n) => n == null ? "-" : us ? usd(n) : won(Math.round(n)) + "원";
+    const cash = (() => { const h = memo.get("ihome"); return h && h.account ? (us ? (h.account.us || {}).usd : h.account.orderable) : null; })();
+    el.innerHTML = (A.busy || A.text || R || A.err) ? `<section class="card ap-res">
+      ${A.busy ? `<div class="ai-status"><i class="ai-dot"></i><span>${esc(A.status || "")}</span></div>` : ""}
+      ${R && R.stance ? `<div class="ap-stance s-${esc(R.stance)}"><b>${esc(R.stance)}</b><span>${esc(R.view || "")}</span></div>` : ""}
+      ${body ? `<div class="ai-ans ap-text">${mdLite(body)}</div>` : ""}
+      ${A.err ? `<div class="notice warn">${esc(A.err)}</div>` : ""}
+      ${A.src.length ? `<details class="ap-src"><summary class="tiny">찾아본 뉴스·자료 ${A.src.length}건</summary>${A.src.map((x) => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>`).join("")}</details>` : ""}
+      ${A.cost ? `<div class="tiny">${esc(A.cost)}</div>` : ""}
+    </section>
+    ${R ? (R.picks.length ? R.picks.map((p, i) => {
+      const ev = (p.win_prob / 100 * p.target_pct - (1 - p.win_prob / 100) * p.stop_pct).toFixed(2);
+      const px = p.entry_type === "limit" && p.entry_price ? p.entry_price : p.price;
+      const qty = cash && px ? Math.max(1, Math.floor(cash * (p.weight_pct / 100) / px)) : 1;
+      return `<section class="card ap-pick">
+        <div class="ap-ph"><span class="ap-rank">${i + 1}</span>
+          <a class="ap-pn" href="#invest/stock?m=${R.mkt}&s=${encodeURIComponent(p.sym)}"><b>${esc(p.name)}</b><small>${esc(p.sym)} · 지금 ${P(p.price)} <span class="${tone(p.change_pct)}">${p.change_pct == null ? "" : pct(p.change_pct, 2)}</span></small></a>
+          <span class="ap-win"><b>${p.win_prob}%</b><small>AI 추정 승률</small></span></div>
+        <div class="ap-bar"><i class="sl" style="width:${(p.stop_pct / (p.stop_pct + p.target_pct) * 100).toFixed(1)}%"></i><i class="tp"></i></div>
+        <div class="ap-lv">
+          <div><span>손절</span><b class="down">−${p.stop_pct}%</b><small>${P(px * (1 - p.stop_pct / 100))}</small></div>
+          <div><span>${p.entry_type === "limit" ? "지정가 매수" : "시장가 매수"}</span><b>${P(px)}</b><small>기대값 ${ev > 0 ? "+" : ""}${ev}%</small></div>
+          <div><span>익절</span><b class="up">+${p.target_pct}%</b><small>${P(px * (1 + p.target_pct / 100))}</small></div></div>
+        <div class="ap-meta">${p.trail_pct ? `<span>추적 익절 ${p.trail_pct}%</span>` : ""}<span>${us ? "정규장 마감 8분 전 정리" : `${esc(p.exit_by || "15:12")}까지 안 닿으면 정리`}</span><span>권장 비중 ${p.weight_pct}%${cash ? ` · 약 ${won(qty)}주` : ""}</span><span>점수 ${p.score}</span></div>
+        <ul class="ap-why">${p.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}${p.risks.map((r) => `<li class="risk">${esc(r)}</li>`).join("")}</ul>
+        <button type="button" class="btn red wide" data-apbuy="${i}">매수하고 자동 익절·손절 걸기</button>
+      </section>`;
+    }).join("") : `<section class="card"><div class="empty">AI가 지금은 살 만한 종목이 없다고 봤어요. 관망을 권해요.</div></section>`) : ""}` : "";
+    $$("[data-apbuy]", el).forEach((b) => b.onclick = () => {
+      const p = R.picks[Number(b.dataset.apbuy)], px = p.entry_type === "limit" && p.entry_price ? p.entry_price : p.price;
+      const qty = cash && px ? Math.max(1, Math.floor(cash * (p.weight_pct / 100) / px)) : 1;
+      orderSheet({ code: p.sym, market: R.mkt, side: "buy", name: p.name, exch: p.exch, qty,
+        price: p.entry_type === "limit" ? (us ? px : Math.round(px / krTick(px)) * krTick(px)) : null,
+        guard: { target_pct: p.target_pct, stop_pct: p.stop_pct, trail_pct: p.trail_pct, exit_by: R.mkt === "kr" ? (p.exit_by || "15:12") : "", pick_id: R.id },
+        after: () => this.apGuards() });
+    });
+  },
+  async apGuards() {
+    const el = $("#apGuards");
+    if (!el) return;
+    let G;
+    try { G = await GET("/api/ai/guards"); } catch (e) { return; }
+    if (!$("#apGuards")) return;
+    const on = G.filter((g) => g.status === "watching"), past = G.filter((g) => g.status !== "watching").slice(0, 6);
+    const P = (g, n) => n == null ? "-" : g.mkt === "us" ? usd(n) : won(Math.round(n));
+    const row = (g) => {
+      const lo = g.sl_price, hi = g.tp_price, cur = g.status === "done" ? g.exit_price : g.last;
+      const x = cur && hi > lo ? Math.min(100, Math.max(0, (cur - lo) / (hi - lo) * 100)) : null, base = (g.base - lo) / (hi - lo) * 100;
+      const st = { watching: g.msg || "감시 중", done: `${g.exit_reason} · ${P(g, g.exit_price)}`, cancelled: "감시 끔", expired: g.msg }[g.status] || g.status;
+      return `<div class="ap-g ${g.status}">
+        <div class="ap-gh"><a href="#invest/stock?m=${g.mkt}&s=${encodeURIComponent(g.sym)}"><b>${esc(g.name)}</b> <small>${won(g.qty)}주 · 매수 ${P(g, g.base)}</small></a>
+          <span class="${tone(g.pnl_pct)}" style="font-weight:800">${g.pnl_pct == null ? "" : pct(g.pnl_pct, 2)}</span></div>
+        <div class="ap-gbar"><i class="b" style="left:${base.toFixed(1)}%"></i>${x == null ? "" : `<i class="c ${tone(g.pnl_pct)}" style="left:${x.toFixed(1)}%"></i>`}</div>
+        <div class="ap-gl"><span class="down">손절 ${P(g, lo)}</span><span class="tiny">${esc(st)}${g.trail_pct ? ` · 추적 ${g.trail_pct}%` : ""}${g.exit_by ? ` · ${esc(g.exit_by)} 정리` : ""}</span><span class="up">익절 ${P(g, hi)}</span></div>
+        ${g.status === "watching" ? `<button type="button" class="btn sm soft" data-gcancel="${g.id}">감시 끄기</button>` : ""}</div>`;
+    };
+    el.innerHTML = G.length ? `<div class="sec-title">자동 익절·손절 ${on.length ? `· 감시 중 ${on.length}` : ""}</div>
+      <section class="card">${on.length ? on.map(row).join("") : `<div class="empty small">감시 중인 종목이 없어요</div>`}
+      ${past.length ? `<details class="ap-past"><summary class="tiny">지난 기록 ${past.length}</summary>${past.map(row).join("")}</details>` : ""}</section>` : "";
+    el.onclick = async (e) => {
+      const b = e.target.closest("[data-gcancel]");
+      if (!b) return;
+      if (!confirmTap(b, "한 번 더 누르면 감시를 꺼요(보유는 그대로)")) return;
+      await run(() => api("DELETE", `/api/ai/guards/${b.dataset.gcancel}`), "자동 익절·손절을 껐어요");
+      this.apGuards();
+    };
+  },
+  async apHistory() {
+    const el = $("#apHist");
+    if (!el) return;
+    const H = await GET("/api/ai/picks").catch(() => []);
+    if (!$("#apHist") || !H.length) return;
+    el.innerHTML = `<details class="card ap-hist"><summary><b>지난 추천</b> <span class="tiny">${H.length}회 · 비용 합계 약 ${won(Math.round(H.reduce((a, x) => a + (x.usd || 0), 0) * ((this.ap.est || {}).fx || 1400)))}원</span></summary>
+      <div class="list">${H.map((h) => `<div class="item"><span class="main"><b>${esc(h.ts.slice(5, 16).replace("T", " "))} · ${h.mkt === "us" ? "미국" : "국내"} · ${esc(h.stance || "-")}</b>
+        <span class="sub">${h.picks.length ? h.picks.map((p) => `${esc(p.name)}(${p.win_prob}%·+${p.target_pct}/−${p.stop_pct})`).join(", ") : "관망"}</span></span>
+        <span class="end tiny">${esc(h.model.replace("claude-", ""))}</span></div>`).join("")}</div></details>`;
   },
 
   // ---------- 발견: 실시간 순위 ----------
@@ -2249,7 +2426,7 @@ function orderSheet(o) {
   const us0 = o.market === "us" || isUsCode(o.code);
   const S = { market: us0 ? "us" : "kr", engine: o.engine || "scalp", side: o.side || "buy", type: us0 || o.price ? "limit" : "market",
     code: o.code || "", qty: o.qty || 1, q: null, real: null, ctx: null, err: "", exch: o.exch || "", name: o.name || "",
-    price: o.price ? (us0 ? Number(o.price).toFixed(2) : won(o.price)) : "" };
+    price: o.price ? (us0 ? Number(o.price).toFixed(2) : won(o.price)) : "", guardOn: true };
   const acc = () => (S.ctx ? S.ctx.accounts.find((a) => a.engine === S.engine) : null);
   const avail = () => {
     const a = acc(); if (!a) return null;
@@ -2291,9 +2468,11 @@ function orderSheet(o) {
         <span class="stepper"><button type="button" data-qn="-1" aria-label="1주 빼기">−</button><input id="oQty" class="r" inputmode="numeric" value="${esc(S.qty)}"><button type="button" data-qn="1" aria-label="1주 더하기">+</button></span></label>
       <div class="o-pct">${[[10, "10%"], [25, "25%"], [50, "50%"], [100, "최대"]].map(([v, l]) => `<button type="button" class="chip" data-pq="${v}">${l}</button>`).join("")}</div>
       <div style="display:flex;justify-content:space-between;font-size:12px"><span class="muted">예상 금액</span><b id="oAmt">-</b></div>
+      ${o.guard && buy ? `<label class="o-guard"><input type="checkbox" id="oGuard" ${S.guardOn ? "checked" : ""}>
+        <span><b>체결되면 자동 익절·손절</b><small>평균 단가 기준 +${o.guard.target_pct}% 익절 · −${o.guard.stop_pct}% 손절${o.guard.trail_pct ? ` · 추적 익절 ${o.guard.trail_pct}%` : ""} · ${o.guard.exit_by ? `${esc(o.guard.exit_by)}까지 안 닿으면 정리` : "정규장 마감 8분 전 정리"}. 정규장에만 시장가로 팔아요.</small></span></label>` : ""}
       <div id="oErr">${S.err ? `<div class="notice warn">${esc(S.err)}</div>` : ""}</div>
       <button class="btn ${buy ? "red" : "blue"} wide" id="oSend" ${a && (a.error || usBlocked) ? "disabled" : ""}>${realOrder ? "실제 " : ""}${buy ? "매수 주문" : "매도 주문"}</button>`, (box) => {
-      const keep = () => { S.code = $("#oCode").value.trim(); S.qty = $("#oQty").value; S.price = $("#oPrice").value; };
+      const keep = () => { S.code = $("#oCode").value.trim(); S.qty = $("#oQty").value; S.price = $("#oPrice").value; if ($("#oGuard")) S.guardOn = $("#oGuard").checked; };
       bindSeg(box, "시장", (v) => { keep(); if (v !== S.market) { S.market = v; S.code = ""; S.q = null; S.price = ""; S.type = v === "us" ? "limit" : "market"; S.err = ""; } draw(); });
       bindSeg(box, "계좌", (v) => { keep(); S.engine = v; S.err = ""; draw(); if (US && S.code) loadQuote(); });
       bindSeg(box, "매수 또는 매도", (v) => { keep(); S.side = v; draw(); });
@@ -2334,6 +2513,14 @@ function orderSheet(o) {
         try {
           const r = await api("POST", "/api/order", body);
           toast(r.status === "filled" ? `${r.name} ${body.qty}주 ${buy ? "매수" : "매도"} 체결 ${won(r.fill_price)}원` : `${r.name} ${body.qty}주 ${buy ? "매수" : "매도"} 주문을 넣었어요`);
+          if (o.guard && buy && S.guardOn) {
+            try {
+              await api("POST", "/api/ai/guards", { ...o.guard, mkt: S.market, engine: S.engine, sym: body.code, name: r.name || body.name, exch: r.exch || body.exch,
+                qty: body.qty, entry: price || r.fill_price || S.q?.price });
+              toast(`${r.name} 자동 익절·손절을 걸었어요`);
+            } catch (e) { toast(`자동 익절·손절 등록 실패: ${e.message}`); }
+          }
+          o.after && o.after(r, body);
           closeSheet(); pages.invest.fill?.();
         } catch (e) {
           if (e instanceof NeedConnect) { closeSheet(); location.hash = "#connect"; return; }

@@ -849,6 +849,26 @@ def create_app(rt, updater=None):
         except AIError as e:
             raise ValueError(str(e))
 
+    @app.get("/api/ai/pick/estimate")
+    def ai_pick_estimate():
+        return jsonify(rt.aipick.estimate("us" if request.args.get("mkt") == "us" else "kr"))
+
+    @app.get("/api/ai/picks")
+    def ai_picks():
+        return jsonify(rt.aipick.history())
+
+    @app.get("/api/ai/guards")
+    def ai_guards():
+        return jsonify(rt.aipick.guards())
+
+    @app.post("/api/ai/guards")
+    def ai_guard_add():
+        return jsonify(rt.aipick.add_guard(body()))
+
+    @app.delete("/api/ai/guards/<int:gid>")
+    def ai_guard_del(gid):
+        return jsonify(rt.aipick.cancel_guard(gid))
+
     @app.post("/api/ai/ask")
     def ai_ask():
         d = body()

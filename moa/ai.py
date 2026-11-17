@@ -130,7 +130,7 @@ class AI:
 
     # 화면 공통 비용 표시: 예상 비용 + 현재 잔액
     KIND_TOK = {"stock": (9000, 1500), "portfolio": (7000, 1600), "review": (9000, 1500), "sweep": (7000, 1500),
-                "chat": (6000, 1200), "pick": (14000, 2200), "test": (30, 10)}
+                "chat": (6000, 1200), "pick": (16000, 2200), "learn": (14000, 1500), "test": (30, 10)}
 
     def fx(self):
         try:
@@ -142,7 +142,7 @@ class AI:
         c = self.conf()
         model = model if model in MODELS else (c.get("model") or "claude-sonnet-5-5")
         web = c.get("web_search", True) if web is None else web
-        if kind == "sweep" or kind == "test":
+        if kind in ("sweep", "test", "learn"):
             web = False
         pi, po = _model_price(model)
         tin, tout = self.KIND_TOK.get(kind, (6000, 1200))
@@ -241,6 +241,11 @@ class AI:
             ask = ("조건 훑기 결과를 해석해 줘. 학습/검증 성적 차이로 본 과최적화 가능성, 믿을 만한 조건과 그 이유, "
                    "지금 내 설정과 비교, 다음에 해 볼 검증(기간·종목·조건 범위)을 알려 줘. 웹 검색은 하지 마.")
             return "조건 훑기 해석", ask, {"결과": slim}
+        if kind == "learn":
+            try:
+                return self.rt.aipick.learn_context()
+            except ValueError as e:
+                raise AIError(str(e))
         if kind == "pick":
             try:
                 return self.rt.aipick.context(d)
@@ -291,7 +296,7 @@ class AI:
         body = {"model": model, "max_tokens": 9000 if pick else 2500, "system": PICK_SYSTEM if pick else SYSTEM,
                 "messages": messages, "stream": True}
         web = d["web_search"] if isinstance(d.get("web_search"), bool) else c.get("web_search", True)
-        if web and kind != "sweep":
+        if web and kind not in ("sweep", "learn"):
             body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3 if pick else 4,
                               "user_location": {"type": "approximate", "country": "KR", "timezone": "Asia/Seoul"}}]
         usage = {"in": 0, "out": 0, "searches": 0}
@@ -325,6 +330,8 @@ class AI:
             fx = float(self.rt.market.yh_quote("USDKRW=X")["price"]) or FX_DEFAULT
         except Exception:
             pass
+        if kind == "learn" and "".join(buf).strip():
+            self.rt.aipick.save_lessons("".join(buf), model, usd)
         if pick:
             try:
                 res = self.rt.aipick.parse("".join(buf), "us" if d.get("mkt") == "us" else "kr", model, usd,

@@ -875,6 +875,19 @@ def create_app(rt, updater=None):
     def ai_pick_estimate():
         return jsonify(rt.aipick.estimate("us" if request.args.get("mkt") == "us" else "kr"))
 
+    @app.get("/api/ai/learn")
+    def ai_learn():
+        return jsonify(rt.aipick.learn_view())
+
+    @app.put("/api/ai/learn")
+    def ai_learn_set():
+        d = body()
+        if "auto" in d:
+            rt.db.set_setting("ai_learn_auto", bool(d["auto"]))
+        if d.get("clear"):
+            rt.db.set_setting("ai_lessons", {})
+        return jsonify(rt.aipick.learn_view())
+
     @app.get("/api/ai/stats")
     def ai_stats():
         if request.args.get("refresh"):

@@ -1363,3 +1363,32 @@ def test_us_views_rank_and_ticks(rt):
     assert KiwoomClient._US_EX_CACHE["SOXL"][0] == "NA"
     t = rt.invest.ticks("us", "AAPL")
     assert t[0] == {"t": "22:22:01", "price": 352.21, "qty": 300, "change_pct": -0.16, "strength": 300.0}
+
+
+def test_ai_self_learning_stats_calibration_and_prompt(rt):
+    ap = rt.aipick
+    assert ap.learn_view()["stage"] == "자료 모으는 중" and ap.learn_prompt("kr") is None
+    ap.stats()  # 표 준비
+    import moa.aipick as AP
+    AP._ensure_cols(rt.db)
+    for i in range(12):
+        above = i % 2 == 0  # VWAP 위는 익절, 아래는 손절
+        rt.db.x("INSERT INTO ai_outcomes(pick_id,idx,ts,mkt,model,sym,name,stance,auto,win_prob,entry_type,rec_price,entry_price,"
+                "target_pct,stop_pct,end_ts,status,result,filled,net_pct,mfe,mae,feat) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (100 + i, 0, f"2026-11-{10 + i // 2:02d}T10:00:00", "kr", "claude-sonnet-5-5", "005930", "삼성전자", "보통", 0, 60, "market",
+                 100, 100, 3, 1.5, "x", "done", "익절" if above else "손절", 1, 2.8 if above else -1.7, 3.2 if above else 0.4,
+                 -0.3 if above else -1.6, json.dumps({"vwap": 0.8 if above else -0.9, "chg": 4, "m30": 0.3, "open": True, "left": 200})))
+    v = ap.learn_view()
+    assert v["n"] == 12 and v["stage"] == "통계 반영 중" and v["overall"]["tp_rate"] == 50
+    assert any("VWAP 위치" in x and "VWAP 위" in x for x in v["insights"])
+    assert any("과신" in x for x in v["insights"])  # 예측 60% vs 실제 50%
+    cal, n = ap.calibrate("kr", 60)
+    assert n == 12 and cal == round((6 + 8 * .6) / 20 * 100)
+    lp = ap.learn_prompt("kr")
+    assert lp and any("VWAP 위" in x for x in lp["조건별 성적(건수 3 이상)"])
+    ap.save_lessons("총평\n## 규칙\n- VWAP 아래는 피한다", "m", 0.1)
+    assert "VWAP 아래" in ap.learn_prompt("kr")["지난 복기에서 정한 규칙"] and ap.learn_view()["lessons"]["n"] == 12
+    c = create_app(rt).test_client()
+    assert c.put("/api/ai/learn", json={"auto": False}).get_json()["auto"] is False
+    t, ask, data = ap.learn_context()
+    assert len(data["추천별 기록(최근 80건)"]) == 12

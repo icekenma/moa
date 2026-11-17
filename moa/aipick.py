@@ -110,6 +110,7 @@ class AIPick:
             exit_reason TEXT, exit_price REAL, closed_at TEXT, pick_id INTEGER, msg TEXT)""")
         self._last = 0.0
         self._cands = {}
+        self._sess = {}
 
     # ---------- 추천 자료 ----------
     def context(self, d):
@@ -157,6 +158,7 @@ class AIPick:
         if not deep:
             raise ValueError("지금은 순위 자료가 비어 있어요(장 시작 전일 수 있어요)")
         self._cands[mkt] = deep
+        self._sess[mkt] = ss
         try:
             idx = rt.market.kr_indices() if mkt == "kr" else rt.market.us_indices()
             idx = [{k: i.get(k) for k in ("name", "price", "change_pct")} for i in idx]
@@ -175,6 +177,14 @@ class AIPick:
                 "후보_상세(오늘 흐름)": deep, "실시간 순위": rank_dump}
         ask = (f"지금({ss['kst']} 한국시간) {'국내' if mkt == 'kr' else '미국'} 시장에서 바로 매수해 오늘 안에 수익으로 끝낼 "
                "확률이 가장 높은 종목을 골라 줘. 후보_상세를 중심으로 판단하고, 필요하면 오늘 뉴스·공시를 확인해.")
+        try:
+            lp = self.learn_prompt(mkt)
+        except Exception:
+            lp = None
+        if lp:
+            data["내 과거 추천 성적(자체 추적·학습 자료)"] = lp
+            ask += (" 그리고 '내 과거 추천 성적'을 반드시 반영해: 성적이 나빴던 조건의 종목은 피하거나 비중을 줄이고, 잘 통한 조건을 우선하고, "
+                    "win_prob는 과거 실제 익절률에 맞춰 보정하고, 목표·손절 폭은 실제 최대상승·최대하락 중간값을 참고해. 정해 둔 규칙이 있으면 따르되, 오늘 자료와 어긋나면 이유를 말해.")
         if not ss["open"]:
             ask += " (지금은 정규장이 아니야. 다음 정규장 시작 직후 기준으로 판단하고, 그 점을 첫 줄에 밝혀.)"
         return f"AI 종목 추천({'국내' if mkt == 'kr' else '미국'})", ask, data
@@ -224,7 +234,13 @@ class AIPick:
                 if not t or not s_:
                     continue
                 q = self.quote(mkt, sym)
-                picks.append({"sym": sym, "name": p.get("name") or q.get("name") or sym, "price": q.get("price"),
+                cand = next((c for c in self._cands.get(mkt) or [] if c["sym"] == sym), None)
+                wp = int(float(p.get("win_prob") or 0))
+                try:
+                    cal, cal_n = self.calibrate(mkt, wp)
+                except Exception:
+                    cal, cal_n = None, 0
+                picks.append({"feat": _feat_of(cand or {}, self._sess.get(mkt) or session(mkt)), "cal_prob": cal, "cal_n": cal_n, "sym": sym, "name": p.get("name") or q.get("name") or sym, "price": q.get("price"),
                               "change_pct": q.get("change_pct"), "exch": q.get("exch"),
                               "score": int(float(p.get("score") or 0)), "win_prob": int(float(p.get("win_prob") or 0)),
                               "entry_type": "market" if p.get("entry_type") == "market" else "limit",
@@ -272,7 +288,8 @@ class AIPick:
                 "target_pct": 1.8, "stop_pct": 1.0, "trail_pct": 0.8, "exit_by": "15:00" if mkt == "kr" else "",
                 "weight_pct": 5, "reasons": ["AI는 관망을 권했지만, 실시간 지표(VWAP 위치·최근 30분 흐름·거래량·호가)로 가장 나은 후보를 골랐어요",
                                              "비중 5%, 목표·손절을 좁게 잡은 보수적 진입이에요"],
-                "risks": ["시장 분위기가 약해 승률이 낮아요"], "auto": True}
+                "risks": ["시장 분위기가 약해 승률이 낮아요"], "auto": True,
+                "feat": _feat_of(best, self._sess.get(mkt) or session(mkt)), "cal_prob": None, "cal_n": 0}
 
     def today(self):
         d = datetime.now().strftime("%Y-%m-%d")
@@ -514,6 +531,7 @@ def _init_outcomes(db):
 
 def _sync_outcomes(self):
     """새 추천을 성적표에 올린다."""
+    _ensure_cols(self.rt.db)
     have = {r["pick_id"] for r in self.rt.db.q("SELECT DISTINCT pick_id FROM ai_outcomes")}
     for p in self.rt.db.q("SELECT * FROM ai_picks ORDER BY id"):
         if p["id"] in have:
@@ -525,11 +543,11 @@ def _sync_outcomes(self):
                 continue
             end = window_end(p["mkt"], ts, x.get("exit_by") or "")
             self.rt.db.x("INSERT OR IGNORE INTO ai_outcomes(pick_id,idx,ts,mkt,model,sym,name,stance,auto,score,win_prob,entry_type,"
-                         "rec_price,entry_price,target_pct,stop_pct,end_ts,cost_usd) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                         "rec_price,entry_price,target_pct,stop_pct,end_ts,cost_usd,feat) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                          (p["id"], i, p["ts"], p["mkt"], p["model"], x["sym"], x.get("name"), p.get("stance"), int(bool(x.get("auto"))),
                           x.get("score"), x.get("win_prob"), x.get("entry_type"), x["price"], x.get("entry_price") or x["price"],
                           x.get("target_pct"), x.get("stop_pct"), end.isoformat(timespec="minutes"),
-                          (p.get("usd") or 0) / max(1, len(picks))))
+                          (p.get("usd") or 0) / max(1, len(picks)), json.dumps(x.get("feat") or {}, ensure_ascii=False)))
 
 
 def evaluate(self, force=False):
@@ -580,6 +598,10 @@ def evaluate(self, force=False):
                       None if ret is None else round(ret, 3), None if net is None else round(net, 3),
                       None if mfe is None else round(mfe, 3), None if mae is None else round(mae, 3),
                       bars[-1]["c"] if bars else None, src, now.isoformat(timespec="seconds"), r["pick_id"], r["idx"]))
+    try:
+        self.auto_learn()
+    except Exception:
+        pass
 
 
 def stats(self, days=0, mkt="", model=""):
@@ -691,3 +713,206 @@ def detail(self, pid):
 
 
 AIPick.detail = detail
+
+
+# ======================================================================
+# 자체 학습: 쌓인 추천 성적을 다음 추천에 되먹인다
+#  1) 통계 되먹임(무료, 매번 자동): 어떤 조건의 추천이 통했는지 요약해 프롬프트에 넣는다
+#  2) 승률 보정: AI가 말한 승률을 과거 같은 구간의 실제 익절률로 당겨서 보여 준다
+#  3) AI 복기(유료, 자동/수동): Claude가 성적표를 보고 '추천 규칙'을 써 두고, 이후 추천마다 읽는다
+# ======================================================================
+LEARN_MIN = 8          # 이만큼 채점이 쌓여야 통계를 프롬프트에 넣는다
+LESSON_STEP = 15       # 새 채점이 이만큼 쌓이면 AI 복기를 다시 한다
+FIN = ("익절", "손절", "시간 정리")
+
+
+def _feat_of(c, ss):
+    f = c.get("오늘_5분봉") if isinstance(c.get("오늘_5분봉"), dict) else {}
+    return {"chg": c.get("등락률%"), "vwap": f.get("VWAP대비%"), "hi": f.get("고점대비%"), "m30": f.get("최근30분%"),
+            "volx": f.get("최근30분_거래량배수"), "ob": c.get("호가_매수잔량/매도잔량"),
+            "left": ss.get("left_min"), "open": bool(ss.get("open"))}
+
+
+def _ensure_cols(db):
+    cols = {r["name"] for r in db.q("PRAGMA table_info(ai_outcomes)")}
+    if "feat" not in cols:
+        db.x("ALTER TABLE ai_outcomes ADD COLUMN feat TEXT")
+
+
+def _done_rows(self, mkt=None):
+    _ensure_cols(self.rt.db)
+    rows = self.rt.db.q("SELECT * FROM ai_outcomes WHERE status='done' AND net_pct IS NOT NULL ORDER BY ts")
+    rows = [r for r in rows if r["result"] in FIN]
+    for r in rows:
+        try:
+            r["f"] = json.loads(r.get("feat") or "{}")
+        except ValueError:
+            r["f"] = {}
+    return [r for r in rows if not mkt or r["mkt"] == mkt]
+
+
+def _bucket(rows, label, fn):
+    out = []
+    groups = {}
+    for r in rows:
+        k = fn(r)
+        if k is not None:
+            groups.setdefault(k, []).append(r)
+    for k, rs in groups.items():
+        if len(rs) >= 3:
+            nets = [x["net_pct"] for x in rs]
+            out.append({"group": label, "key": k, "n": len(rs), "avg": round(sum(nets) / len(nets), 2),
+                        "tp_rate": round(sum(1 for x in rs if x["result"] == "익절") / len(rs) * 100)})
+    return out
+
+
+def learn_stats(self, mkt=None):
+    rows = _done_rows(self, mkt)
+    if mkt and len(rows) < LEARN_MIN:  # 그 시장 표본이 적으면 전체로
+        rows = _done_rows(self)
+        mkt = None
+    n = len(rows)
+    if not n:
+        return {"n": 0, "scope": "전체", "buckets": [], "insights": [], "overall": None}
+    nets = [r["net_pct"] for r in rows]
+    med = lambda xs: sorted(xs)[len(xs) // 2] if xs else None
+    f = lambda key: (lambda r: r["f"].get(key))
+    B = []
+    B += _bucket(rows, "VWAP 위치", lambda r: None if f("vwap")(r) is None else ("VWAP 위" if f("vwap")(r) >= 0 else "VWAP 아래"))
+    B += _bucket(rows, "당일 등락률", lambda r: None if f("chg")(r) is None else ("3% 미만" if f("chg")(r) < 3 else "3~8%" if f("chg")(r) < 8 else "8% 이상"))
+    B += _bucket(rows, "최근 30분 흐름", lambda r: None if f("m30")(r) is None else ("오르는 중" if f("m30")(r) > 0 else "내리는 중"))
+    B += _bucket(rows, "최근 거래량", lambda r: None if f("volx")(r) is None else ("1.5배 이상" if f("volx")(r) >= 1.5 else "1.5배 미만"))
+    B += _bucket(rows, "고점 대비", lambda r: None if f("hi")(r) is None else ("고점 근처(−1% 안)" if f("hi")(r) > -1 else "고점에서 밀림"))
+    B += _bucket(rows, "호가 잔량", lambda r: None if not f("ob")(r) else ("매수 우위" if f("ob")(r) >= 1 else "매도 우위"))
+    B += _bucket(rows, "추천 시점", lambda r: None if "open" not in r["f"] else ("정규장 중" if r["f"]["open"] else "정규장 밖"))
+    B += _bucket(rows, "남은 장 시간", lambda r: None if not r["f"].get("open") or r["f"].get("left") is None else ("2시간 이상" if r["f"]["left"] >= 120 else "2시간 미만"))
+    B += _bucket(rows, "목표 크기", lambda r: "2% 이하" if (r["target_pct"] or 0) <= 2 else "2~3%" if r["target_pct"] <= 3 else "3% 초과")
+    B += _bucket(rows, "AI 태도", lambda r: "지표 자동 선정" if r["auto"] else (r["stance"] or "-"))
+    B += _bucket(rows, "순위", lambda r: f"{r['idx'] + 1}순위")
+    B += _bucket(rows, "엔진", lambda r: r["model"].replace("claude-", ""))
+    B += _bucket(rows, "AI 예측 승률", lambda r: "50% 미만" if (r["win_prob"] or 0) < 50 else "50~60%" if r["win_prob"] < 60 else "60% 이상")
+    tp = sum(1 for r in rows if r["result"] == "익절")
+    overall = {"n": n, "avg": round(sum(nets) / n, 2), "tp_rate": round(tp / n * 100), "win_rate": round(sum(1 for x in nets if x > 0) / n * 100),
+               "pred": round(sum(r["win_prob"] or 0 for r in rows) / n), "mfe_med": round(med([r["mfe"] or 0 for r in rows]), 2),
+               "mae_med": round(med([r["mae"] or 0 for r in rows]), 2),
+               "time_share": round(sum(1 for r in rows if r["result"] == "시간 정리") / n * 100)}
+    ins = []
+    if n >= LEARN_MIN:
+        gap = overall["pred"] - overall["tp_rate"]
+        if abs(gap) >= 5:
+            ins.append(f"AI 예측 승률이 실제 익절률보다 평균 {abs(gap)}%p {'높아요(과신)' if gap > 0 else '낮아요(보수적)'} → 승률을 그만큼 {'낮춰' if gap > 0 else '높여'} 말하게 해요")
+        if overall["time_share"] >= 40:
+            ins.append(f"추천의 {overall['time_share']}%가 익절·손절에 닿지 못하고 시간 정리로 끝나요 → 목표·손절 폭을 실제 움직임(중간값 +{overall['mfe_med']}% / {overall['mae_med']}%)에 맞추게 해요")
+        by = {}
+        for b in B:
+            by.setdefault(b["group"], []).append(b)
+        for g, bs in by.items():
+            if len(bs) >= 2 and g not in ("순위", "엔진", "AI 예측 승률"):
+                hi, lo = max(bs, key=lambda x: x["avg"]), min(bs, key=lambda x: x["avg"])
+                if hi["avg"] - lo["avg"] >= 0.5:
+                    ins.append(f"{g}: '{hi['key']}' {hi['n']}건 평균 {hi['avg']:+.2f}% vs '{lo['key']}' {lo['n']}건 평균 {lo['avg']:+.2f}% → '{hi['key']}' 쪽을 더 고르게 해요")
+    return {"n": n, "scope": {"kr": "국내", "us": "미국"}.get(mkt, "전체"), "overall": overall, "buckets": B, "insights": ins[:10]}
+
+
+def calibrate(self, mkt, p_ai):
+    """AI 승률을 과거 같은 구간(±10%p)의 실제 익절률 쪽으로 당긴다(표본이 적으면 조금만)."""
+    rows = [r for r in _done_rows(self) if abs((r["win_prob"] or 0) - p_ai) <= 10]
+    same = [r for r in rows if r["mkt"] == mkt]
+    if len(same) >= 6:
+        rows = same
+    n = len(rows)
+    if n < 4:
+        return None, n
+    tp = sum(1 for r in rows if r["result"] == "익절")
+    k = 8  # 가상의 표본 8건만큼은 AI 말을 믿어 준다
+    return round((tp + k * p_ai / 100) / (n + k) * 100), n
+
+
+def lessons(self):
+    return self.rt.db.get_setting("ai_lessons") or {}
+
+
+def learn_view(self):
+    st = learn_stats(self)
+    ls = lessons(self)
+    n = st["n"]
+    stage = "자료 모으는 중" if n < LEARN_MIN else "통계 반영 중" if not ls.get("text") else "통계 + AI 복기 규칙 반영 중"
+    bands = []
+    for lo, hi in ((0, 40), (40, 50), (50, 60), (60, 70), (70, 101)):
+        rs = [r for r in _done_rows(self) if lo <= (r["win_prob"] or 0) < hi]
+        if rs:
+            bands.append({"band": f"{lo}~{min(hi, 100)}%", "n": len(rs), "actual": round(sum(1 for r in rs if r["result"] == "익절") / len(rs) * 100),
+                          "pred": round(sum(r["win_prob"] or 0 for r in rs) / len(rs))})
+    auto = self.rt.db.get_setting("ai_learn_auto")
+    return {"n": n, "min": LEARN_MIN, "stage": stage, "overall": st["overall"], "insights": st["insights"], "buckets": st["buckets"],
+            "bands": bands, "lessons": ls, "auto": True if auto is None else bool(auto),
+            "next_in": max(0, LESSON_STEP - (n - int(ls.get("n") or 0))), "step": LESSON_STEP}
+
+
+def learn_prompt(self, mkt):
+    """다음 추천 프롬프트에 넣을 자체 학습 자료."""
+    st = learn_stats(self, mkt)
+    if st["n"] < LEARN_MIN:
+        return None
+    out = {"표본": f"{st['scope']} 추천 {st['n']}건(사지 않은 것 포함, 추천 시점 가격 기준 가상 매매, 비용 차감)",
+           "전체": st["overall"], "조건별 성적(건수 3 이상)": [f"{b['group']}={b['key']}: {b['n']}건, 평균 {b['avg']:+.2f}%, 익절률 {b['tp_rate']}%" for b in st["buckets"]],
+           "통계가 말하는 점": st["insights"]}
+    ls = lessons(self)
+    if ls.get("text"):
+        out["지난 복기에서 정한 규칙"] = ls["text"]
+    return out
+
+
+def learn_context(self):
+    """AI 복기용 자료: 성적 요약 + 추천 하나하나(특징 포함)."""
+    rows = _done_rows(self)
+    if len(rows) < LEARN_MIN:
+        raise ValueError(f"채점이 {LEARN_MIN}건 이상 쌓여야 복기할 수 있어요(지금 {len(rows)}건)")
+    st = learn_stats(self)
+    slim = [{"시각": r["ts"][5:16], "시장": r["mkt"], "엔진": r["model"].replace("claude-", ""), "종목": r["name"], "태도": r["stance"],
+             "예측승률": r["win_prob"], "목표%": r["target_pct"], "손절%": r["stop_pct"], "결과": r["result"], "순수익%": r["net_pct"],
+             "최대상승%": r["mfe"], "최대하락%": r["mae"], "특징": r["f"]} for r in rows[-80:]]
+    ask = ("아래는 이 앱의 AI 종목 추천을 실제 가격으로 추적한 성적표야. 다음 추천부터 그대로 따를 '추천 규칙'을 만들어 줘.\n"
+           "- 표본이 적은 패턴은 단정하지 말고 '잠정'이라고 표시해.\n"
+           "- 형식: 첫 줄에 한 줄 총평. 그다음 '## 규칙' 아래 '- '로 8개 이하. 각 규칙은 '언제 → 어떻게'(고르기/피하기, 목표·손절 폭, 승률 말하는 법, 비중)로 구체적으로.\n"
+           "- 마지막에 '## 더 지켜볼 것' 아래 2~3개.\n"
+           "- 숫자는 자료에 있는 것만. 웹 검색은 하지 마.")
+    return "AI 추천 복기", ask, {"요약": st["overall"], "조건별": st["buckets"], "통계가 말하는 점": st["insights"],
+                                 "이전 규칙": lessons(self).get("text"), "추천별 기록(최근 80건)": slim}
+
+
+def save_lessons(self, text, model, usd):
+    n = len(_done_rows(self))
+    self.rt.db.set_setting("ai_lessons", {"text": text.strip()[:4000], "at": datetime.now().isoformat(timespec="minutes"),
+                                         "n": n, "model": model, "usd": usd})
+
+
+def auto_learn(self):
+    """새 채점이 충분히 쌓였으면 뒤에서 AI 복기를 돌린다(하루 한 번까지, 설정에서 끌 수 있음)."""
+    auto = self.rt.db.get_setting("ai_learn_auto")
+    if auto is not None and not auto:
+        return
+    if not self.rt.ai.configured() or getattr(self, "_learning", False):
+        return
+    ls = lessons(self)
+    n = len(_done_rows(self))
+    if n < LEARN_MIN or n - int(ls.get("n") or 0) < LESSON_STEP:
+        return
+    if (ls.get("at") or "")[:10] == datetime.now().strftime("%Y-%m-%d"):
+        return
+    self._learning = True
+
+    def run():
+        try:
+            for ev in self.rt.ai.stream("learn", {}):
+                if ev.get("t") == "error":
+                    self.rt.db.log("system", "error", f"AI 자동 복기 실패: {ev.get('msg')}", datetime.now().isoformat(timespec="seconds"))
+            self.rt.notify("[moa AI] 추천 성적을 복기해서 추천 규칙을 새로 정했어요")
+        finally:
+            self._learning = False
+    import threading
+    threading.Thread(target=run, daemon=True).start()
+
+
+for _f in (learn_stats, calibrate, lessons, learn_view, learn_prompt, learn_context, save_lessons, auto_learn):
+    setattr(AIPick, _f.__name__, _f)

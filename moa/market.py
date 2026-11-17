@@ -140,9 +140,9 @@ class Market:
         return self.watch()
 
     # ---------- 미국(공개 시세) ----------
-    def _yh_chart(self, sym, rng="1d", interval="5m"):
+    def _yh_chart(self, sym, rng="1d", interval="5m", prepost=False):
         r = self.http.get(f"{YH}/v8/finance/chart/{requests.utils.quote(sym)}",
-                          params={"range": rng, "interval": interval, "includePrePost": "false"}, timeout=8)
+                          params={"range": rng, "interval": interval, "includePrePost": "true" if prepost else "false"}, timeout=8)
         if r.status_code != 200:
             raise MarketError(f"미국 시세 응답 오류({r.status_code})")
         res = ((r.json().get("chart") or {}).get("result") or [None])[0]
@@ -152,16 +152,32 @@ class Market:
 
     def yh_quote(self, sym):
         def load():
-            res = self._yh_chart(sym, "1d", "5m")
+            res = self._yh_chart(sym, "1d", "5m", prepost=True)
             m = res.get("meta") or {}
             closes = (((res.get("indicators") or {}).get("quote") or [{}])[0].get("close") or [])
+            tss = res.get("timestamp") or []
             pts = [c for c in closes if c is not None]
             price = m.get("regularMarketPrice") or (pts[-1] if pts else None)
             prev = m.get("chartPreviousClose") or m.get("previousClose")
             if price is None:
                 raise MarketError(f"{sym} 현재가가 없어요")
+            # 프리마켓·애프터마켓: 정규장 밖 시간의 마지막 체결가를 현재가로
+            session, reg = None, price
+            try:
+                tp = m.get("currentTradingPeriod") or {}
+                now = time.time()
+                for name in ("pre", "post"):
+                    a, b = tp[name]["start"], tp[name]["end"]
+                    if a <= now < b + 900:
+                        ext = [c for t, c in zip(tss, closes) if c is not None and a <= t < b]
+                        if ext:
+                            session, price = name, ext[-1]
+                            if name == "pre":
+                                prev = reg  # 프리마켓 등락은 직전 정규장 종가 기준
+            except Exception:
+                pass
             chg = price - prev if prev else 0
-            return {"sym": sym, "name": m.get("shortName") or m.get("longName") or sym, "price": price,
+            return {"sym": sym, "session": session, "reg_price": reg, "name": m.get("shortName") or m.get("longName") or sym, "price": price,
                     "change": chg, "change_pct": (chg / prev * 100) if prev else 0, "prev": prev,
                     "open": (pts[0] if pts else None), "high": m.get("regularMarketDayHigh"),
                     "low": m.get("regularMarketDayLow"), "volume": m.get("regularMarketVolume"),
@@ -440,7 +456,19 @@ class Market:
             want = syms + [s for _, s in US_INDICES]
             with ThreadPoolExecutor(max_workers=8) as ex:
                 res = dict(zip(want, ex.map(self._safe_yq, want)))
-            items = [res[s] if "error" not in res[s] else dict(res[s], name=s) for s in syms]
+            items = [dict(res[s]) if "error" not in res[s] else dict(res[s], name=s) for s in syms]
+            cl = self.kr_client()
+            if cl is not None:  # 키움이 연결돼 있으면 실시간(프리·애프터·주간거래 포함) 값으로 덮어쓴다
+                for q in items:
+                    try:
+                        k = self.cache.get(("uq", q["sym"]), 3, lambda sy=q["sym"], h=q.get("exchange"): cl.us_quote(sy, hint=h), stale=120)
+                        for f in ("price", "change", "change_pct", "prev", "high", "low", "volume", "exch"):
+                            if k.get(f) is not None:
+                                q[f] = k[f]
+                        q["live"] = True
+                        q.pop("error", None)
+                    except Exception:
+                        pass
             indices = [{"name": n, "price": res[s].get("price"), "change": res[s].get("change", 0),
                         "change_pct": res[s].get("change_pct", 0)} for n, s in US_INDICES]
             fx = res["USDKRW=X"].get("price")

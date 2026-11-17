@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2301";
+const UI_VERSION = "261117.2314";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1364,6 +1364,7 @@ pages.invest = {
         <div class="ap-ph"><span class="ap-rank">${i + 1}</span>
           <a class="ap-pn" href="#invest/stock?m=${R.mkt}&s=${encodeURIComponent(p.sym)}"><b>${esc(p.name)}</b><small>${esc(p.sym)} · 지금 ${P(p.price)} <span class="${tone(p.change_pct)}">${p.change_pct == null ? "" : pct(p.change_pct, 2)}</span></small></a>
           ${winRing(p.win_prob)}</div>
+        ${p.cal_prob != null ? `<div class="ap-cal"><b>보정 승률 ${p.cal_prob}%</b><span>AI는 ${p.win_prob}%라고 했지만, 비슷하게 말한 지난 추천 ${p.cal_n}건의 실제 결과로 맞춘 값이에요</span></div>` : ""}
         ${p.auto ? `<div class="tiny ap-auto">지표 자동 선정 · AI가 관망이라 앱이 실시간 지표로 고른 후보예요</div>` : ""}
         <div class="ap-bar"><i class="sl" style="width:${(p.stop_pct / (p.stop_pct + p.target_pct) * 100).toFixed(1)}%"></i><i class="tp"></i></div>
         <div class="ap-lv">
@@ -1443,6 +1444,29 @@ pages.invest = {
       <div class="tiny">추천 ${a.n}건 · 채점 ${a.done} · 진행 중 ${a.live}${a.unfilled ? ` · 미체결 ${a.unfilled}` : ""} · 사지 않은 종목도 추천 시점 가격으로 채점해요</div>`
       : `<div class="card-head"><h2>AI 추천 성적</h2></div><div class="tiny">추천을 받으면, 사지 않아도 그 뒤 실제 가격으로 익절·손절·시간 정리 결과를 매겨 여기 모아 보여 드려요.</div>`;
   },
+  async asLearn() {
+    const el = $("#asLearn");
+    if (!el) return;
+    let L;
+    try { L = await GET("/api/ai/learn"); } catch (e) { el.innerHTML = `<div class="tiny">${esc(e.message)}</div>`; return; }
+    if (!$("#asLearn")) return;
+    const step = L.n < L.min ? 0 : L.lessons.text ? 2 : 1, ls = L.lessons || {};
+    el.innerHTML = `<div class="card-head"><h2>자체 학습</h2><span class="tag ${step ? "g" : "y"}">${esc(L.stage)}</span></div>
+      <div class="lr-steps">${[["자료 쌓기", `채점 ${L.n}/${L.min}건`], ["통계 되먹임", "추천할 때마다 자동"], ["AI 복기 규칙", ls.at ? esc(ls.at.slice(5).replace("T", " ")) + " 갱신" : "아직 없음"]].map(([a, b], i) => `<div class="${i <= step ? "on" : ""}"><i>${i + 1}</i><b>${a}</b><span>${b}</span></div>`).join("")}</div>
+      <div class="tiny">추천 뒤 실제 가격을 추적한 결과를 다음 추천 때 AI에게 함께 보여 줘요. 잘 통한 조건은 더 고르고, 안 통한 조건은 피하고, 승률·목표·손절 폭을 실제 결과에 맞추게 돼요.</div>
+      ${L.n < L.min ? `<div class="bar"><div style="width:${L.n / L.min * 100}%"></div></div><div class="tiny">채점이 ${L.min}건 쌓이면 학습 내용이 추천에 들어가기 시작해요. 추천을 받아 두기만 해도(사지 않아도) 쌓여요.</div>` : `
+      <h3 class="lr-h">지금 추천에 반영 중인 통계</h3>
+      ${L.insights.length ? `<ul class="lr-ins">${L.insights.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : `<div class="tiny">아직 뚜렷한 차이가 나는 조건이 없어요. 조건별 성적표는 그대로 AI에게 전달돼요.</div>`}
+      ${L.bands.length ? `<h3 class="lr-h">승률 보정</h3><div class="lr-cal">${L.bands.map((b) => `<div><span>AI ${esc(b.band)}</span><div class="lr-cb"><i class="p" style="width:${b.pred}%"></i><i class="a" style="width:${b.actual}%"></i></div><b>실제 ${b.actual}%</b><small>${b.n}건</small></div>`).join("")}</div>
+        <div class="tiny">옅은 막대는 AI가 말한 승률, 진한 막대는 실제 익절률이에요. 새 추천 카드에는 이걸로 맞춘 '보정 승률'이 함께 나와요.</div>` : ""}
+      <h3 class="lr-h">AI 복기 규칙</h3>
+      ${ls.text ? `<div class="ai-ans lr-rules">${mdLite(ls.text)}</div><div class="tiny">${esc((ls.model || "").replace("claude-", ""))} · 채점 ${ls.n}건 기준 · 새 채점 ${L.next_in}건 더 쌓이면 다시 복기</div>`
+        : `<div class="tiny">Claude가 성적표 전체를 읽고 '추천 규칙'을 써 두면, 그 뒤 추천마다 그 규칙을 따라요.</div>`}
+      <div class="lr-act"><button type="button" class="btn ai-btn" id="lrRun" data-ai-x="learn"><span class="ai-spark" aria-hidden="true">✦</span>지금 복기해서 규칙 ${ls.text ? "갱신" : "만들기"}</button>
+        ${ls.text ? `<button type="button" class="btn sm soft" id="lrClear">규칙 지우기</button>` : ""}</div>
+      <div class="lr-auto"><span><b>자동 복기</b><small>새 채점이 ${L.step}건 쌓일 때마다(하루 한 번까지) 알아서 복기해요. 한 번에 수백 원쯤 들어요.</small></span>
+        <button class="switch" role="switch" id="lrAuto" aria-checked="${L.auto}" aria-label="자동 복기"><span></span></button></div>`}`;
+  },
   async aiStat() {
     setTop("AI 추천 성적", { back: "#invest/ai", menu: "invest", sub: "aistat" });
     const F = this.sf || (this.sf = { days: 30, mkt: "", model: "" });
@@ -1494,6 +1518,7 @@ pages.invest = {
         ${resultBar(a)}
         <div class="tiny">추천 ${a.n}건 · 채점 끝 ${a.done} · 진행 중 ${a.live} · 미체결 ${a.unfilled} · AI 비용 ${won$(a.cost_usd)}</div>
       </section>
+      <section class="card as-learn" id="asLearn"><div class="empty small loading">자체 학습 상태 불러오는 중</div></section>
       <section class="card as-ins"><h2>한눈에 해석</h2><ul>${insight.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></section>
       ${st.by_mkt.length ? `<div class="as-duo">${["kr", "us"].map((k) => { const x = st.by_mkt.find((y) => y.key === k); return `<section class="card as-m ${k}">
         <h2>${k === "kr" ? "국내" : "미국"}</h2>${x ? `<b class="${tone(x.avg)}">${x.avg == null ? "-" : pct(x.avg, 2)}</b><span>${x.n}건 · 익절 ${x.tp_rate ?? "-"}%</span>
@@ -1518,7 +1543,11 @@ pages.invest = {
           <span class="sub">${esc(r.ts.slice(5, 16).replace("T", " "))} · ${r.mkt === "us" ? "미국" : "국내"} · ${esc(mn(r.model))} · 예측 ${r.win_prob ?? "-"}% · +${r.target_pct}/−${r.stop_pct}${r.mfe != null ? ` · 최대 ${pct(r.mfe, 1)}/${pct(r.mae, 1)}` : ""}</span></span>
         <span class="end"><b class="${tone(r.net_pct)}">${r.net_pct == null ? "-" : pct(r.net_pct, 2)}</b><span class="tiny">${r.src ? esc(r.src) : ""}</span></span></a>`).join("") : `<div class="empty">아직 추천 기록이 없어요</div>`}</div></section>
       <div class="tiny" style="padding:0 3px 8px">채점 방법: 추천 시점 가격(지정가 추천은 그 가격에 닿았을 때)에 샀다고 보고, 그 뒤 5분봉에서 손절가·익절가 중 먼저 닿은 쪽으로 판정해요. 한 봉 안에 둘 다 닿으면 손절로 봐요. 둘 다 안 닿으면 정리 시각(국내 추천 정리 시각, 미국 정규장 마감) 가격으로 끝내요. 수익률은 왕복 비용(국내 0.2%, 미국 0.25%)을 뺀 값이에요.</div>`;
+    this.asLearn();
     $("#asRoot").onclick = async (e) => {
+      if (e.target.closest("#lrRun")) { aiSheet("learn"); sheet.addEventListener("close", () => this.asLearn(), { once: true }); return; }
+      if (e.target.closest("#lrAuto")) { const b = e.target.closest("#lrAuto"), on = b.getAttribute("aria-checked") !== "true"; await run(() => api("PUT", "/api/ai/learn", { auto: on }), on ? "자동 복기를 켰어요" : "자동 복기를 껐어요"); return this.asLearn(); }
+      if (e.target.closest("#lrClear")) { if (!confirmTap(e.target.closest("#lrClear"), "한 번 더 누르면 규칙을 지워요")) return; await run(() => api("PUT", "/api/ai/learn", { clear: true }), "규칙을 지웠어요"); return this.asLearn(); }
       const pk = e.target.closest("[data-pick]");
       if (pk) { e.preventDefault(); return pickSheet(pk.dataset.pick); }
       const c = e.target.closest(".as-f [data-v]");
@@ -2193,14 +2222,15 @@ const mkt = {
       const key = m + q.sym, prev = this.last[key];
       const flash = prev != null && q.price != null && prev !== q.price ? (q.price > prev ? "fl-up" : "fl-dn") : "";
       if (q.price != null) this.last[key] = q.price;
-      const sub = m === "us" && d.fx && q.price != null ? `${esc(q.sym)} · ${won(q.price * d.fx)}원` : `${esc(q.sym)}${q.exchange ? " · " + esc(q.exchange) : ""}`;
+      const ext = q.session === "pre" ? ` · <span class="tag y">프리마켓</span>` : q.session === "post" ? ` · <span class="tag y">애프터</span>` : m === "us" && q.live ? ` · <span class="tag g">실시간</span>` : "";
+      const sub = m === "us" && d.fx && q.price != null ? `${esc(q.sym)} · ${won(q.price * d.fx)}원${ext}` : `${esc(q.sym)}${q.exchange ? " · " + esc(q.exchange) : ""}`;
       return `<button type="button" class="item mk-row" data-sym="${esc(q.sym)}">
         <span class="main"><b>${esc(q.name || q.sym)}</b><span class="sub">${q.error ? "시세를 받지 못했어요" : sub}</span></span>
         ${this.spark(q.spark, (q.change || 0) >= 0)}
         <span class="end"><b class="mk-p ${flash}">${m === "us" && q.price != null ? "$" : ""}${this.money(q.price, q.currency)}</b>
           <span class="mk-c ${tone(q.change)}">${this.chg(q)}</span></span></button>`;
     }).join("") : `<div class="empty">관심종목이 없어요. 종목 검색에서 별을 눌러 추가하세요.</div>`;
-    $("#mkFoot").textContent = `${(d.updated_at || "").slice(11, 19)} 기준 · ${m === "kr" ? (d.kiwoom ? "키움 실시간" : "지연 시세") : "미국 시세는 공개 시세(최대 15분 지연)"} · 종목을 누르면 차트와 상세가 보여요`;
+    $("#mkFoot").textContent = `${(d.updated_at || "").slice(11, 19)} 기준 · ${m === "kr" ? (d.kiwoom ? "키움 실시간" : "지연 시세") : d.items.some((x) => x.live) ? "미국 시세는 키움 실시간(프리·애프터마켓 포함)" : "미국 시세는 공개 시세(프리·애프터마켓 포함, 최대 15분 지연)"} · 종목을 누르면 차트와 상세가 보여요`;
   },
 
   // ---------- 검색 ----------
@@ -2556,7 +2586,7 @@ function bindCredit(box, after) {
   const b = $("#crSave", box);
   if (b) b.onclick = async () => { const v = $("#crUsd", box).value; await run(() => api("POST", "/api/ai/credit", { usd: v }), "잔액을 맞췄어요"); after && after(); };
 }
-const AI_TITLES = { stock: "AI 종목 정리", portfolio: "AI 포트폴리오 점검", review: "AI 단타 복기", sweep: "AI 훑기 해석", chat: "AI에게 묻기" };
+const AI_TITLES = { learn: "AI 추천 복기 · 규칙 갱신", stock: "AI 종목 정리", portfolio: "AI 포트폴리오 점검", review: "AI 단타 복기", sweep: "AI 훑기 해석", chat: "AI에게 묻기" };
 function aiSheet(kind, payload = {}) {
   const chat = kind === "chat";
   const S = { history: [], ctl: null, busy: false };

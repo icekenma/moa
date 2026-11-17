@@ -364,7 +364,7 @@ def create_app(rt, updater=None):
         last = rt.db.one("SELECT received_at FROM inbox ORDER BY id DESC LIMIT 1")
         s = rt.settings.all()
         return jsonify(
-            kiwoom={k: acct.get(k) for k in ("configured", "ok", "error", "server", "total", "updated_at")},
+            kiwoom=acct,
             banks=rt.inbox.bank_status(),
             inbox={"last_at": last["received_at"] if last else None, **{k: v for k, v in rt.inbox.list(1).items() if k != "items"}},
             trading={e: {"mode": s["trade_mode"][e], "label": (rt.brokers[e].label if rt.brokers.get(e) else None),

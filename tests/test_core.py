@@ -562,3 +562,22 @@ def test_market_us_parsing(rt):
     c = create_app(rt).test_client()
     d = c.get("/api/market/quote/us/aapl").get_json()
     assert d["sym"] == "AAPL" and d["fx"] == 190.5 and d["watched"] is True
+
+
+def test_myaccount_keeps_last_snapshot_and_acct_no(rt):
+    class F(_FakeKiwoom):
+        def post(self, url, json=None, headers=None, timeout=None):
+            if headers and headers.get("api-id") == "ka00001":
+                return _Resp({"return_code": 0, "acctNo": "5012345611"})
+            return super().post(url, json, headers, timeout)
+    rt.settings.update({"kiwoom_view": {"appkey": "k", "secretkey": "s", "mock": False}})
+    rt.account.client().session = F()
+    snap = rt.account.snapshot(force=True)
+    assert snap["acct_no"] == "5012345611" and snap["ok"]
+    from moa.myaccount import AccountView
+    v2 = AccountView(rt.settings)  # 서버를 다시 켠 상황
+    v2.client().session = type("Down", (), {"post": lambda *a, **k: (_ for _ in ()).throw(OSError("down"))})()
+    s2 = v2.snapshot(force=True)
+    assert s2["total"] == 6166000 and s2["ok"] is False and s2["stale"] and "down" in s2["error"]
+    c = create_app(rt).test_client()
+    assert c.get("/api/connections").get_json()["kiwoom"]["holdings"][0]["code"] == "005930"

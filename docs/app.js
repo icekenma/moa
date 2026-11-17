@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1119";
+const UI_VERSION = "261117.1127";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -125,6 +125,45 @@ const BANKS = [["하나", "하나은행"], ["NH농협", "NH농협은행"], ["신
   ["IBK", "IBK기업은행"], ["카카오뱅크", "카카오뱅크"], ["토스뱅크", "토스뱅크"], ["케이뱅크", "케이뱅크"], ["기타", "기타 은행"]];
 const bankLabel = (code) => (BANKS.find((b) => b[0] === code) || [code, code])[1];
 const maskAcct = (no) => { const d = String(no || "").replace(/\D/g, ""); return d ? "····" + d.slice(-4) : "계좌번호 없음"; };
+
+// ---------- 키움 계좌 카드(설정·투자 공통). 마지막 조회를 휴대폰에도 남겨 서버가 꺼져 있어도 보여 준다 ----------
+const kwCache = {
+  save(d) { if (d && d.total != null && d.ok !== false) store.set("kwLast", JSON.stringify(d)); },
+  load() { try { return JSON.parse(store.get("kwLast") || "null"); } catch (e) { return null; } },
+};
+async function kwFetch(force) {
+  try { const d = await GET("/api/myaccount" + (force ? "?force=1" : "")); kwCache.save(d); return d; }
+  catch (e) {
+    if (e instanceof NeedConnect) throw e;
+    const c = kwCache.load();
+    if (c) return { ...c, ok: false, offline: true, error: e.message };
+    throw e;
+  }
+}
+const fullAcct = (no) => { const d = String(no || "").replace(/\D/g, ""); return d.length >= 8 ? `${d.slice(0, 4)}-${d.slice(4, 8)}${d.length > 8 ? "-" + d.slice(8) : ""}` : d; };
+function kwCardHtml(d) {
+  if (!d || !d.configured) return `<h2>키움 계좌</h2><div class="small muted">아래 키움증권(조회 전용)에 앱키·시크릿키를 넣고 연결 확인을 누르면 여기서 언제든 계좌를 볼 수 있어요.</div>`;
+  if (d.total == null) return `<div class="kw-top"><b>키움증권</b></div><div class="notice warn">${esc(d.error || "불러오는 중")}</div>`;
+  const live = d.ok !== false, H = d.holdings || [];
+  const when = (d.updated_at || "").replace("T", " ");
+  const stateTxt = live ? "실시간" : d.offline ? "서버 꺼짐 · 마지막 조회값" : "연결 끊김 · 마지막 조회값";
+  return `
+    <div class="kw-top"><b>키움증권</b><span>${esc(d.server || "")} · 조회 전용</span>
+      <span class="tiny live-dot ${live ? "on" : ""} kw-live">${stateTxt}</span></div>
+    <div class="kw-no">${d.acct_no ? esc(fullAcct(d.acct_no)) : "계좌번호는 다음 조회 때 받아와요"}</div>
+    <div><div class="kw-lbl">총자산(추정예탁자산)</div><div class="kw-total">${won(d.total)}<small>원</small></div>
+      <div class="kw-pnl ${tone(d.pnl)}">평가손익 ${signed(d.pnl)}원 (${pct(d.pnl_pct, 2)})</div></div>
+    <div class="kw-kv"><div><span>주식 평가</span><b>${won(d.eval)}</b></div><div><span>예수금</span><b>${won(d.cash)}</b></div><div><span>주문 가능</span><b>${won(d.orderable)}</b></div></div>
+    ${H.length ? `<div class="kw-list">${H.slice(0, 6).map((h) => `<div><span class="kw-nm">${esc(h.name)}<i>${won(h.qty)}주</i></span><b>${won(h.value)}</b><em class="${tone(h.pnl)}">${pct(h.pnl_pct, 2)}</em></div>`).join("")}
+      ${H.length > 6 ? `<div class="kw-more">외 ${H.length - 6}종목</div>` : ""}</div>` : `<div class="kw-more">보유 종목 없음</div>`}
+    ${!live && d.error ? `<div class="kw-err">${esc(d.error)}</div>` : ""}
+    <div class="kw-foot"><span>${esc(when.slice(5, 19))} 기준</span>
+      <span><button type="button" class="kw-btn" id="kwReload">새로고침</button><a class="kw-btn" href="#invest/account">전체 보기</a></span></div>`;
+}
+function bindKwCard(box) {
+  const b = $("#kwReload", box);
+  if (b) b.onclick = async () => { b.disabled = true; try { box.innerHTML = kwCardHtml(await run(() => kwFetch(true))); } finally { bindKwCard(box); } };
+}
 async function shortcutGuide() {
   const serverUrl = (ON_PAGES ? store.get("server") : location.origin).replace(/\/+$/, "");
   let token = store.get("token");
@@ -809,7 +848,7 @@ pages.invest = {
 
   // ---------- 내 계좌(조회 전용) ----------
   async account(box) {
-    const d = await GET("/api/myaccount");
+    const d = await kwFetch();
     if (investState.tab !== "account") return;
     $(".fab")?.remove();
     if (!d.configured) {
@@ -1392,6 +1431,13 @@ function planSheet(e) {
 // 설정
 // =====================================================================
 pages.settings = {
+  every: 5000,
+  async refresh(h) {  // 계좌 연결 화면에서는 키움 카드만 몇 초마다 새로(입력란은 그대로)
+    const box = $("#kwCard");
+    if (h.sub !== "accounts" || !box || box.contains(document.activeElement)) return;
+    const d = await kwFetch();
+    if (d.configured && $("#kwCard") === box) { box.innerHTML = kwCardHtml(d); bindKwCard(box); }
+  },
   theme() {
     const cur = store.get("theme") || "navy";
     const curA = store.get("accent") || THEMES[cur].accent;
@@ -1439,7 +1485,14 @@ pages.settings = {
     if (h.sub === "theme") return this.theme();  // 색상은 서버 연결 없이도 바꿀 수 있게
     if (h.sub === "kiwoom") h.sub = "accounts";
     const sub = h.sub;
-    const s = await GET("/api/settings");
+    let s;
+    try { s = await GET("/api/settings"); }
+    catch (e) {
+      if (sub !== "accounts" || e instanceof NeedConnect || !kwCache.load()) throw e;
+      view.innerHTML = `<div class="notice warn">${esc(e.message)}</div><section class="card kw-card" id="kwCard">${kwCardHtml({ ...kwCache.load(), ok: false, offline: true })}</section>`;
+      bindKwCard($("#kwCard"));
+      return;
+    }
     const ping = await GET("/api/ping").catch(() => ({}));
     const info = ping.local ? await GET("/api/connect-info").catch(() => null) : null;
     const up = await GET("/api/update").catch(() => ({ available: false, message: "" }));
@@ -1473,7 +1526,10 @@ pages.settings = {
     const con = sub === "accounts" ? await GET("/api/connections").catch(() => null) : null;
     const kw = con ? con.kiwoom : {};
     const kwState = !kw.configured ? ["연결 안 됨", "warn"] : kw.ok ? ["연결됨", "g"] : ["확인 필요", "warn"];
+    const kwSnap = con && con.kiwoom.configured ? con.kiwoom : null;
+    if (kwSnap) kwCache.save(kwSnap);
     const accountsHtml = con ? `
+      <section class="card kw-card" id="kwCard">${kwCardHtml(kwSnap || (kwCache.load() && { ...kwCache.load(), ok: false }) || { configured: false })}</section>
       <section class="card">
         <div class="card-head"><h2>연결된 계좌</h2><span class="tiny">${(con.banks.length + (kw.configured ? 1 : 0))}개</span></div>
         <div class="list">
@@ -1538,6 +1594,7 @@ pages.settings = {
         <div style="display:flex;justify-content:space-between;font-size:14px"><span class="muted">서버 빌드</span><span class="muted">${esc(ping.build || "-")}</span></div>
       </section>`;
     view.innerHTML = sub === "accounts" ? accountsHtml : sub === "trading" ? tradingHtml : sub === "app" ? appHtml : connectCard;
+    if ($("#kwCard")) bindKwCard($("#kwCard"));
     $("#bkAdd")?.addEventListener("click", () => bankSheet(null, route));
     $$("[data-bk]").forEach((el) => el.addEventListener("click", () => bankSheet(con.banks.find((b) => b.id == el.dataset.bk), route)));
     const errs = (e) => { $("#setErr").innerHTML = Object.entries(e || {}).map(([k, v]) => `<div class="notice warn">${esc({ scalp: "단타 계좌", dca: "장기투자 계좌", feed: "시세" }[k] || k)}: ${esc(v)}</div>`).join(""); };
@@ -1610,6 +1667,7 @@ pages.settings = {
       await run(() => api("PUT", "/api/settings", collect()));
       const r = await run(() => api("POST", "/api/myaccount/test"));
       toast(`${r.server} 계좌 연결 성공. 총자산 ${won(r.total)}원, 보유 ${r.holdings.length}종목`);
+      kwCache.save(r); $("#kwCard").innerHTML = kwCardHtml(r); bindKwCard($("#kwCard"));
     };
     if ($("#saveSet")) $("#saveSet").onclick = async () => { const r = await run(() => api("PUT", "/api/settings", collect()), "설정을 저장했어요"); errs(r.errors); };
     view.onclick = async (e) => {

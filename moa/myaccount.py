@@ -21,6 +21,7 @@ class AccountView:
         self._at = 0.0
         self._err = None
         self._lock = threading.Lock()
+        self._acct_no = None
 
     def _conf(self):
         return self.settings.get("kiwoom_view")
@@ -34,7 +35,7 @@ class AccountView:
         key = (c.get("appkey"), c.get("secretkey"), bool(c.get("mock")))
         if self._client is None or key != self._key:
             self._client = KiwoomClient(c["appkey"], c["secretkey"], c.get("mock", False), read_only=True)
-            self._key, self._cache = key, None
+            self._key, self._cache, self._acct_no = key, None, None
         return self._client
 
     def snapshot(self, force=False):
@@ -47,14 +48,43 @@ class AccountView:
                 cl = self.client()
                 data = cl.account_summary()
                 data.update(configured=True, ok=True, server="모의투자" if cl.mock else "실전",
+                            acct_no=self._account_no(cl),
                             updated_at=datetime.now().isoformat(timespec="seconds"))
                 self._cache, self._at, self._err = data, time.time(), None
+                self._save_last(data)
             except Exception as e:
                 self._err = str(e)
-                if self._cache:  # 마지막 성공값을 보여 주되 오류를 함께 알린다
-                    return dict(self._cache, ok=False, error=self._err)
+                last = self._cache or self.last()
+                if last:  # 마지막 성공값을 보여 주되 오류를 함께 알린다(서버를 다시 켠 뒤에도)
+                    return dict(last, ok=False, error=self._err, stale=True)
                 return {"configured": True, "ok": False, "error": self._err}
             return self._cache
+
+    def _account_no(self, cl):
+        """계좌번호(ka00001). 못 받아도 조회에는 지장 없게 빈 값."""
+        if self._acct_no is None:
+            try:
+                d = cl.call("acctno", {})
+                self._acct_no = str(d.get("acctNo") or d.get("acct_no") or "").strip()
+            except Exception:
+                self._acct_no = ""
+        return self._acct_no
+
+    def _save_last(self, data):
+        """마지막 성공 조회를 DB에 남긴다(10초에 한 번). 키움이 안 될 때·서버 재시작 뒤에도 보여 준다."""
+        if time.time() - getattr(self, "_saved_at", 0) < 10:
+            return
+        self._saved_at = time.time()
+        try:
+            self.settings.db.set_setting("kiwoom_last", data)
+        except Exception:
+            pass
+
+    def last(self):
+        try:
+            return self.settings.db.get_setting("kiwoom_last")
+        except Exception:
+            return None
 
     def total(self):
         s = self.snapshot()

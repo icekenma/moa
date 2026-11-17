@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2113";
+const UI_VERSION = "261117.2120";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -449,7 +449,7 @@ pages.home = {
     view.innerHTML = Object.keys(groups).length ? Object.entries(groups).map(([day, xs]) => `
       <div class="sec-title">${day ? korDate(day) : "날짜 없음"}</div>
       <section class="card tight"><div class="list">${xs.map((x) => `<div class="item">
-        <span class="ico ${x.kind === "warn" ? "warn" : x.kind === "order" ? "y" : ""}">${icon[x.kind] || ""}</span>
+        <span class="ico ${({ warn: "warn", order: "h-indigo", ledger: "h-coral", update: "h-violet" })[x.kind] || "h-slate"}">${icon[x.kind] || ""}</span>
         <span class="main"><b>${esc(x.title)}</b><span class="sub">${esc((x.ts || "").slice(11, 16))} · ${esc(x.sub || "")}</span></span>
         <span class="end">${x.amount != null ? `<b class="${x.amount > 0 ? "inc" : ""}">${x.amount > 0 ? "+" : "-"}${won(Math.abs(x.amount))}</b>` : x.price ? `<span class="small ${x.side === "buy" ? "up" : "down"}">${won(x.price)}원</span>` : ""}</span></div>`).join("")}</div></section>`).join("")
       : `<section class="card"><div class="empty">아직 기록이 없어요. 가계부를 쓰거나 주문하면 여기에 모여요</div></section>`;
@@ -511,11 +511,19 @@ function dayBars(L) {
     return `<div class="d ${cls}" title="${day}일 ${won(v)}원"><i style="height:${h}px"></i><em>${day === L.today_idx || ((day === 1 || day % 5 === 0) && Math.abs(day - L.today_idx) > 1) ? day : ""}</em></div>`;
   }).join("") + `</div>`;
 }
+function donut(items, total) {
+  const R = 42, C = 2 * Math.PI * R, top = items.slice(0, 6), rest = items.slice(6).reduce((a, x) => a + x[1], 0);
+  const all = rest ? [...top, ["그 밖", rest]] : top;
+  let off = 0;
+  const segs = all.map(([n, v]) => { const len = v / Math.max(1, total) * C, el = `<circle r="${R}" cx="60" cy="60" class="dn-seg ${n === "그 밖" ? "h-slate" : hue(n)}" stroke-dasharray="${Math.max(0, len - 1.5).toFixed(1)} ${C.toFixed(1)}" stroke-dashoffset="${(-off).toFixed(1)}"/>`; off += len; return el; }).join("");
+  return `<div class="donut"><svg viewBox="0 0 120 120" role="img" aria-label="분류별 지출 비율"><circle r="${R}" cx="60" cy="60" class="dn-bg"/>${segs}</svg>
+    <div class="dn-c"><span>이 달 지출</span><b>${bigNum(total)}</b><small>${all.length}개 분류</small></div></div>`;
+}
 function budgetBar(c) {
   const p = c.budget ? Math.min(100, (c.used / c.budget) * 100) : 0;
-  return `<div style="display:flex;flex-direction:column;gap:4px">
-    <div style="display:flex;justify-content:space-between;font-size:11px"><b>${esc(c.name)}</b><span class="muted">${won(c.used)} / ${won(c.budget)}</span></div>
-    <div class="bar ${c.used > c.budget * 0.9 ? "over" : ""}"><div style="width:${p}%"></div></div></div>`;
+  return `<div class="cat-row ${hue(c.name)} ${c.used > c.budget * 0.9 ? "warn" : ""}">
+    <div class="cat-top"><span class="cat-dot"></span><b>${esc(c.name)}</b><span class="cat-amt">${won(c.used)}<small>/ ${won(c.budget)}</small></span></div>
+    <div class="cat-bar"><i style="width:${p}%"></i></div></div>`;
 }
 // 분류·기관 이름마다 고정 색(같은 이름은 늘 같은 색)
 const HUE_FIX = { 식비: "coral", 외식: "coral", 식사: "coral", 카페: "amber", 간식: "amber", 교통: "sky", 주유: "sky", 차량: "sky",
@@ -757,13 +765,18 @@ async function txSheet(e, done) {
 const ledgerState = { month: thisMonth(), kind: "all" };
 function monthNav(S, sum) {
   const [y, m] = S.month.split("-").map(Number);
-  return `<section class="card">
-    <div class="card-head">
-      <button class="icon-btn" style="background:var(--bg)" data-mon="-1" aria-label="이전 달">‹</button>
-      <h2 style="font-size:14.5px">${y}년 ${m}월</h2>
-      <button class="icon-btn" style="background:var(--bg)" data-mon="1" aria-label="다음 달">›</button>
+  const tot = Math.max(1, sum.income + sum.expense);
+  return `<section class="card mnav">
+    <div class="mnav-head">
+      <button class="mnav-btn" data-mon="-1" aria-label="이전 달"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+      <h2><small>${y}년</small>${m}월</h2>
+      <button class="mnav-btn" data-mon="1" aria-label="다음 달"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
     </div>
-    <div class="kv"><div>수입<b class="inc">+${won(sum.income)}</b></div><div>지출<b>-${won(sum.expense)}</b></div><div>남은 돈<b>${won(sum.net)}</b></div></div>
+    <div class="mnav-kv">
+      <div class="k-in"><span>수입</span><b>+${won(sum.income)}</b></div>
+      <div class="k-out"><span>지출</span><b>−${won(sum.expense)}</b></div>
+      <div class="k-net ${sum.net < 0 ? "neg" : ""}"><span>남은 돈</span><b>${won(sum.net)}</b></div></div>
+    <div class="mnav-ratio" aria-hidden="true"><i class="ri" style="flex:${sum.income / tot}"></i><i class="ro" style="flex:${sum.expense / tot}"></i></div>
     ${sum.transfer_count ? `<div class="tiny">내 계좌끼리 옮긴 ${sum.transfer_count}건은 수입·지출에서 뺐어요</div>` : ""}
   </section>`;
 }
@@ -884,11 +897,12 @@ pages.ledger = {
     d.rows.filter((t) => !t.transfer).forEach((t) => { const k = Number(t.date.slice(8)); (t.kind === "in" ? inc : out)[k] = ((t.kind === "in" ? inc : out)[k] || 0) + t.amount; });
     const today = localToday();
     let cells = "";
+    const omax = Math.max(1, ...Object.values(out));
     for (let i = 0; i < first; i++) cells += `<div class="cal-cell empty-cell"></div>`;
     for (let day = 1; day <= ndays; day++) {
       const iso = `${S.month}-${String(day).padStart(2, "0")}`;
       const wd = (first + day - 1) % 7;
-      cells += `<button type="button" class="cal-cell ${iso === today ? "today" : ""} ${wd === 0 ? "sun" : wd === 6 ? "sat" : ""}" data-day="${iso}" aria-label="${korDate(iso)} 지출 ${won(out[day] || 0)}원">
+      cells += `<button type="button" class="cal-cell ${iso === today ? "today" : ""} ${iso > today ? "future" : ""} ${out[day] ? "spent" : ""} ${wd === 0 ? "sun" : wd === 6 ? "sat" : ""}" style="--heat:${((out[day] || 0) / omax).toFixed(2)}" data-day="${iso}" aria-label="${korDate(iso)} 지출 ${won(out[day] || 0)}원">
         <span class="cal-d">${day}</span>${out[day] ? `<span class="cal-out">-${shortWon(out[day])}</span>` : ""}${inc[day] ? `<span class="cal-in">+${shortWon(inc[day])}</span>` : ""}</button>`;
     }
     const spentDays = Object.keys(out).length;
@@ -896,7 +910,9 @@ pages.ledger = {
       <section class="card cal">
         <div class="cal-grid cal-wd">${[..."일월화수목금토"].map((w, i) => `<span class="${i === 0 ? "sun" : i === 6 ? "sat" : ""}">${w}</span>`).join("")}</div>
         <div class="cal-grid">${cells}</div>
-        <div class="tiny">지출한 날 ${spentDays}일 · 지출 없는 날 ${Math.max(0, (S.month === thisMonth() ? Number(today.slice(8)) : ndays) - spentDays)}일 · 날짜를 누르면 그날 내역이 보여요</div>
+        <div class="cal-foot"><span class="cal-chip c-spent"><i></i>지출한 날 <b>${spentDays}일</b></span><span class="cal-chip c-zero"><i></i>무지출 <b>${Math.max(0, (S.month === thisMonth() ? Number(today.slice(8)) : ndays) - spentDays)}일</b></span>
+          <span class="cal-scale" aria-hidden="true">적게<i></i>많이</span></div>
+        <div class="tiny">날짜를 누르면 그날 내역이 보여요</div>
       </section>`;
     view.onclick = (e) => {
       const c = e.target.closest("[data-day]");
@@ -924,18 +940,21 @@ pages.ledger = {
     const tmax = Math.max(1, ...trend.flatMap((t) => [t.income, t.expense]));
     view.innerHTML = `${monthNav(S, sum)}
       <section class="card"><h2>최근 6개월</h2>
-        <div class="trend" role="img" aria-label="최근 6개월 수입과 지출">${trend.map((t) => `<div class="tcol">
+        <div class="trend" role="img" aria-label="최근 6개월 수입과 지출">${trend.map((t) => `<div class="tcol ${t.month === S.month ? "cur" : ""}">
+          <em>${t.expense ? bigNum(t.expense) : ""}</em>
           <div class="tbars"><i class="ti" style="height:${(t.income / tmax) * 100}%"></i><i class="to" style="height:${(t.expense / tmax) * 100}%"></i></div>
           <span>${Number(t.month.slice(5))}월</span></div>`).join("")}</div>
-        <div class="legend tiny"><span><i class="sw" style="background:#0B7A55"></i>수입</span><span><i class="sw" style="background:#172033"></i>지출</span></div>
+        <div class="legend tiny"><span><i class="sw" style="background:var(--in)"></i>수입</span><span><i class="sw" style="background:var(--coral)"></i>지출</span><span style="margin-left:auto">막대 위 숫자는 지출</span></div>
       </section>
       <section class="card"><h2>분류별 지출</h2>
-        ${cats.length ? cats.map((c) => `<div style="display:flex;flex-direction:column;gap:4px">
-          <div style="display:flex;justify-content:space-between;font-size:11px"><b>${esc(c.name)}</b><span class="muted">${won(c.used)} · ${Math.round((c.used / Math.max(1, sum.expense)) * 100)}%</span></div>
-          <div class="bar"><div style="width:${(c.used / maxc) * 100}%"></div></div></div>`).join("") : `<div class="tiny">이 달 지출이 없어요</div>`}
+        ${cats.length ? `${donut(cats.map((c) => [c.name, c.used]), sum.expense)}
+        <div class="cat-rows">${cats.map((c) => `<div class="cat-row ${hue(c.name)}">
+          <div class="cat-top"><span class="cat-dot"></span><b>${esc(c.name)}</b><span class="cat-amt">${won(c.used)}<small>${Math.round((c.used / Math.max(1, sum.expense)) * 100)}%</small></span></div>
+          <div class="cat-bar"><i style="width:${(c.used / maxc) * 100}%"></i></div></div>`).join("")}</div>` : `<div class="empty">이 달 지출이 없어요</div>`}
       </section>
       <section class="card"><h2>결제수단별</h2>
-        ${methods.length ? methods.map(([k, v]) => `<div style="display:flex;justify-content:space-between;font-size:11px"><span>${esc(k)}</span><b>${won(v)}</b></div>`).join("") : `<div class="tiny">이 달 지출이 없어요</div>`}
+        ${methods.length ? `<div class="stack">${methods.map(([k, v], i) => `<i class="${hue(k)}" style="flex:${v}" title="${esc(k)}"></i>`).join("")}</div>
+        ${methods.map(([k, v]) => `<div class="m-row ${hue(k)}"><span class="cat-dot"></span><span>${esc(k)}</span><b>${won(v)}</b><small>${Math.round((v / Math.max(1, sum.expense)) * 100)}%</small></div>`).join("")}` : `<div class="empty">이 달 지출이 없어요</div>`}
       </section>
       <section class="card tight"><div class="card-head" style="padding-top:8.5px"><h2>큰 지출 TOP 5</h2></div>
         <div class="list">${top5.length ? top5.map((t) => txItem(t, false)).join("") : `<div class="empty">이 달 지출이 없어요</div>`}</div>

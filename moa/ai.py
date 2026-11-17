@@ -1,0 +1,299 @@
+"""Claude API 연계: 투자 화면에서 바로 묻는 AI 비서.
+
+- 종목 분석: 시세·차트·내 보유 + 웹 검색(최근 뉴스)으로 한눈에 정리
+- 포트폴리오 점검: 국내·미국 보유, 현금, 적립 계획을 보고 쏠림·위험 점검
+- 단타 복기: 오늘 거래와 엔진 기록으로 잘된 점·문제점·규칙 제안
+- 조건 훑기 해석: 결과를 과최적화 관점에서 풀어 설명
+- 자유 질문: 내 계좌·관심종목을 알고 있는 상태로 대화
+
+원칙
+- AI는 주문하지 않는다(주문 도구를 주지 않음). 매수·매도 지시 대신 판단 근거와 시나리오를 준다.
+- 키는 노트북에만 저장하고 화면에는 가린다. 월 예산을 넘으면 호출하지 않는다.
+- 답변은 글자가 나오는 대로 휴대폰에 흘려보낸다(스트리밍).
+"""
+import json
+from datetime import datetime
+
+import requests
+
+API_URL = "https://api.anthropic.com/v1/messages"
+API_VERSION = "2023-06-01"
+MODELS = {  # 화면에 보여 줄 모델과 백만 토큰당 가격(USD, 입력/출력)
+    "claude-sonnet-5-5": ("Sonnet 5.5 · 빠르고 똑똑함(추천)", 2.0, 10.0),
+    "claude-opus-5-5": ("Opus 5.5 · 깊게 분석", 4.0, 20.0),
+    "claude-haiku-4-5": ("Haiku 4.5 · 가장 빠르고 저렴", 1.0, 5.0),
+}
+SEARCH_USD = 0.01  # 웹 검색 1회
+FX_DEFAULT = 1400.0
+
+SYSTEM = """너는 한국 개인 투자자의 앱(moa) 안에 있는 투자 도우미야.
+- 한국어로, 두괄식·개조식으로 짧게 답해. 첫 줄에 핵심 한 줄. 소제목은 '## ', 항목은 '- '로.
+- 매수·매도를 지시하지 마. 대신 판단 근거, 상승·하락 시나리오, 확인할 지표·일정, 위험을 알려 줘.
+- 숫자는 주어진 데이터에 있는 것만 쓰고, 모르면 모른다고 해. 데이터 시각을 밝혀.
+- 웹 검색을 했다면 근거가 된 기사·공시를 언급해(출처는 앱이 따로 붙여 보여 줌).
+- 확실하지 않은 전망을 단정하지 말고, 과거 성과가 미래를 보장하지 않는다는 점을 필요할 때만 한 줄로.
+- 투자 결정과 책임은 사용자에게 있다는 걸 전제로, 실용적으로 도와."""
+
+
+class AIError(RuntimeError):
+    pass
+
+
+def _model_price(model):
+    for k, (_, i, o) in MODELS.items():
+        if model.startswith(k):
+            return i, o
+    return 2.0, 10.0
+
+
+class AI:
+    def __init__(self, rt):
+        self.rt = rt
+        rt.db.x("""CREATE TABLE IF NOT EXISTS ai_usage(
+            id INTEGER PRIMARY KEY, ts TEXT NOT NULL, kind TEXT NOT NULL, model TEXT NOT NULL,
+            in_tok INTEGER NOT NULL, out_tok INTEGER NOT NULL, searches INTEGER NOT NULL, usd REAL NOT NULL)""")
+        self.session = requests.Session()
+
+    # ---------- 설정·사용량 ----------
+    def conf(self):
+        return self.rt.settings.get("ai")
+
+    def configured(self):
+        return bool((self.conf().get("api_key") or "").strip())
+
+    def month_usd(self):
+        r = self.rt.db.one("SELECT COALESCE(SUM(usd),0) AS s, COUNT(*) AS n FROM ai_usage WHERE ts >= ?",
+                           (datetime.now().strftime("%Y-%m-01"),))
+        return float(r["s"]), int(r["n"])
+
+    def status(self):
+        c = self.conf()
+        used, n = self.month_usd()
+        return {"configured": self.configured(), "model": c.get("model"), "budget_usd": c.get("budget_usd"),
+                "web_search": c.get("web_search", True), "month_usd": round(used, 4), "month_calls": n,
+                "models": {k: v[0] for k, v in MODELS.items()},
+                "recent": self.rt.db.q("SELECT ts, kind, model, in_tok, out_tok, searches, usd FROM ai_usage "
+                                       "ORDER BY id DESC LIMIT 10")}
+
+    def _record(self, kind, model, usage):
+        i, o = _model_price(model)
+        usd = (usage["in"] * i + usage["out"] * o) / 1e6 + usage["searches"] * SEARCH_USD
+        self.rt.db.x("INSERT INTO ai_usage(ts,kind,model,in_tok,out_tok,searches,usd) VALUES(?,?,?,?,?,?,?)",
+                     (datetime.now().isoformat(timespec="seconds"), kind, model, usage["in"], usage["out"],
+                      usage["searches"], usd))
+        return usd
+
+    # ---------- 화면별 자료 모으기 ----------
+    def context(self, kind, d):
+        rt, m = self.rt, self.rt.market
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if kind == "stock":
+            mk = "us" if d.get("mkt") == "us" else "kr"
+            sym = str(d.get("sym") or "").upper()
+            if not sym:
+                raise AIError("종목을 골라 주세요")
+            q = dict(m.kr_quote(sym) if mk == "kr" else m.us_live(sym))
+            q.pop("spark", None)
+            try:
+                ch = m.kr_chart(sym, "3m") if mk == "kr" else m.yh_chart(sym, "3m")
+                closes = [(p["t"], round(p["c"], 2)) for p in ch.get("points", [])][-60:]
+            except Exception:
+                closes = []
+            hold = m.holding(sym) if mk == "kr" else m.us_holding(sym)
+            name = q.get("name") or sym
+            ask = (f"{name}({sym}, {'국내' if mk == 'kr' else '미국'})를 분석해 줘. 최근 1~2주 뉴스·공시를 웹에서 찾아 "
+                   "주가 움직임과 연결하고, 지금 체크할 점을 정리해 줘."
+                   + (" 내 보유분 기준으로도 봐 줘." if hold else ""))
+            data = {"기준시각": now, "현재 시세": q, "최근 3개월 종가(날짜, 종가)": closes, "내 보유": hold}
+            return f"{name} 분석", ask, data
+        if kind == "portfolio":
+            snap = rt.account.snapshot() if rt.account.configured() else None
+            dca = []
+            try:
+                dca = [{k: p.get(k) for k in ("code", "name", "amount", "day", "target_weight", "enabled")}
+                       for p in rt.dca.plans()]
+            except Exception:
+                pass
+            if not snap and not dca:
+                raise AIError("키움 계좌를 연결하거나 적립 계획을 만들어야 점검할 수 있어요")
+            ask = ("내 포트폴리오를 점검해 줘. 종목·업종 쏠림, 국내/미국·원화/달러 비중, 현금 비중, 적립 계획과의 "
+                   "어긋남, 눈여겨볼 위험과 개선 아이디어를 정리해 줘. 필요하면 보유 종목의 최근 큰 뉴스만 찾아 봐.")
+            hold = []
+            for h in (snap or {}).get("holdings") or []:
+                hold.append({k: h.get(k) for k in ("code", "name", "market", "qty", "avg_price", "price", "value",
+                                                     "pnl", "pnl_pct")})
+            data = {"기준시각": now, "총자산": (snap or {}).get("total"), "예수금": (snap or {}).get("cash"),
+                    "미국·달러": (snap or {}).get("us"), "보유 종목(평가액 원화)": hold, "적립 계획(월)": dca,
+                    "순자산 목표": rt.settings.get("networth_goal")}
+            return "포트폴리오 점검", ask, data
+        if kind == "review":
+            day = d.get("day") or datetime.now().strftime("%Y-%m-%d")
+            trades = rt.db.q("SELECT code,name,qty,entry_ts,entry_price,stop0,target,entry_reason,exit_ts,exit_price,"
+                             "reason,pnl,fees FROM trades WHERE engine='scalp' AND session=? ORDER BY id", (day,))
+            log = rt.db.q("SELECT ts, level, msg FROM engine_log WHERE engine='scalp' AND ts LIKE ? ORDER BY id DESC "
+                          "LIMIT 60", (day + "%",))
+            s = rt.settings.all()
+            if not trades and not log:
+                raise AIError(f"{day}에는 단타 거래나 기록이 없어요")
+            ask = (f"{day} 단타 매매를 복기해 줘. 잘된 점, 손실 원인(진입 시점·손절폭·시간대·종목 선택), "
+                   "규칙에서 바꿔 볼 후보(어느 값을 어느 방향으로, 왜)를 짧게. 표본이 적으면 성급히 바꾸지 말라고 말해 줘.")
+            data = {"날짜": day, "거래": trades, "엔진 기록(최근순)": log, "전략": s["strategy"], "청산": s["exit"],
+                    "위험 관리": s["risk"], "비용": s["costs"]}
+            return f"{day} 단타 복기", ask, data
+        if kind == "sweep":
+            st = rt.sweep.status()
+            if st.get("status") != "done":
+                raise AIError("먼저 조건 훑기를 끝내 주세요")
+            slim = {k: st.get(k) for k in ("strategy", "source", "meta", "current", "checked", "tested_ok",
+                                            "positive_is", "grid")}
+            slim["top"] = st.get("top", [])[:10]
+            ask = ("조건 훑기 결과를 해석해 줘. 학습/검증 성적 차이로 본 과최적화 가능성, 믿을 만한 조건과 그 이유, "
+                   "지금 내 설정과 비교, 다음에 해 볼 검증(기간·종목·조건 범위)을 알려 줘. 웹 검색은 하지 마.")
+            return "조건 훑기 해석", ask, {"결과": slim}
+        if kind == "chat":
+            q = (d.get("question") or "").strip()
+            if not q:
+                raise AIError("질문을 넣어 주세요")
+            snap = rt.account.snapshot() if rt.account.configured() else None
+            hold = [{k: h.get(k) for k in ("name", "code", "market", "qty", "value", "pnl_pct")}
+                    for h in (snap or {}).get("holdings") or []]
+            data = {"기준시각": now, "내 총자산": (snap or {}).get("total"), "보유 종목": hold,
+                    "관심종목": rt.settings.get("watch")}
+            return "AI에게 묻기", q[:2000], data
+        raise AIError("알 수 없는 요청이에요")
+
+    # ---------- Claude 호출(스트리밍) ----------
+    def stream(self, kind, d):
+        """화면에 줄 이벤트를 하나씩 낸다: {"t":"status"|"text"|"source"|"done"|"error", ...}"""
+        if not self.configured():
+            yield {"t": "error", "msg": "설정 → AI에서 Claude API 키를 넣어 주세요"}
+            return
+        c = self.conf()
+        used, _ = self.month_usd()
+        if c.get("budget_usd") and used >= float(c["budget_usd"]):
+            yield {"t": "error", "msg": f"이번 달 AI 예산(${c['budget_usd']})을 다 썼어요. 설정 → AI에서 늘릴 수 있어요"}
+            return
+        try:
+            title, ask, data = self.context(kind, d)
+        except AIError as e:
+            yield {"t": "error", "msg": str(e)}
+            return
+        except Exception as e:
+            yield {"t": "error", "msg": f"자료를 모으지 못했어요: {e}"}
+            return
+        yield {"t": "status", "msg": "자료를 정리해서 Claude에게 보내는 중"}
+        user = f"{ask}\n\n<앱 데이터>\n{json.dumps(data, ensure_ascii=False, default=str)[:60000]}\n</앱 데이터>"
+        messages = [{"role": m["role"], "content": str(m["content"])[:4000]}
+                    for m in (d.get("history") or [])[-6:] if m.get("role") in ("user", "assistant")]
+        messages.append({"role": "user", "content": user})
+        model = c.get("model") or "claude-sonnet-5-5"
+        body = {"model": model, "max_tokens": 2500, "system": SYSTEM, "messages": messages, "stream": True}
+        if c.get("web_search", True) and kind != "sweep":
+            body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 4,
+                              "user_location": {"type": "approximate", "country": "KR", "timezone": "Asia/Seoul"}}]
+        usage = {"in": 0, "out": 0, "searches": 0}
+        sources, seen = [], set()
+        try:
+            for ev in self._post(body):
+                yield from self._handle(ev, usage, sources, seen)
+        except AIError as e:
+            if "tools" in body and "web_search" in str(e).lower():
+                # 조직에서 웹 검색을 안 켰으면 검색 없이 다시
+                body.pop("tools")
+                yield {"t": "status", "msg": "웹 검색을 쓸 수 없어 앱 데이터만으로 답할게요"}
+                try:
+                    for ev in self._post(body):
+                        yield from self._handle(ev, usage, sources, seen)
+                except AIError as e2:
+                    yield {"t": "error", "msg": str(e2)}
+                    return
+            else:
+                yield {"t": "error", "msg": str(e)}
+                return
+        usd = self._record(kind, model, usage)
+        fx = FX_DEFAULT
+        try:
+            fx = float(self.rt.market.yh_quote("USDKRW=X")["price"]) or FX_DEFAULT
+        except Exception:
+            pass
+        yield {"t": "done", "title": title, "usd": round(usd, 4), "krw": int(round(usd * fx)), "model": model,
+               "searches": usage["searches"], "in": usage["in"], "out": usage["out"]}
+
+    def _handle(self, ev, usage, sources, seen):
+        typ = ev.get("type")
+        if typ == "message_start":
+            u = (ev.get("message") or {}).get("usage") or {}
+            usage["in"] = max(usage["in"], int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0)
+                              + int(u.get("cache_creation_input_tokens") or 0))
+            usage["out"] = max(usage["out"], int(u.get("output_tokens") or 0))
+        elif typ == "content_block_start":
+            b = ev.get("content_block") or {}
+            if b.get("type") == "server_tool_use" and b.get("name") == "web_search":
+                yield {"t": "status", "msg": "웹에서 찾는 중"}
+            elif b.get("type") == "web_search_tool_result":
+                res = b.get("content") if isinstance(b.get("content"), list) else []
+                for r in res:
+                    url = r.get("url")
+                    if url and url not in seen and len(sources) < 12:
+                        seen.add(url)
+                        src = {"url": url, "title": r.get("title") or url, "age": r.get("page_age")}
+                        sources.append(src)
+                        yield {"t": "source", **src}
+            elif b.get("type") == "text" and b.get("text"):
+                yield {"t": "text", "text": b["text"]}
+        elif typ == "content_block_delta":
+            dl = ev.get("delta") or {}
+            if dl.get("type") == "text_delta":
+                yield {"t": "text", "text": dl.get("text", "")}
+            elif dl.get("type") == "input_json_delta":
+                pass
+        elif typ == "message_delta":
+            u = ev.get("usage") or {}
+            usage["out"] = max(usage["out"], int(u.get("output_tokens") or 0))
+            if u.get("input_tokens"):
+                usage["in"] = max(usage["in"], int(u["input_tokens"]))
+            st = u.get("server_tool_use") or {}
+            usage["searches"] = max(usage["searches"], int(st.get("web_search_requests") or 0))
+        elif typ == "error":
+            err = ev.get("error") or {}
+            raise AIError(f"Claude 오류: {err.get('message') or err}")
+
+    def _post(self, body):
+        key = self.conf().get("api_key", "").strip()
+        try:
+            r = self.session.post(API_URL, json=body, stream=True, timeout=(10, 180),
+                                  headers={"x-api-key": key, "anthropic-version": API_VERSION,
+                                           "content-type": "application/json"})
+        except requests.RequestException as e:
+            raise AIError(f"Claude에 연결하지 못했어요: {e}")
+        if r.status_code != 200:
+            try:
+                msg = (r.json().get("error") or {}).get("message") or r.text[:200]
+            except ValueError:
+                msg = r.text[:200]
+            hint = {401: "API 키를 확인해 주세요", 403: "이 키로는 쓸 수 없는 기능이에요", 429: "요청이 많아요. 잠시 뒤 다시",
+                    529: "Claude가 바빠요. 잠시 뒤 다시"}.get(r.status_code, "")
+            raise AIError(f"Claude 오류({r.status_code}): {msg} {hint}".strip())
+        r.encoding = "utf-8"
+        for line in r.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+            try:
+                yield json.loads(line[5:].strip())
+            except ValueError:
+                continue
+
+    def test(self):
+        """키 확인: 아주 짧은 요청 한 번."""
+        if not self.configured():
+            raise AIError("API 키를 넣어 주세요")
+        model = self.conf().get("model") or "claude-sonnet-5-5"
+        body = {"model": model, "max_tokens": 20, "stream": True,
+                "messages": [{"role": "user", "content": "'연결됐어요'라고만 답해."}]}
+        usage, text = {"in": 0, "out": 0, "searches": 0}, []
+        for ev in self._post(body):
+            for x in self._handle(ev, usage, [], set()):
+                if x["t"] == "text":
+                    text.append(x["text"])
+        usd = self._record("test", model, usage)
+        return {"reply": "".join(text).strip(), "usd": round(usd, 5), "model": model}

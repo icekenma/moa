@@ -355,3 +355,28 @@ dialog.upd[open]{animation:pop .18s ease-out}
 .sw-row{display:grid;grid-template-columns:64px 1fr;gap:8px;font-size:13px;align-items:baseline}
 .sw-row span{color:var(--ink3);font-weight:600}
 .sw-row b{font-weight:600}
+
+/* Claude AI 도우미 */
+.ai-btn{display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(120deg,#1F2A44,#33416A);color:#fff;border:0}
+.ai-spark{color:#FFD66B;font-size:15px}
+.ai-box{display:flex;flex-direction:column;gap:14px}
+.ai-thread{display:flex;flex-direction:column;gap:18px}
+.ai-turn{display:flex;flex-direction:column;gap:10px}
+.ai-q{align-self:flex-end;max-width:85%;background:var(--deep);color:var(--on-deep-strong);padding:10px 14px;border-radius:16px 16px 4px 16px;font-size:15px;line-height:1.5}
+.ai-status{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink3)}
+.ai-dot{width:8px;height:8px;border-radius:50%;background:#7C8BFF;animation:aiPulse 1s ease-in-out infinite}
+@keyframes aiPulse{50%{opacity:.25;transform:scale(.7)}}
+.ai-ans{font-size:15px;line-height:1.65;color:var(--ink)}
+.ai-ans h3{font-size:15px;margin:12px 0 4px;color:var(--ink)}
+.ai-ans p{margin:4px 0}
+.ai-ans ul{margin:4px 0;padding-left:18px}
+.ai-ans li{margin:2px 0}
+.ai-src{display:flex;flex-direction:column;gap:4px}
+.ai-src a{font-size:13px;color:var(--ink2);text-decoration:none;padding:6px 10px;background:var(--bg);border-radius:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ai-src a span{color:var(--ink3);font-size:11px}
+.ai-cost{color:var(--ink3)}
+.ai-chips{display:flex;flex-wrap:wrap;gap:6px}
+.ai-ask{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end}
+.ai-ask textarea{border:1px solid var(--line2);border-radius:12px;padding:10px 12px;font:inherit;font-size:15px;resize:none;min-height:48px}
+.ai-ask .btn{min-height:48px}
+@media (prefers-reduced-motion:reduce){.ai-dot{animation:none}}

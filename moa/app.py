@@ -670,6 +670,33 @@ def create_app(rt, updater=None):
         res["trades"] = res["trades"][-300:]
         return jsonify(res)
 
+    # ---------- Claude AI 도우미 ----------
+    @app.get("/api/ai/status")
+    def ai_status():
+        return jsonify(rt.ai.status())
+
+    @app.post("/api/ai/test")
+    def ai_test():
+        from .ai import AIError
+        try:
+            return jsonify(rt.ai.test())
+        except AIError as e:
+            raise ValueError(str(e))
+
+    @app.post("/api/ai/ask")
+    def ai_ask():
+        d = body()
+        kind = d.get("kind")
+
+        def gen():
+            try:
+                for ev in rt.ai.stream(kind, d):
+                    yield json.dumps(ev, ensure_ascii=False) + "\n"
+            except Exception as e:  # 중간에 끊겨도 화면이 이유를 알 수 있게
+                yield json.dumps({"t": "error", "msg": f"AI 처리 중 오류: {e}"}, ensure_ascii=False) + "\n"
+        return app.response_class(gen(), mimetype="application/x-ndjson",
+                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
     # ---------- 단타 조건 대량 훑기(vectorbt) ----------
     @app.get("/api/sweep")
     def sweep_status():
@@ -749,7 +776,7 @@ def create_app(rt, updater=None):
         stocks_cache.d.clear()
         d = body()
         allowed = {"data_source", "demo_speed", "trade_mode", "kiwoom", "kiwoom_view", "real_orders_allowed", "paper_start_cash",
-                   "costs", "holidays", "ntfy_topic", "dca_window", "public_url", "allowed_origins"}
+                   "costs", "holidays", "ntfy_topic", "dca_window", "public_url", "allowed_origins", "ai"}
         patch = {k: v for k, v in d.items() if k in allowed}
         if patch.get("data_source") not in (None, "demo", "kiwoom"):
             raise ValueError("시세 출처를 골라 주세요")

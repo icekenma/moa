@@ -880,3 +880,85 @@ def test_server_starts_without_numpy():
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), timeout=120)
     assert r.returncode == 0 and "ok" in r.stdout, r.stderr[-800:]
+
+
+class _SSE:
+    def __init__(self, events, status=200):
+        self.status_code, self.events = status, events
+        self.text, self.encoding = json.dumps({"error": {"message": "bad"}}), "utf-8"
+
+    def json(self):
+        return json.loads(self.text)
+
+    def iter_lines(self, decode_unicode=True):
+        for e in self.events:
+            yield "event: x"
+            yield "data: " + json.dumps(e, ensure_ascii=False)
+            yield ""
+
+
+def _claude_events(text="## 한 줄 요약\n- **좋아요**"):
+    return [
+        {"type": "message_start", "message": {"usage": {"input_tokens": 1200, "output_tokens": 1}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "server_tool_use", "name": "web_search", "id": "s1", "input": {}}},
+        {"type": "content_block_start", "index": 1, "content_block": {"type": "web_search_tool_result", "content": [
+            {"type": "web_search_result", "url": "https://news.example.com/a", "title": "삼성전자 뉴스", "page_age": "1 day ago"}]}},
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": text[:5]}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": text[5:]}},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+         "usage": {"output_tokens": 300, "server_tool_use": {"web_search_requests": 2}}},
+        {"type": "message_stop"}]
+
+
+def test_ai_stream_contexts_usage_and_budget(rt):
+    c = create_app(rt).test_client()
+    # 키가 없으면 안내
+    r = c.post("/api/ai/ask", json={"kind": "chat", "question": "hi"})
+    assert '"error"' in r.get_data(as_text=True) and "키" in r.get_data(as_text=True)
+    c.put("/api/settings", json={"ai": {"api_key": "sk-ant-test", "budget_usd": 5}})
+    assert c.get("/api/settings").get_json()["ai"]["api_key"] == "********"  # 키는 가려서
+    sent = []
+
+    def fake_post(url, json=None, stream=None, timeout=None, headers=None):
+        sent.append((url, json, headers))
+        return _SSE(_claude_events())
+    rt.ai.session.post = fake_post
+    rt.market.kr_quote = lambda s: {"sym": s, "name": "삼성전자", "price": 70100, "change": -900, "change_pct": -1.27,
+                                    "currency": "KRW"}
+    rt.market.kr_chart = lambda s, r: {"points": [{"t": "2026-11-16", "c": 71000}, {"t": "2026-11-17", "c": 70100}]}
+    rt.market.yh_quote = lambda s: {"price": 1400.0}
+    out = [json.loads(x) for x in c.post("/api/ai/ask", json={"kind": "stock", "sym": "005930", "mkt": "kr"}).get_data(as_text=True).splitlines() if x]
+    kinds = [e["t"] for e in out]
+    assert kinds[0] == "status" and "source" in kinds and kinds[-1] == "done"
+    text = "".join(e["text"] for e in out if e["t"] == "text")
+    assert text.startswith("## 한 줄 요약")
+    done = out[-1]
+    assert done["searches"] == 2 and done["in"] == 1200 and done["out"] == 300
+    assert abs(done["usd"] - (1200 * 2 + 300 * 10) / 1e6 - 0.02) < 1e-9 and done["krw"] == round(done["usd"] * 1400)
+    url, body, headers = sent[0]
+    assert url.endswith("/v1/messages") and headers["x-api-key"] == "sk-ant-test" and body["stream"] is True
+    assert body["tools"][0]["type"] == "web_search_20250305" and "70100" in body["messages"][-1]["content"]
+    assert "temperature" not in body  # 최신 모델은 기본값 외 temperature를 받지 않음
+    st = c.get("/api/ai/status").get_json()
+    assert st["month_calls"] == 1 and st["month_usd"] > 0
+    # 훑기 해석은 웹 검색 없이, 결과가 없으면 안내
+    out = c.post("/api/ai/ask", json={"kind": "sweep"}).get_data(as_text=True)
+    assert "조건 훑기를 끝내" in out
+    # 웹 검색이 막힌 조직이면 검색 없이 다시
+    calls = []
+
+    def fake_post2(url, json=None, stream=None, timeout=None, headers=None):
+        calls.append(dict(json))
+        if "tools" in json:
+            r = _SSE([], status=400); r.text = '{"error":{"message":"web_search is not enabled"}}'; return r
+        return _SSE(_claude_events("검색 없이 답"))
+    rt.ai.session.post = fake_post2
+    out = [json.loads(x) for x in c.post("/api/ai/ask", json={"kind": "chat", "question": "요즘 시장?"}).get_data(as_text=True).splitlines() if x]
+    assert len(calls) == 2 and "tools" in calls[0] and "tools" not in calls[1]
+    assert "".join(e.get("text", "") for e in out) == "검색 없이 답"
+    # 월 예산을 넘으면 부르지 않음
+    rt.db.x("INSERT INTO ai_usage(ts,kind,model,in_tok,out_tok,searches,usd) VALUES(datetime('now'),'x','m',0,0,0,10)")
+    calls.clear()
+    out = c.post("/api/ai/ask", json={"kind": "chat", "question": "또?"}).get_data(as_text=True)
+    assert "예산" in out and not calls

@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1800";
+const UI_VERSION = "261117.1808";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -276,7 +276,7 @@ const MENU = {
   ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["analysis", "분석"], ["budget", "예산"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
   invest: { title: "투자", subs: [["market", "시세"], ["account", "내 계좌"], ["trade", "매매"], ["scalp", "단타"], ["dca", "적립"]], extra: { backtest: "scalp", rules: "scalp", sweep: "scalp", stock: "market" } },
-  settings: { title: "설정", subs: [["connect", "서버"], ["accounts", "계좌 연결"], ["trading", "매매"], ["theme", "색상"], ["app", "앱 정보"]] },
+  settings: { title: "설정", subs: [["connect", "서버"], ["accounts", "계좌 연결"], ["trading", "매매"], ["ai", "AI"], ["theme", "색상"], ["app", "앱 정보"]] },
 };
 const lastSub = {};
 function resolveSub(h) {
@@ -922,6 +922,7 @@ pages.invest = {
         ${mixTotal ? `<div class="mix" role="img" aria-label="보유 비중">${H.slice(0, 5).map((h, i) => `<div style="flex:${h.value} 1 0;background:${colors[i]}"></div>`).join("")}${H.length > 5 ? `<div style="flex:${H.slice(5).reduce((a, h) => a + h.value, 0)} 1 0;background:#E3E7F0"></div>` : ""}<div style="flex:${d.cash || 0} 1 0;background:var(--hl)"></div></div>
           <div class="legend tiny">${H.slice(0, 5).map((h, i) => `<span><i class="sw" style="background:${colors[i]}"></i>${esc(h.name)} ${Math.round((h.value / mixTotal) * 100)}%</span>`).join("")}<span><i class="sw" style="background:var(--hl)"></i>예수금 ${Math.round(((d.cash || 0) / mixTotal) * 100)}%</span></div>` : ""}
       </section>
+      ${AI_BTN("portfolio", "AI 포트폴리오 점검(쏠림·위험·적립 계획)")}
       <div class="sec-title">보유 종목 ${H.length}개</div>
       <section class="card tight"><div class="list">${H.length ? H.map((h) => `<div class="item">
         <span class="ico">${esc(h.name.slice(0, 2))}</span>
@@ -1062,6 +1063,7 @@ pages.invest = {
       <section class="card"><h2>날짜별 손익</h2>${pnlBars(d.history.map((x) => x.pnl), d.history.map((x) => x.session))}</section>
       <div class="btns"><a class="btn" href="#invest/backtest">백테스트</a><a class="btn" href="#invest/rules">매매 규칙</a></div>
       <a class="btn wide" href="#invest/sweep">조건 대량 훑기</a>
+      ${AI_BTN("review", "AI 오늘 단타 복기")}
       <details class="card"><summary>엔진 기록</summary>
         <div class="log">${d.log.length ? d.log.map((l) => `<div class="${l.level}"><time>${l.ts.slice(11, 16)}</time><span>${esc(l.msg)}</span></div>`).join("") : `<div class="tiny">아직 기록이 없어요</div>`}</div></details>`;
     if (this._logOpen) $("details", box).open = true;
@@ -1278,6 +1280,7 @@ pages.invest = {
           ${c ? `<div class="sw-row"><span>엔진 규칙</span><b class="${tone(c.full.net)}">전체 ${signed(c.full.net)}원 · PF ${c.full.profit_factor ?? "-"}${c.oos ? ` · 검증 ${signed(c.oos.net)}원` : ""}</b></div>` : ""}
           <button class="btn wide" data-apply="${r.id}">이 조건을 매매 규칙에 적용</button></section>`;
       }).join("") : `<div class="notice">거래 30건 이상이면서 학습 기간에 플러스인 조건이 없어요. 기간을 늘리거나 종목을 더 넣어 보세요. 플러스 조건이 없다는 것도 중요한 결과예요.</div>`}
+      ${AI_BTN("sweep", "AI로 결과 해석(과최적화 점검)")}
       <div class="tiny" style="padding:0 4px">앞 기간에서 고른 조건은 뒤 기간에서 대개 성적이 떨어져요. '검증 구간도 플러스'인 조건만 고려하고, 적용 뒤에도 앱 내 모의로 먼저 돌려 보세요.</div>`;
     box.onclick = async (e) => {
       const b = e.target.closest("[data-apply]");
@@ -1379,6 +1382,7 @@ const mkt = {
         <div id="mkNote"></div>
         <section class="card tight"><div class="mk-head"><span>관심종목</span><button type="button" class="link" id="mkToggle"></button></div><div class="list" id="mkList"><div class="empty">불러오는 중</div></div></section>
         <div class="tiny" id="mkFoot" style="padding:0 4px"></div>
+        ${AI_BTN("chat", "AI에게 묻기 · 내 계좌·관심종목을 알고 답해요")}
       </div>`;
       bindSeg(box, "시장", (v) => {
         this.m = v; store.set("mkt", v === "us" ? "us" : ""); this.last = {};
@@ -1507,6 +1511,7 @@ const mkt = {
           <div class="mk-chart" id="mkChart"></div>
           ${seg("기간", [["1d", "1일"], ["1m", "1개월"], ["3m", "3개월"], ["1y", "1년"]], D.range, "on-card mk-range")}
         </section>
+        ${AI_BTN("stock", "AI로 이 종목 정리(뉴스 포함)", `data-sym="${esc(D.sym)}" data-mkt="${m}"`)}
         <section class="card"><div class="mk-grid" id="mkGrid"></div>
           <div id="mk52"></div></section>
         <div id="mkHold"></div>
@@ -1578,6 +1583,115 @@ const mkt = {
   },
 };
 const STAR = `<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 17l-5.4 2.9 1.1-6.1L3.2 9.6l6.1-.8z" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
+
+
+// =====================================================================
+// Claude AI 도우미(투자): 답변을 글자가 나오는 대로 보여 준다
+// =====================================================================
+async function aiStream(payload, onEvent, signal) {
+  if (ON_PAGES && !store.get("server")) throw new NeedConnect("서버 주소를 먼저 넣어 주세요");
+  const headers = { "Content-Type": "application/json" };
+  const tok = store.get("token");
+  if (tok) headers.Authorization = "Bearer " + tok;
+  let res;
+  try { res = await fetch(apiBase() + "/api/ai/ask", { method: "POST", headers, body: JSON.stringify(payload), signal }); }
+  catch (e) { if (e.name === "AbortError") return; throw new Error("서버에 연결하지 못했어요"); }
+  if (res.status === 401) throw new NeedConnect("접속 토큰이 맞지 않아요");
+  if (!res.ok || !res.body) throw new Error(`AI 요청이 실패했어요 (${res.status})`);
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    let r;
+    try { r = await reader.read(); } catch (e) { if (e.name === "AbortError") return; throw e; }
+    if (r.done) break;
+    buf += dec.decode(r.value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+      if (line) { try { onEvent(JSON.parse(line)); } catch (e) { /* 깨진 줄은 건너뜀 */ } }
+    }
+  }
+}
+function mdLite(src) {  // 안전한 간단 마크다운: 소제목·목록·굵게
+  const inl = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  const out = []; let list = false;
+  for (const raw of String(src).split("\n")) {
+    const l = raw.trimEnd();
+    const li = l.match(/^\s*[-*•]\s+(.*)/), h = l.match(/^#{1,4}\s+(.*)/);
+    if (li) { if (!list) { out.push("<ul>"); list = true; } out.push(`<li>${inl(li[1])}</li>`); continue; }
+    if (list) { out.push("</ul>"); list = false; }
+    if (h) out.push(`<h3>${inl(h[1])}</h3>`);
+    else if (l.trim()) out.push(`<p>${inl(l)}</p>`);
+  }
+  if (list) out.push("</ul>");
+  return out.join("");
+}
+const AI_TITLES = { stock: "AI 종목 정리", portfolio: "AI 포트폴리오 점검", review: "AI 단타 복기", sweep: "AI 훑기 해석", chat: "AI에게 묻기" };
+function aiSheet(kind, payload = {}) {
+  const chat = kind === "chat";
+  const S = { history: [], ctl: null, busy: false };
+  openSheet(AI_TITLES[kind] || "AI", `
+    <div class="ai-box">
+      <div id="aiThread" class="ai-thread"></div>
+      ${chat ? `<div class="ai-chips">${["내 포트폴리오에서 가장 위험한 부분은?", "관심종목 중 이번 주 뉴스가 큰 종목은?", "오늘 미국장 주요 이슈 정리해 줘"].map((q) => `<button type="button" class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
+        <div class="ai-ask"><textarea id="aiQ" rows="2" placeholder="예: 엔비디아 실적 발표 전에 볼 점은?"></textarea><button class="btn dark" id="aiSend">묻기</button></div>` : ""}
+      <div class="tiny">AI 답변은 참고용이에요. 틀릴 수 있고 매수·매도 지시가 아니에요. AI는 주문하지 않아요.</div>
+    </div>`, (box) => {
+    const thread = $("#aiThread", box);
+    const ask = async (extra) => {
+      if (S.busy) return;
+      S.busy = true;
+      const turn = document.createElement("div");
+      turn.className = "ai-turn";
+      turn.innerHTML = `${extra.question ? `<div class="ai-q">${esc(extra.question)}</div>` : ""}
+        <div class="ai-status"><i class="ai-dot"></i><span>요청하는 중</span></div><div class="ai-ans"></div><div class="ai-src"></div><div class="ai-cost tiny"></div>`;
+      thread.appendChild(turn);
+      const st = $(".ai-status span", turn), ans = $(".ai-ans", turn), src = $(".ai-src", turn), cost = $(".ai-cost", turn);
+      let text = "", sources = [], raf = 0;
+      const paint = () => { raf = 0; ans.innerHTML = mdLite(text); };
+      S.ctl = new AbortController();
+      try {
+        await aiStream({ kind, ...payload, ...extra, history: S.history }, (ev) => {
+          if (ev.t === "status") st.textContent = ev.msg;
+          else if (ev.t === "text") { text += ev.text; $(".ai-status", turn).hidden = true; if (!raf) raf = requestAnimationFrame(paint); }
+          else if (ev.t === "source") {
+            sources.push(ev);
+            src.innerHTML = `<div class="tiny">찾아본 자료 ${sources.length}건</div>` + sources.map((x) => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}${x.age ? ` <span>${esc(x.age)}</span>` : ""}</a>`).join("");
+          } else if (ev.t === "error") {
+            $(".ai-status", turn).hidden = true;
+            ans.innerHTML += `<div class="notice warn">${esc(ev.msg)}${/키를 넣어/.test(ev.msg) ? ` <a href="#settings/ai" onclick="closeSheet()">AI 설정 열기</a>` : ""}</div>`;
+          } else if (ev.t === "done") {
+            paint();
+            cost.textContent = `약 ${won(ev.krw)}원($${ev.usd}) · ${ev.model.replace("claude-", "")}${ev.searches ? ` · 웹 검색 ${ev.searches}회` : ""}`;
+          }
+        }, S.ctl.signal);
+        if (text) S.history.push({ role: "user", content: extra.question || AI_TITLES[kind] }, { role: "assistant", content: text });
+      } catch (e) {
+        $(".ai-status", turn).hidden = true;
+        if (e instanceof NeedConnect) { closeSheet(); location.hash = "#connect"; return; }
+        ans.innerHTML += `<div class="notice warn">${esc(e.message)}</div>`;
+      } finally {
+        if (raf) { cancelAnimationFrame(raf); paint(); }
+        S.busy = false;
+      }
+    };
+    if (chat) {
+      const go = () => { const q = $("#aiQ").value.trim(); if (!q) return; $("#aiQ").value = ""; ask({ question: q }); };
+      $("#aiSend", box).onclick = go;
+      $("#aiQ", box).onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); } };
+      box.addEventListener("click", (e) => { const c = e.target.closest("[data-q]"); if (c) ask({ question: c.dataset.q }); });
+      setTimeout(() => $("#aiQ")?.focus(), 250);
+    } else ask({});
+  });
+  sheet.addEventListener("close", () => S.ctl && S.ctl.abort(), { once: true });
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-ai]");
+  if (!b || b.closest("#sheetBody")) return;
+  e.preventDefault(); e.stopPropagation();
+  aiSheet(b.dataset.ai, b.dataset.sym ? { sym: b.dataset.sym, mkt: b.dataset.mkt } : {});
+}, true);
+const AI_BTN = (kind, label, attrs = "") => `<button type="button" class="btn ai-btn wide" data-ai="${kind}" ${attrs}><span class="ai-spark" aria-hidden="true">✦</span>${esc(label)}</button>`;
 
 // ---------- 주문 시트 ----------
 const usd = (n) => (n == null || isNaN(n) ? "-" : "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
@@ -1719,6 +1833,35 @@ pages.settings = {
     const d = await kwFetch();
     if (d.configured && $("#kwCard") === box) { box.innerHTML = kwCardHtml(d); bindKwCard(box); }
   },
+  async ai() {
+    const st = await GET("/api/ai/status");
+    const s = await GET("/api/settings");
+    const c = s.ai || {};
+    view.innerHTML = `
+      <section class="card">
+        <div class="card-head"><h2>Claude AI 도우미</h2><span class="tag ${st.configured ? "g" : "warn"}">${st.configured ? "연결됨" : "키 필요"}</span></div>
+        <div class="small muted">투자 화면의 ✦ 버튼에서 종목 정리, 포트폴리오 점검, 단타 복기, 훑기 해석, 자유 질문을 할 수 있어요. AI는 주문하지 않아요.</div>
+        <label class="field">Claude API 키<input id="aiKey" type="password" value="${esc(c.api_key || "")}" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off"></label>
+        <div class="tiny">console.anthropic.com → API Keys에서 만들어요. 키는 노트북에만 저장하고 화면엔 가려서 보여요.</div>
+        <label class="field">모델<select id="aiModel">${Object.entries(st.models).map(([k, v]) => `<option value="${k}" ${k === c.model ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
+        <div class="fields"><label class="field">월 예산(달러)<input id="aiBudget" class="r" inputmode="decimal" value="${esc(c.budget_usd ?? 10)}"></label>
+          <label class="field">이번 달 사용<input value="$${st.month_usd} · ${st.month_calls}회" disabled></label></div>
+        <label class="check"><input type="checkbox" id="aiWeb" ${c.web_search !== false ? "checked" : ""}> 웹 검색으로 최신 뉴스 찾기(검색 1회 약 14원 추가)</label>
+        <div class="btns"><button class="btn" id="aiTest">연결 확인</button><button class="btn dark" id="aiSave">저장</button></div>
+      </section>
+      <section class="card tight"><div class="card-head" style="padding-top:12px"><h2>최근 사용</h2></div><div class="list">
+        ${st.recent.length ? st.recent.map((r) => `<div class="item"><span class="ico">${esc({ stock: "종목", portfolio: "점검", review: "복기", sweep: "훑기", chat: "질문", test: "확인" }[r.kind] || r.kind)}</span>
+          <span class="main"><b>${esc(r.ts.slice(5, 16).replace("T", " "))}</b><span class="sub">${esc(r.model.replace("claude-", ""))} · 입력 ${won(r.in_tok)} · 출력 ${won(r.out_tok)}${r.searches ? ` · 검색 ${r.searches}` : ""}</span></span>
+          <span class="end"><b>$${Number(r.usd).toFixed(4)}</b></span></div>`).join("") : `<div class="empty">아직 사용 기록이 없어요</div>`}</div></section>`;
+    const body = () => ({ ai: { api_key: $("#aiKey").value.trim(), model: $("#aiModel").value, budget_usd: Number($("#aiBudget").value) || 0, web_search: $("#aiWeb").checked } });
+    $("#aiSave").onclick = async () => { await run(() => api("PUT", "/api/settings", body()), "저장했어요"); this.ai(); };
+    $("#aiTest").onclick = async () => {
+      await run(() => api("PUT", "/api/settings", body()));
+      const r = await run(() => api("POST", "/api/ai/test"));
+      toast(`연결됐어요: "${r.reply}" ($${r.usd})`);
+      this.ai();
+    };
+  },
   theme() {
     const cur = store.get("theme") || "navy";
     const curA = store.get("accent") || THEMES[cur].accent;
@@ -1764,6 +1907,7 @@ pages.settings = {
   async mount(h) {
     setTop("설정", { menu: "settings", sub: h.sub });
     if (h.sub === "theme") return this.theme();  // 색상은 서버 연결 없이도 바꿀 수 있게
+    if (h.sub === "ai") return this.ai();
     if (h.sub === "kiwoom") h.sub = "accounts";
     const sub = h.sub;
     let s;

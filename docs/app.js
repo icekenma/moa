@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1953";
+const UI_VERSION = "261117.2016";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -12,6 +12,12 @@ const store = {
   get(k) { try { return localStorage.getItem("moa." + k) || ""; } catch (e) { return ""; } },
   set(k, v) { try { v ? localStorage.setItem("moa." + k, v) : localStorage.removeItem("moa." + k); } catch (e) { /* 저장 불가 */ } },
 };
+const FONT_SIZES = [["s", "작게", 1], ["m", "보통", 1.15], ["l", "크게", 1.3]];
+function applyFontSize(id) {
+  const f = FONT_SIZES.find((x) => x[0] === id) || FONT_SIZES[0];
+  store.set("fontSize", f[0] === "s" ? "" : f[0]);
+  document.documentElement.style.zoom = f[2] === 1 ? "" : String(f[2]);
+}
 const memo = {  // 마지막으로 받은 화면 자료(앱을 다시 열어도 바로 보이게)
   get(k) { try { return JSON.parse(localStorage.getItem("moa.m." + k) || "null"); } catch (e) { return null; } },
   set(k, v) { try { localStorage.setItem("moa.m." + k, JSON.stringify(v)); } catch (e) { /* 저장 불가 */ } },
@@ -276,7 +282,7 @@ const MENU = {
   ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["fixed", "고정비"], ["cards", "카드"], ["analysis", "분석"], ["budget", "예산"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
   invest: { title: "투자", subs: [["home", "홈"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["scalp", "단타"], ["dca", "적립"]], extra: { backtest: "scalp", rules: "scalp", sweep: "scalp", stock: "home", account: "home" } },
-  settings: { title: "설정", subs: [["connect", "서버"], ["accounts", "계좌 연결"], ["trading", "매매"], ["ai", "AI"], ["theme", "색상"], ["app", "앱 정보"]] },
+  settings: { title: "설정", subs: [["connect", "서버"], ["accounts", "계좌 연결"], ["trading", "매매"], ["ai", "AI"], ["theme", "화면"], ["app", "앱 정보"]] },
 };
 const lastSub = {};
 function resolveSub(h) {
@@ -2357,6 +2363,12 @@ pages.settings = {
     const curA = store.get("accent") || THEMES[cur].accent;
     const draw = (tid, aid) => {
       view.innerHTML = `
+        <section class="card"><h2>글자 크기</h2>
+          <div class="small muted">글자와 버튼, 여백이 함께 커지고 작아져요. 누르면 바로 바뀌어요.</div>
+          <div class="fs-opts">${FONT_SIZES.map(([id, name, z]) => `<button type="button" class="fs-opt" data-fs="${id}" aria-pressed="${id === (store.get("fontSize") || "s")}">
+            <span class="fs-a" style="font-size:${Math.round(13 * z)}px">가</span><span>${name}</span></button>`).join("")}</div>
+          <div class="tiny">크게는 처음 버전과 같은 크기, 작게는 지금처럼 한 화면에 많이 보이는 크기예요.</div>
+        </section>
         <section class="card"><h2>바탕 색</h2>
           <div class="small muted">상단·하단 메뉴와 강조 카드에 쓰이는 색이에요. 누르면 바로 바뀌어요.</div>
           <div class="theme-grid">${Object.entries(THEMES).map(([id, t]) => {
@@ -2380,11 +2392,13 @@ pages.settings = {
           <div class="card dark" style="padding:11px"><div class="small muted">단타 실현손익</div><div class="mid">+38,400원</div></div>
         </section>
         <button class="btn soft wide" data-reset-theme>기본 색으로 되돌리기</button>
-        <div class="tiny" style="text-align:center">색상은 이 기기에만 저장돼요. 다른 기기는 따로 고를 수 있어요.</div>`;
+        <div class="tiny" style="text-align:center">글자 크기와 색상은 이 기기에만 저장돼요. 다른 기기는 따로 고를 수 있어요.</div>`;
     };
     let tid = cur, aid = curA;
     draw(tid, aid);
     view.onclick = (e) => {
+      const fz = e.target.closest("[data-fs]");
+      if (fz) { applyFontSize(fz.dataset.fs); draw(tid, aid); return; }
       const t = e.target.closest("[data-theme]"), a = e.target.closest("[data-accent]"), r = e.target.closest("[data-reset-theme]");
       if (t) { tid = t.dataset.theme; aid = THEMES[tid].accent; }
       else if (a) aid = a.dataset.accent;

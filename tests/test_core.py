@@ -742,3 +742,67 @@ def test_own_account_transfers_excluded_from_income_expense(rt):
     rt.db.set_setting("kiwoom_asset_auto", True)
     k = c.post("/api/inbox", json={"text": "[Web발신]\n하나,11/17 15:00\n123-******-12345\n출금100,000원\n잔액600,000원\n키움증권"}).get_json()["item"]
     assert k["transfer"] == 1
+
+
+def test_us_stock_orders_via_kiwoom(rt):
+    class US(_FakeKiwoom):
+        def __init__(self):
+            super().__init__()
+            self.bodies = {}
+
+        def post(self, url, json=None, headers=None, timeout=None):
+            api = (headers or {}).get("api-id")
+            if api and api.startswith(("ust", "usa")):
+                self.calls.append(api)
+                self.bodies[api] = json
+                assert "/api/us/" in url
+                if api == "usa10100":
+                    return _Resp({"return_code": 0, "stex_tp": "ND", "stk_cd": "AAPL", "stk_nm": "애플", "mkgb": "NASDAQ"})
+                if api == "usa20100":
+                    return _Resp({"return_code": 0, "stk_nm": "애플", "cur_prc": "190.52", "pred_pre": "-1.48",
+                                  "flu_rt": "-0.77", "base_close_pric": "192.00", "base_exrt": "1385.20",
+                                  "52wk_hgst_pric": "237.23", "52wk_lwst_pric": "164.08", "acc_trde_qty": "1234"})
+                if api in ("ust20000", "ust20001"):
+                    return _Resp({"return_code": 0, "ord_no": "U0001", "stk_nm": "애플"})
+                if api == "ust20003":
+                    return _Resp({"return_code": 0, "ord_no": "U0002", "cncl_ord_qty": "2"})
+                if api == "ust21050":
+                    return _Resp({"return_code": 0, "result_list": [
+                        {"ord_no": "U0001", "stk_cd": "AAPL", "frgn_stk_nm": "애플", "stex_nm": "NASDAQ",
+                         "slby_tp": "2", "slby_tp_nm": "매수", "ord_qty": "2", "ord_remnq": "2", "cntr_qty": "0",
+                         "ord_uv": "185.00", "ord_time": "101530"}]})
+                if api == "ust21070":
+                    return _Resp({"return_code": 0, "result_list": [
+                        {"stk_cd": "NVDA", "frgn_stk_nm": "엔비디아", "qty": "3", "sell_alowq": "3",
+                         "frgn_stk_book_uv": "120.50", "now_pric": "142.30", "evlt_amt": "426.90",
+                         "pl_amt": "65.40", "evlt_amt_krw": "591000", "pl_amt_krw": "90500", "pl_rt": "18.09"}]})
+                if api == "ust21110":
+                    return _Resp({"return_code": 0, "krw_entra": "8139", "result_list": [
+                        {"crnc_code": "USD", "fc_entra": "500.25", "fc_ord_alowa": "480.10"}]})
+            return super().post(url, json, headers, timeout)
+    rt.settings.update({"trade_mode": {"scalp": "kiwoom"}, "real_orders_allowed": {"scalp": True},
+                        "kiwoom": {"scalp": {"appkey": "ku", "secretkey": "s", "mock": False}}})
+    rt.rebuild()
+    fake = US()
+    rt.brokers["scalp"].client.session = fake
+    c = create_app(rt).test_client()
+    q = c.get("/api/us/quote/aapl?engine=scalp").get_json()
+    assert q["price"] == 190.52 and q["exch"] == "ND" and q["live"] and q["fx"] == 1385.2 and q["change"] == -1.48
+    r = c.post("/api/order", json={"engine": "scalp", "market": "us", "side": "buy", "code": "aapl", "qty": 2, "price": "185"})
+    assert r.status_code == 200 and r.get_json()["broker_no"] == "U0001"
+    assert fake.bodies["ust20000"] == {"stex_tp": "ND", "stk_cd": "AAPL", "ord_qty": "2", "ord_uv": "185.00", "trde_tp": "00"}
+    c.post("/api/order", json={"engine": "scalp", "market": "us", "side": "sell", "code": "NVDA", "qty": 1, "exch": "ND"})
+    assert fake.bodies["ust20001"] == {"stex_tp": "ND", "stk_cd": "NVDA", "ord_qty": "1", "ord_uv": "", "trde_tp": "03", "stop_pric": ""}
+    o = [x for x in c.get("/api/orders/open").get_json()["items"] if x["market"] == "us"][0]
+    assert o["ord_no"] == "U0001" and o["exch"] == "ND" and o["side"] == "buy" and o["price"] == 185.0
+    assert c.post("/api/orders/cancel", json=o).status_code == 200
+    assert fake.bodies["ust20003"] == {"orig_ord_no": "U0001", "stex_tp": "ND", "stk_cd": "AAPL"}
+    st = c.get("/api/stocks").get_json()
+    acc = st["accounts"][0]
+    assert acc["us_holdings"][0]["code"] == "NVDA" and acc["us_holdings"][0]["value"] == 591000
+    assert acc["us_cash"]["usd_orderable"] == 480.1
+    # 앱 내 모의 계좌로는 미국 주문 불가, 잘못된 기호 거절
+    rt.settings.update({"trade_mode": {"scalp": "paper"}})
+    rt.rebuild()
+    assert c.post("/api/order", json={"engine": "scalp", "market": "us", "side": "buy", "code": "AAPL", "qty": 1}).status_code == 400
+    assert c.get("/api/us/quote/BAD$").status_code in (400, 404)

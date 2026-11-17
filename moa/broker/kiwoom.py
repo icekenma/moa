@@ -23,12 +23,22 @@ API = {
     "sell": ("/api/dostk/ordr", "kt10001"),         # 주식 매도주문
     "cancel": ("/api/dostk/ordr", "kt10003"),       # 주식 취소주문
     "unfilled": ("/api/dostk/acnt", "ka10075"),     # 미체결요청
-    "balance": ("/api/dostk/acnt", "kt00018"),      # 계좌평가잔고내역요청
+    "balance": ("/api/dostk/acnt", "kt00018"),
+    # 미국주식(키움 공식 TR)
+    "us_info": ("/api/us/stkinfo", "usa10100"),      # 종목 조회(거래소 구분 확인)
+    "us_quote": ("/api/us/mrkcond", "usa20100"),     # 현재가 종목정보
+    "us_buy": ("/api/us/ordr", "ust20000"),          # 매수주문
+    "us_sell": ("/api/us/ordr", "ust20001"),         # 매도주문
+    "us_cancel": ("/api/us/ordr", "ust20003"),       # 취소주문
+    "us_unfilled": ("/api/us/acnt", "ust21050"),     # 원장 미체결
+    "us_balance": ("/api/us/acnt", "ust21070"),      # 원장 잔고
+    "us_deposit": ("/api/us/acnt", "ust21110"),      # 해외주식 예수금      # 계좌평가잔고내역요청
     "deposit": ("/api/dostk/acnt", "kt00001"),      # 예수금상세현황요청
 }
 MIN_INTERVAL = 0.21  # 같은 앱키의 호출 간 최소 간격(초). 키움 조회 한도(초당 약 5회) 대비.
-SLOW_APIS = {"kt00001": 1.1, "kt00018": 1.1, "ka10075": 1.0}  # 계좌 조회는 같은 TR을 1초에 한 번만
-CACHE_APIS = {"kt00001": 2.5, "kt00018": 2.5, "ka10075": 2.0}  # 여러 화면·엔진이 동시에 물어도 키움에는 한 번만
+SLOW_APIS = {"kt00001": 1.1, "kt00018": 1.1, "ka10075": 1.0, "ust21050": 1.0, "ust21070": 1.0, "ust21110": 1.0}  # 계좌 조회는 같은 TR을 1초에 한 번만
+CACHE_APIS = {"kt00001": 2.5, "kt00018": 2.5, "ka10075": 2.0, "ust21050": 2.0, "ust21070": 2.5, "ust21110": 2.5,
+              "usa10100": 86400, "usa20100": 2.0}  # 여러 화면·엔진이 동시에 물어도 키움에는 한 번만
 _SHARED = {}  # (앱키, 모의 여부) -> 토큰·호출 간격·응답 저장을 앱키 하나당 하나로 공유
 _SHARED_LOCK = threading.Lock()
 
@@ -139,7 +149,7 @@ class KiwoomClient:
             raise KiwoomError(f"{api_id} 실패: {msg or r.status_code}")
         if ttl:
             sh["cache"][ckey] = (time.time(), data, self.last_headers)
-        if key in ("buy", "sell", "cancel"):
+        if key in ("buy", "sell", "cancel", "us_buy", "us_sell", "us_cancel"):
             sh["cache"].clear()  # 주문 뒤에는 잔고·예수금을 새로 받는다
         return data
 
@@ -175,6 +185,95 @@ class KiwoomClient:
                 "trde_tp": "3" if price is None else "0", "cond_uv": ""}
         d = self.call(side, body)
         return d.get("ord_no", "")
+
+    # ---- 미국주식 ----
+    US_EXCH = {"NASDAQ": "ND", "NYSE": "NY", "AMEX": "NA", "ARCA": "NA", "NYSEARCA": "NA", "BATS": "NA"}
+
+    def us_exchange(self, sym):
+        """종목의 거래소 구분(ND 나스닥, NY 뉴욕, NA 아멕스). usa10100으로 확인하고 하루 저장."""
+        d = self.call("us_info", {"stex_tp": "%", "stk_cd": sym})
+        ex = str(d.get("stex_tp") or "").strip().upper()
+        if ex in ("ND", "NY", "NA"):
+            return ex, d.get("stk_nm") or d.get("stk_enm") or sym
+        mk = str(d.get("mkgb") or "").upper().replace(" ", "")
+        for k, v in self.US_EXCH.items():
+            if k in mk:
+                return v, d.get("stk_nm") or sym
+        raise KiwoomError(f"{sym} 종목을 키움에서 찾지 못했어요")
+
+    def us_quote(self, sym, exch=None):
+        exch = exch or self.us_exchange(sym)[0]
+        d = self.call("us_quote", {"stex_tp": exch, "stk_cd": sym})
+        price = num(d.get("cur_prc"))
+        if not price:
+            raise KiwoomError(f"{sym} 현재가가 없어요")
+        chg = snum(d.get("pred_pre"))
+        if str(d.get("pred_pre_sig", "")) in ("4", "5") and chg > 0:  # 하락 기호인데 부호가 없을 때
+            chg = -chg
+        return {"sym": sym, "name": d.get("stk_nm") or d.get("stk_enm") or sym, "price": price, "change": chg,
+                "change_pct": snum(d.get("flu_rt")), "prev": num(d.get("base_close_pric")) or None,
+                "open": num(d.get("open_pric")) or None, "high": num(d.get("high_pric")) or None,
+                "low": num(d.get("low_pric")) or None, "volume": int(num(d.get("acc_trde_qty"))),
+                "high52": num(d.get("52wk_hgst_pric")) or None, "low52": num(d.get("52wk_lwst_pric")) or None,
+                "fx": num(d.get("base_exrt")) or None, "currency": "USD", "exch": exch,
+                "exchange": {"ND": "나스닥", "NY": "뉴욕", "NA": "아멕스"}.get(exch, exch), "live": True}
+
+    def us_order(self, side, sym, qty, price=None, exch=None):
+        """미국주식 주문(ust20000 매수, ust20001 매도). price 없으면 시장가(정규장에서만)."""
+        if self.read_only:
+            raise KiwoomError("조회 전용 연결이라 주문할 수 없어요")
+        exch = exch or self.us_exchange(sym)[0]
+        body = {"stex_tp": exch, "stk_cd": sym, "ord_qty": str(int(qty)),
+                "ord_uv": "" if price is None else f"{float(price):.2f}", "trde_tp": "03" if price is None else "00"}
+        if side == "sell":
+            body["stop_pric"] = ""
+        d = self.call("us_buy" if side == "buy" else "us_sell", body)
+        return d.get("ord_no", ""), exch
+
+    def us_cancel(self, ord_no, sym, exch=None):
+        if self.read_only:
+            raise KiwoomError("조회 전용 연결이라 주문을 취소할 수 없어요")
+        exch = exch or self.us_exchange(sym)[0]
+        d = self.call("us_cancel", {"orig_ord_no": str(ord_no), "stex_tp": exch, "stk_cd": sym})
+        return d.get("ord_no", "")
+
+    def us_unfilled(self):
+        d = self.call("us_unfilled", {"ord_dt": "", "slby_tp": "0", "stex_tp": "%", "stk_cd": ""})
+        out = []
+        for r in d.get("result_list") or []:
+            left = int(num(r.get("ord_remnq")))
+            if left <= 0:
+                continue
+            nm = str(r.get("stex_nm") or "").upper().replace(" ", "")
+            exch = next((v for k, v in self.US_EXCH.items() if k in nm), "")
+            side = "sell" if ("매도" in str(r.get("slby_tp_nm", "")) or str(r.get("slby_tp")) == "1") else "buy"
+            out.append({"ord_no": str(r.get("ord_no", "")).strip(), "code": str(r.get("stk_cd", "")).strip(),
+                        "name": r.get("frgn_stk_nm") or r.get("stk_cd", ""), "side": side, "market": "us", "exch": exch,
+                        "qty": int(num(r.get("ord_qty"))), "left": left, "filled": int(num(r.get("cntr_qty"))),
+                        "price": num(r.get("ord_uv")), "time": str(r.get("ord_time") or "")})
+        return out
+
+    def us_holdings(self):
+        d = self.call("us_balance", {"stex_tp": "%", "stk_cd": ""})
+        out = []
+        for r in d.get("result_list") or []:
+            q = int(num(r.get("qty")))
+            if q <= 0:
+                continue
+            out.append({"code": str(r.get("stk_cd", "")).strip(), "name": r.get("frgn_stk_nm") or r.get("stk_cd", ""),
+                        "market": "us", "qty": q, "sellable": int(num(r.get("sell_alowq"))),
+                        "avg_price": num(r.get("frgn_stk_book_uv")), "price": num(r.get("now_pric")),
+                        "value_usd": num(r.get("evlt_amt")), "pnl_usd": snum(r.get("pl_amt")),
+                        "value": num(r.get("evlt_amt_krw")), "pnl": snum(r.get("pl_amt_krw")),
+                        "pnl_pct": snum(r.get("pl_rt")), "fx": num(r.get("exch_rate")) or None})
+        return out
+
+    def us_cash(self):
+        """미국주식 주문가능 달러와 원화 예수금(ust21110)."""
+        d = self.call("us_deposit", {})
+        usd = next((r for r in d.get("result_list") or [] if str(r.get("crnc_code", "")).upper() == "USD"), {})
+        return {"usd_orderable": num(usd.get("fc_ord_alowa")), "usd": num(usd.get("fc_entra")),
+                "krw": num(d.get("krw_entra"))}
 
     def unfilled(self):
         """미체결 주문(ka10075). 응답 목록 이름이 문서마다 달라 주문번호가 있는 목록을 찾아 쓴다."""

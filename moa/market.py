@@ -170,6 +170,16 @@ class Market:
                     "spark": pts[-78:]}
         return self.cache.get(("yq", sym), 8, load, stale=600)
 
+    def us_live(self, sym):
+        """종목 상세용: 키움(실시간) → 안 되면 공개 시세(지연)."""
+        cl = self.kr_client()
+        if cl is not None:
+            try:
+                return self.cache.get(("uq", sym), 2, lambda: cl.us_quote(sym), stale=60)
+            except Exception:
+                pass
+        return self.yh_quote(sym)
+
     def yh_chart(self, sym, rng):
         r, iv = RANGES.get(rng, RANGES["1d"])
 
@@ -467,6 +477,15 @@ class Market:
                 return h
         return None
 
+    def us_holding(self, sym):
+        cl = self.kr_client()
+        if cl is None:
+            return None
+        try:
+            return next((h for h in cl.us_holdings() if h["code"].upper() == sym.upper()), None)
+        except Exception:
+            return None
+
     def diag(self):
         out = {"kiwoom_client": self.kr_client() is not None}
         for name, fn in (("국내 현재가(005930)", lambda: self.kr_quote("005930")),
@@ -474,6 +493,9 @@ class Market:
                          ("국내 일봉", lambda: len(self.kr_chart("005930", "1m")["points"])),
                          ("종목 목록 수", lambda: len(self.kr_master())),
                          ("미국 현재가(AAPL)", lambda: self.yh_quote("AAPL")),
+                         ("미국 현재가 키움(AAPL)", lambda: self.kr_client().us_quote("AAPL")),
+                         ("미국 잔고 키움", lambda: self.kr_client().us_holdings()),
+                         ("미국 예수금 키움", lambda: self.kr_client().us_cash()),
                          ("미국 검색(apple)", lambda: self.us_search("apple")[:3])):
             try:
                 out[name] = fn()

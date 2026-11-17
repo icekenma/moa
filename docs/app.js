@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1649";
+const UI_VERSION = "261117.1703";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -932,22 +932,23 @@ pages.invest = {
     this.tradeRender(box, d);
   },
   tradeRender(box, d) {
-    const rows = d.accounts.flatMap((a) => a.holdings.map((x) => ({ ...x, eng: a.engine })));
+    const rows = d.accounts.flatMap((a) => a.holdings.map((x) => ({ ...x, eng: a.engine })).concat((a.us_holdings || []).map((x) => ({ ...x, eng: a.engine }))));
     box.innerHTML = `
       ${demoNotice(d.data_source)}
-      ${d.accounts.filter((a) => a.error && !a.same_as).map((a) => `<div class="notice warn">${esc(a.label)}: ${esc(a.error)}</div>`).join("")}
+      ${d.accounts.filter((a) => (a.error || a.us_error) && !a.same_as).map((a) => `<div class="notice warn">${esc(a.label)}: ${esc(a.error || a.us_error)}</div>`).join("")}
       <div class="grid2">${d.accounts.map((a) => {
         if (a.same_as) return `<div class="tile"><div class="lbl">${esc(a.label)}</div><div class="val" style="font-size:15px">단타 계좌와 같은 계좌</div>
           <div class="tiny">같은 키움 앱키라 같은 계좌예요. 잔고는 왼쪽에 함께 보여요.</div></div>`;
-        const val = a.holdings.reduce((s, x) => s + x.value, 0), pnl = a.holdings.reduce((s, x) => s + x.pnl, 0);
+        const H = a.holdings.concat(a.us_holdings || []);
+        const val = H.reduce((s, x) => s + x.value, 0), pnl = H.reduce((s, x) => s + x.pnl, 0);
         return `<div class="tile"><div class="lbl">${esc(a.label)}</div><div class="val">${won(val + (a.cash || 0))}</div>
-          <div class="tiny">현금 ${won(a.cash)}</div><div class="tiny ${tone(pnl)}" style="font-weight:700">평가손익 ${signed(pnl)}</div></div>`;
+          <div class="tiny">현금 ${won(a.cash)}${a.us_cash && a.us_cash.usd_orderable ? ` · ${usd(a.us_cash.usd_orderable)}` : ""}</div><div class="tiny ${tone(pnl)}" style="font-weight:700">평가손익 ${signed(pnl)}</div></div>`;
       }).join("")}</div>
       <div class="tiny" style="padding:0 4px">${esc(d.now.replace("T", " "))} · ${d.market_open ? "장 운영 중" : "장 마감"} · ${esc(d.accounts.map((a) => a.mode_label || "준비 안 됨").join(" / "))}</div>
       <div class="sec-title">보유 종목</div>
-      <section class="card tight"><div class="list">${rows.length ? rows.map((x) => `<button type="button" class="item" data-sell="${x.eng}|${x.code}|${x.qty}">
-        <span class="ico ${x.eng === "scalp" ? "y" : ""}">${x.eng === "scalp" ? "단타" : "장기"}</span>
-        <span class="main"><b>${esc(x.name)}</b><span class="sub">${won(x.qty)}주 · 평균 ${won(x.avg_price)} · 현재 ${won(x.price)}</span></span>
+      <section class="card tight"><div class="list">${rows.length ? rows.map((x) => `<button type="button" class="item" data-sell="${x.eng}|${esc(x.code)}|${x.sellable ?? x.qty}">
+        <span class="ico ${x.market === "us" ? "" : x.eng === "scalp" ? "y" : ""}">${x.market === "us" ? "미국" : x.eng === "scalp" ? "단타" : "장기"}</span>
+        <span class="main"><b>${esc(x.name)}</b><span class="sub">${won(x.qty)}주 · 평균 ${x.market === "us" ? usd(x.avg_price) : won(x.avg_price)} · 현재 ${x.market === "us" ? usd(x.price) : won(x.price)}</span></span>
         <span class="end"><b>${won(x.value)}</b><span class="small ${tone(x.pnl)}" style="font-weight:700">${signed(x.pnl)} (${pct(x.pnl_pct, 1)})</span></span></button>`).join("")
         : `<div class="empty">보유 종목이 없어요</div>`}</div></section>
       <div id="openBox">${this.openHtml(this.openMemo)}</div>
@@ -957,7 +958,7 @@ pages.invest = {
         return `<div class="item">
         <span class="ico" style="color:${o.status === "cancel" ? "var(--ink3)" : o.side === "buy" ? "var(--up)" : "var(--down)"}">${o.status === "cancel" ? "취소" : o.side === "buy" ? "매수" : "매도"}</span>
         <span class="main"><b>${esc(o.name || o.code)}</b><span class="sub">${o.ts.slice(5, 16).replace("T", " ")} · ${esc(o.msg)}</span></span>
-        <span class="end"><b>${won(o.qty)}주</b><span class="tiny">${o.fill_price ? won(o.fill_price) + "원 " : ""}<span class="tag ${st[1]}">${esc(st[0])}</span></span></span></div>`; }).join("")
+        <span class="end"><b>${won(o.qty)}주</b><span class="tiny">${o.fill_price ? (isUsCode(o.code) ? usd(o.fill_price) + " " : won(o.fill_price) + "원 ") : ""}<span class="tag ${st[1]}">${esc(st[0])}</span></span></span></div>`; }).join("")
         : `<div class="empty">아직 주문이 없어요</div>`}</div></section>`;
     this.loadOpen();
     fab("주문", () => orderSheet({}));
@@ -969,7 +970,7 @@ pages.invest = {
         const sideTxt = o.side === "buy" ? "매수" : "매도";
         openSheet("주문 취소", `
           <div class="o-mode"><b>${esc(o.name || o.code)} ${sideTxt} ${won(o.left)}주</b>
-            ${o.price ? won(o.price) + "원" : "시장가"} · 주문번호 ${esc(o.ord_no)}</div>
+            ${o.price ? (o.market === "us" ? usd(o.price) : won(o.price) + "원") : "시장가"} · 주문번호 ${esc(o.ord_no)}</div>
           <div class="small muted">아직 체결되지 않은 ${won(o.left)}주를 모두 취소해요. 그사이 체결된 수량은 취소되지 않아요.</div>
           <div id="cxErr"></div>
           <div class="btns"><button type="button" class="btn soft" id="cxNo">닫기</button><button type="button" class="btn dark" id="cxYes">주문 취소</button></div>`, (sb) => {
@@ -1009,7 +1010,7 @@ pages.invest = {
     return `${err}<div class="sec-title">미체결 주문 ${d.items.length}건</div>
       <section class="card tight"><div class="list">${d.items.map((o, i) => `<div class="item">
         <span class="ico" style="color:${o.side === "buy" ? "var(--up)" : "var(--down)"}">${o.side === "buy" ? "매수" : "매도"}</span>
-        <span class="main"><b>${esc(o.name || o.code)}</b><span class="sub">${o.price ? won(o.price) + "원" : "시장가"} · ${won(o.left)}/${won(o.qty)}주 남음${o.time ? " · " + esc(String(o.time).replace(/^(\d\d)(\d\d).*/, "$1:$2")) : ""}</span></span>
+        <span class="main"><b>${esc(o.name || o.code)}</b><span class="sub">${o.market === "us" ? "미국 · " : ""}${o.price ? (o.market === "us" ? usd(o.price) : won(o.price) + "원") : "시장가"} · ${won(o.left)}/${won(o.qty)}주 남음${o.time ? " · " + esc(String(o.time).replace(/^(\d\d)(\d\d).*/, "$1:$2")) : ""}</span></span>
         <button type="button" class="btn sm soft o-cancel" data-cancel="${i}">취소</button></div>`).join("")}</div></section>`;
   },
 
@@ -1403,8 +1404,8 @@ const mkt = {
         <section class="card"><div class="mk-grid" id="mkGrid"></div>
           <div id="mk52"></div></section>
         <div id="mkHold"></div>
-        ${usd ? `<div class="tiny" style="padding:0 4px">미국 주식 주문은 아직 지원하지 않아요. 시세는 공개 시세(최대 15분 지연)예요.</div>` : ""}
-        ${usd ? "" : `<div class="mk-act"><button type="button" class="btn blue" data-o="sell">매도</button><button type="button" class="btn red" data-o="buy">매수</button></div>`}`;
+        ${usd && !q.live ? `<div class="tiny" style="padding:0 4px">지금은 공개 시세(최대 15분 지연)예요. 키움을 연결하면 실시간으로 보여요.</div>` : ""}
+        <div class="mk-act"><button type="button" class="btn blue" data-o="sell">매도</button><button type="button" class="btn red" data-o="buy">매수</button></div>`;
       bindSeg(box, "기간", async (v) => {
         D.range = v;
         const cm = this.cmemo[m + D.sym + v];
@@ -1413,7 +1414,8 @@ const mkt = {
         if (D.range !== v) return;
         if (this.d === D) this.drawChart();
       });
-      $$("[data-o]", box).forEach((b) => b.onclick = () => orderSheet({ code: D.sym, side: b.dataset.o, qty: b.dataset.o === "sell" && hd ? hd.qty : 1 }));
+      $$("[data-o]", box).forEach((b) => b.onclick = () => orderSheet({ code: D.sym, market: m, side: b.dataset.o, exch: D.q?.exch, name: D.q?.name,
+        qty: b.dataset.o === "sell" && D.q?.holding ? (D.q.holding.sellable || D.q.holding.qty) : 1 }));
     }
     const pEl = $("#mkPrice"), old = pEl.dataset.v;
     pEl.textContent = P(q.price); pEl.dataset.v = q.price;
@@ -1427,7 +1429,7 @@ const mkt = {
       <div class="mk-52bar"><i style="left:${r52}%"></i></div>
       <div class="mk-52lbl"><span>최저 ${this.money(q.low52, cur)}</span><span>최고 ${this.money(q.high52, cur)}</span></div></div>`;
     $("#mkHold").innerHTML = hd ? `<section class="card"><div class="card-head"><h2>내 보유</h2><span class="tiny">키움 계좌</span></div>
-      <div class="kv"><div>보유 수량<b>${won(hd.qty)}주</b></div><div>평균 단가<b>${won(hd.avg_price)}</b></div><div>평가 금액<b>${won(hd.value)}</b></div></div>
+      <div class="kv"><div>보유 수량<b>${won(hd.qty)}주</b></div><div>평균 단가<b>${m === "us" ? this.money(hd.avg_price, "USD") : won(hd.avg_price)}</b></div><div>평가 금액<b>${won(hd.value)}원</b></div></div>
       <div class="small ${tone(hd.pnl)}" style="font-weight:700">평가손익 ${signed(hd.pnl)}원 (${pct(hd.pnl_pct, 2)})</div></section>` : "";
     this.drawChart();
   },
@@ -1472,40 +1474,58 @@ const mkt = {
 const STAR = `<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2l2.7 5.6 6.1.8-4.5 4.2 1.1 6.1L12 17l-5.4 2.9 1.1-6.1L3.2 9.6l6.1-.8z" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
 
 // ---------- 주문 시트 ----------
+const usd = (n) => (n == null || isNaN(n) ? "-" : "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+const isUsCode = (c) => /[A-Za-z]/.test(String(c || ""));
 function orderSheet(o) {
-  const S = { engine: o.engine || "scalp", side: o.side || "buy", type: "market", code: o.code || "", qty: o.qty || 1, q: null, real: null, ctx: null, err: "" };
+  const us0 = o.market === "us" || isUsCode(o.code);
+  const S = { market: us0 ? "us" : "kr", engine: o.engine || "scalp", side: o.side || "buy", type: us0 ? "limit" : "market",
+    code: o.code || "", qty: o.qty || 1, q: null, real: null, ctx: null, err: "", exch: o.exch || "", name: o.name || "", price: "" };
   const acc = () => (S.ctx ? S.ctx.accounts.find((a) => a.engine === S.engine) : null);
   const draw = () => {
-    const buy = S.side === "buy", a = acc(), demo = S.ctx && S.ctx.data_source === "demo";
-    const mode = a ? a.mode_label : null, realOrder = mode === "키움 실전";
+    const US = S.market === "us", buy = S.side === "buy", a = acc(), demo = !US && S.ctx && S.ctx.data_source === "demo";
+    const mode = a ? a.mode_label : null, realOrder = mode === "키움 실전", isKiwoom = mode && mode.startsWith("키움");
     const gap = demo && S.q && S.real && Math.abs(S.real.price - S.q.price) / S.real.price > 0.005;
-    openSheet("직접 주문", `
+    const usBlocked = US && a && !a.error && !isKiwoom;
+    const qtxt = !S.q ? (US ? "기호(예: AAPL)를 넣고 현재가를 확인하세요" : "종목코드를 넣고 현재가를 확인하세요")
+      : US ? `${esc(S.q.name)}${S.q.exchange ? " · " + esc(S.q.exchange) : ""} 현재가 <b>${usd(S.q.price)}</b>${S.q.fx ? ` · 약 ${won(S.q.price * S.q.fx)}원` : ""}${S.q.live ? "" : ` <span class="tag">지연 시세</span>`}`
+      : `${esc(S.q.name)} 주문 기준가 <b style="color:${gap ? "var(--up)" : "var(--ink)"}">${won(S.q.price)}원</b>${gap ? " (가상 시세)" : ""}`;
+    openSheet(US ? "미국 주식 주문" : "직접 주문", `
+      ${seg("시장", [["kr", "국내"], ["us", "미국"]], S.market, "on-card")}
       ${seg("계좌", [["scalp", "단타 계좌"], ["dca", "장기투자 계좌"]], S.engine, "on-card")}
       <div class="o-mode ${realOrder ? "real" : ""}">${a ? (a.error ? `<b>주문할 수 없어요</b> ${esc(a.error)}`
-        : realOrder ? `<b>키움 실전 계좌</b> 실제 돈으로 주문이 나가요`
+        : usBlocked ? `<b>미국 주식은 키움 계좌로만</b> 이 계좌는 '앱 내 모의'라 미국 주문을 할 수 없어요. 설정 → 계좌 연결에서 주문 방식을 '키움으로 주문'으로 바꿔 주세요`
+        : realOrder ? `<b>키움 실전 계좌</b> 실제 돈으로 주문이 나가요${US ? ". 달러(또는 원화주문 설정)로 결제돼요" : ""}`
         : mode === "키움 모의투자" ? `<b>키움 모의투자</b> 키움 모의 서버로 주문해요. 실제 돈이 아니에요`
         : `<b>앱 내 모의</b> 앱 안에서만 체결을 흉내 내요. 실제 주문이 아니에요`) : "계좌 확인 중"}</div>
+      ${US && a && a.us_cash ? `<div class="small muted">주문 가능 ${usd(a.us_cash.usd_orderable)} · 원화 예수금 ${won(a.us_cash.krw)}원</div>` : ""}
       ${demo ? `<div class="notice warn">지금 시세 출처가 <b>가상 시세</b>예요. 주문 가격이 실제 시세와 달라요${S.real ? `(실제 ${esc(S.real.name)} ${won(S.real.price)}원)` : ""}.
         <button type="button" class="btn sm dark" id="oLive" style="margin-top:8px">키움 시세로 바꾸기</button></div>` : ""}
       ${seg("매수 또는 매도", [["buy", "매수"], ["sell", "매도"]], S.side, "on-card " + (buy ? "buy" : "sell"))}
       <div class="fields" style="grid-template-columns:1fr auto;align-items:end">
-        <label class="field">종목코드<input id="oCode" inputmode="numeric" maxlength="6" placeholder="005930" value="${esc(S.code)}"></label>
+        <label class="field">${US ? "종목 기호" : "종목코드"}<input id="oCode" ${US ? `autocapitalize="characters" autocomplete="off" maxlength="10" placeholder="AAPL"` : `inputmode="numeric" maxlength="6" placeholder="005930"`} value="${esc(S.code)}"></label>
         <button class="btn" id="oQ" style="height:50px">현재가</button></div>
-      <div class="small muted">${S.q ? `${esc(S.q.name)} 주문 기준가 <b style="color:${gap ? "var(--up)" : "var(--ink)"}">${won(S.q.price)}원</b>${gap ? " (가상 시세)" : ""}` : "종목코드를 넣고 현재가를 확인하세요"}</div>
-      ${seg("주문 방식", [["market", "시장가"], ["limit", "지정가"]], S.type, "on-card")}
+      <div class="small muted">${qtxt}</div>
+      ${seg("주문 방식", [["limit", "지정가"], ["market", "시장가"]], S.type, "on-card")}
+      ${US && S.type === "market" ? `<div class="tiny">미국 시장가는 정규장(한국 시간 23:30~06:00)에만 돼요. 주간거래·프리마켓은 지정가로 주문하세요.</div>` : ""}
       <div class="fields">
         <label class="field">수량<input id="oQty" class="r" inputmode="numeric" value="${esc(S.qty)}"></label>
-        <label class="field" ${S.type === "market" ? "hidden" : ""}>가격<input id="oPrice" class="r" inputmode="numeric" value="${S.q ? won(S.q.price) : ""}"></label></div>
+        <label class="field" ${S.type === "market" ? "hidden" : ""}>가격${US ? "(달러)" : ""}<input id="oPrice" class="r" inputmode="decimal" value="${esc(S.price || (S.q ? (US ? S.q.price.toFixed(2) : won(S.q.price)) : ""))}"></label></div>
       <div style="display:flex;justify-content:space-between;font-size:15px"><span class="muted">예상 금액</span><b id="oAmt">-</b></div>
       <div id="oErr">${S.err ? `<div class="notice warn">${esc(S.err)}</div>` : ""}</div>
-      <button class="btn ${buy ? "red" : "blue"} wide" id="oSend" ${a && a.error ? "disabled" : ""}>${realOrder ? "실제 " : ""}${buy ? "매수 주문" : "매도 주문"}</button>`, (box) => {
-      const keep = () => { S.code = $("#oCode").value; S.qty = $("#oQty").value; };
-      bindSeg(box, "계좌", (v) => { keep(); S.engine = v; S.err = ""; draw(); });
+      <button class="btn ${buy ? "red" : "blue"} wide" id="oSend" ${a && (a.error || usBlocked) ? "disabled" : ""}>${realOrder ? "실제 " : ""}${buy ? "매수 주문" : "매도 주문"}</button>`, (box) => {
+      const keep = () => { S.code = $("#oCode").value.trim(); S.qty = $("#oQty").value; S.price = $("#oPrice").value; };
+      bindSeg(box, "시장", (v) => { keep(); if (v !== S.market) { S.market = v; S.code = ""; S.q = null; S.price = ""; S.type = v === "us" ? "limit" : "market"; S.err = ""; } draw(); });
+      bindSeg(box, "계좌", (v) => { keep(); S.engine = v; S.err = ""; draw(); if (US && S.code) loadQuote(); });
       bindSeg(box, "매수 또는 매도", (v) => { keep(); S.side = v; draw(); });
       bindSeg(box, "주문 방식", (v) => { keep(); S.type = v; draw(); });
-      const calc = () => { const p = S.type === "limit" ? num($("#oPrice").value) : S.q?.price; $("#oAmt").textContent = p ? won(p * num($("#oQty").value)) + "원" : "-"; };
+      const calc = () => {
+        const p = S.type === "limit" ? Number(String($("#oPrice").value).replace(/,/g, "")) : S.q?.price;
+        const n = num($("#oQty").value);
+        $("#oAmt").textContent = !p ? "-" : US ? `${usd(p * n)}${S.q?.fx ? ` (약 ${won(p * n * S.q.fx)}원)` : ""}` : won(p * n) + "원";
+      };
       $("#oQty").oninput = calc; $("#oPrice").oninput = calc; calc();
-      $("#oQ").onclick = async () => { keep(); S.err = ""; await loadQuote(); };
+      if (US) $("#oCode").oninput = (e) => { e.target.value = e.target.value.toUpperCase(); };
+      $("#oQ").onclick = async () => { keep(); S.err = ""; S.price = ""; await loadQuote(); };
       if ($("#oLive")) $("#oLive").onclick = async () => {
         keep();
         await run(() => api("PUT", "/api/settings", { data_source: "kiwoom" }), "시세 출처를 키움 시세로 바꿨어요");
@@ -1515,11 +1535,13 @@ function orderSheet(o) {
         keep();
         const btn = ev.currentTarget;
         if (realOrder && !confirmTap(btn, `한 번 더 누르면 실제로 ${buy ? "매수" : "매도"}해요`)) return;
-        const body = { engine: S.engine, side: S.side, code: S.code, qty: num(S.qty), price: S.type === "limit" ? num($("#oPrice").value) : null };
+        const price = S.type === "limit" ? (US ? Number(String(S.price).replace(/,/g, "")) : num(S.price)) : null;
+        const body = { engine: S.engine, side: S.side, code: US ? S.code.toUpperCase() : S.code, qty: num(S.qty), price, market: S.market,
+          exch: S.q?.exch || S.exch || undefined, name: S.q?.name || S.name || undefined };
         btn.disabled = true; btn.textContent = "주문 넣는 중";
         try {
           const r = await api("POST", "/api/order", body);
-          toast(r.status === "filled" ? `${r.name} ${body.qty}주 ${buy ? "매수" : "매도"} 체결 ${won(r.fill_price)}원` : `${r.name} 주문을 넣었어요`);
+          toast(r.status === "filled" ? `${r.name} ${body.qty}주 ${buy ? "매수" : "매도"} 체결 ${won(r.fill_price)}원` : `${r.name} ${body.qty}주 ${buy ? "매수" : "매도"} 주문을 넣었어요`);
           closeSheet(); pages.invest.fill?.();
         } catch (e) {
           if (e instanceof NeedConnect) { closeSheet(); location.hash = "#connect"; return; }
@@ -1530,6 +1552,14 @@ function orderSheet(o) {
     });
   };
   const loadQuote = async () => {
+    if (S.market === "us") {
+      const sym = String(S.code || "").trim().toUpperCase();
+      if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(sym)) { S.err = "미국 종목 기호(예: AAPL)를 넣어 주세요"; return draw(); }
+      S.code = sym;
+      S.q = await GET(`/api/us/quote/${encodeURIComponent(sym)}?engine=${S.engine}`).catch((e) => { S.err = e.message; return null; });
+      if (sheet.open) draw();
+      return;
+    }
     const code = String(S.code || "").replace(/\D/g, "");
     if (code.length !== 6) { S.err = "종목코드 6자리를 넣어 주세요"; return draw(); }
     const [q, real] = await Promise.all([GET(`/api/quote/${code}`).catch((e) => { S.err = e.message; return null; }),

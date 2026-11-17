@@ -290,6 +290,13 @@ def create_app(rt, updater=None):
                         item["holdings"].append(h)
                 except Exception as e:
                     item["error"] = f"잔고 조회 실패: {e}"
+                cl = getattr(b, "client", None)
+                if cl is not None:  # 키움 계좌면 미국주식 잔고·달러 예수금도
+                    try:
+                        item["us_holdings"] = cl.us_holdings()
+                        item["us_cash"] = cl.us_cash()
+                    except Exception as e:
+                        item["us_error"] = f"미국 잔고 조회 실패: {e}"
             out.append(item)
         return dict(accounts=out, data_source=rt.feed.kind,
                     market_open=rt.feed.market_open(), now=rt.feed.now().isoformat(timespec="minutes"))
@@ -305,6 +312,8 @@ def create_app(rt, updater=None):
         b = rt.brokers.get(eng)
         if b is None:
             raise OrderError(rt.errors.get(eng) or "계좌를 골라 주세요")
+        if d.get("market") == "us":
+            return us_order(eng, b, d)
         code = "".join(ch for ch in str(d.get("code", "")) if ch.isalnum())
         if len(code) != 6:
             raise OrderError("종목코드 6자리를 넣어 주세요")
@@ -327,6 +336,71 @@ def create_app(rt, updater=None):
         stocks_cache.d.clear()
         return jsonify(res)
 
+    # ---------- 미국주식 주문(키움 계좌만) ----------
+    def us_client(b):
+        cl = getattr(b, "client", None)
+        if cl is None:
+            raise OrderError("미국 주식은 키움 계좌로만 주문할 수 있어요. 설정 → 계좌 연결 → 자동매매 주문 계좌에서 주문 방식을 '키움으로 주문'으로 바꿔 주세요")
+        return cl
+
+    def us_sym(x):
+        sym = (x or "").strip().upper()
+        if not sym or len(sym) > 10 or not all(ch.isalnum() or ch in ".-" for ch in sym):
+            raise OrderError("미국 종목 기호(예: AAPL)를 넣어 주세요")
+        return sym
+
+    def us_order(eng, b, d):
+        cl = us_client(b)
+        sym = us_sym(d.get("code"))
+        try:
+            qty = int(d.get("qty") or 0)
+            price = float(str(d["price"]).replace(",", "")) if d.get("price") not in (None, "") else None
+        except ValueError:
+            raise OrderError("수량과 가격은 숫자로 넣어 주세요")
+        if qty <= 0:
+            raise OrderError("수량은 1주 이상이어야 해요")
+        if price is not None and price <= 0:
+            raise OrderError("가격을 확인해 주세요")
+        side = d.get("side")
+        if side not in ("buy", "sell"):
+            raise OrderError("매수인지 매도인지 골라 주세요")
+        exch = d.get("exch") if d.get("exch") in ("ND", "NY", "NA") else None
+        with rt._lock:
+            try:
+                no, exch = cl.us_order(side, sym, qty, price, exch)
+            except Exception as e:
+                raise OrderError(str(e))
+            est = price
+            if est is None:
+                try:
+                    est = cl.us_quote(sym, exch)["price"]
+                except Exception:
+                    est = None
+            name = d.get("name") or sym
+            rt.db.x("INSERT INTO orders(ts,engine,mode,code,name,side,qty,price,status,fill_price,broker_no,msg) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (rt.feed.now().isoformat(timespec="seconds"), eng, b.mode, sym, name, side, qty, price,
+                     "accepted", est, f"{no}|{exch}", "미국 직접 주문(달러)"))
+        stocks_cache.d.clear()
+        return jsonify(status="accepted", fill_price=est, broker_no=no, name=name, market="us", exch=exch)
+
+    @app.get("/api/us/quote/<sym>")
+    def us_quote_api(sym):
+        """주문 창용 미국 현재가: 키움 실시간 → 안 되면 공개 시세(지연)."""
+        sym = us_sym(sym)
+        eng = request.args.get("engine")
+        cl = getattr(rt.brokers.get(eng), "client", None) or rt.market.kr_client()
+        if cl is not None:
+            try:
+                return jsonify(cl.us_quote(sym))
+            except Exception as e:
+                err = str(e)
+        else:
+            err = "키움 연결 없음"
+        q = dict(rt.market.yh_quote(sym))
+        q.update(delayed=True, live=False, note=err)
+        return jsonify(q)
+
     # ---------- 미체결 주문·취소 ----------
     def same_account():
         st = rt.settings.all()
@@ -344,9 +418,15 @@ def create_app(rt, updater=None):
             if b is None:
                 continue
             try:
-                out += [dict(o, engine=eng) for o in b.unfilled()]
+                out += [dict(o, engine=eng, market="kr") for o in b.unfilled()]
             except Exception as e:
                 errors[eng] = f"미체결 조회 실패: {e}"
+            cl = getattr(b, "client", None)
+            if cl is not None:
+                try:
+                    out += [dict(o, engine=eng) for o in cl.us_unfilled()]
+                except Exception as e:
+                    errors.setdefault(eng, f"미국 미체결 조회 실패: {e}")
         return jsonify(items=out, errors=errors)
 
     @app.post("/api/orders/cancel")
@@ -357,11 +437,21 @@ def create_app(rt, updater=None):
         if b is None:
             raise OrderError(rt.errors.get(eng) or "계좌를 골라 주세요")
         ord_no = "".join(ch for ch in str(d.get("ord_no", "")) if ch.isalnum())
-        code = "".join(ch for ch in str(d.get("code", "")) if ch.isalnum())
-        if not ord_no or len(code) != 6:
+        us = d.get("market") == "us"
+        code = us_sym(d.get("code")) if us else "".join(ch for ch in str(d.get("code", "")) if ch.isalnum())
+        if not ord_no or (not us and len(code) != 6):
             raise OrderError("취소할 주문을 다시 골라 주세요")
         with rt._lock:
-            no = b.cancel(ord_no, code)
+            if us:
+                try:
+                    no = us_client(b).us_cancel(ord_no, code, d.get("exch") if d.get("exch") in ("ND", "NY", "NA") else None)
+                except OrderError:
+                    raise
+                except Exception as e:
+                    raise OrderError(str(e))
+                rt.db.x("UPDATE orders SET status='cancelled' WHERE broker_no LIKE ? AND engine=?", (ord_no + "|%", eng))
+            else:
+                no = b.cancel(ord_no, code)
             rt.db.x("UPDATE orders SET status='cancelled' WHERE broker_no=? AND engine=?", (ord_no, eng))
             rt.db.x("INSERT INTO orders(ts,engine,mode,code,name,side,qty,price,status,fill_price,broker_no,msg) "
                     "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -461,10 +551,10 @@ def create_app(rt, updater=None):
     @app.get("/api/market/quote/<m>/<sym>")
     def market_quote(m, sym):
         m = mkt_arg(m); sym = sym_arg(m, sym)
-        q = dict(rt.market.kr_quote(sym) if m == "kr" else rt.market.yh_quote(sym))
+        q = dict(rt.market.kr_quote(sym) if m == "kr" else rt.market.us_live(sym))
         q["watched"] = sym in rt.market.watch()[m]
-        q["holding"] = rt.market.holding(sym) if m == "kr" else None
-        if m == "us":
+        q["holding"] = rt.market.holding(sym) if m == "kr" else rt.market.us_holding(sym)
+        if m == "us" and not q.get("fx"):
             try:
                 q["fx"] = rt.market.yh_quote("USDKRW=X")["price"]
             except Exception:

@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2342";
+const UI_VERSION = "261118.0622";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -98,7 +98,10 @@ function confirmTap(btn, label) {
 
 // ---------- 색상 테마(이 기기에만 저장) ----------
 const THEMES = {
-  neon: { name: "네온", deep: "#0B0710", deep2: "#1D1229", bg: "#0B0710", accent: "magenta", dark: true },
+  neon: { name: "네온 핑크", deep: "#0B0710", deep2: "#1D1229", bg: "#0B0710", accent: "magenta", dark: true },
+  neonblue: { name: "네온 블루", deep: "#060913", deep2: "#131A30", bg: "#060913", accent: "nblue", dark: true, neon: "blue" },
+  neonmint: { name: "네온 민트", deep: "#050E0B", deep2: "#10221B", bg: "#050E0B", accent: "nmint", dark: true, neon: "mint" },
+  neonsunset: { name: "네온 선셋", deep: "#100806", deep2: "#2A1810", bg: "#100806", accent: "nsun", dark: true, neon: "sunset" },
   navy: { name: "남색", deep: "#111A2B", deep2: "#1C2840", bg: "#EEF1F7", accent: "yellow" },
   black: { name: "블랙", deep: "#0E0E10", deep2: "#1F1F23", bg: "#F0F0F2", accent: "lime" },
   forest: { name: "숲", deep: "#0E2A22", deep2: "#173B31", bg: "#EDF3F0", accent: "mint" },
@@ -110,6 +113,7 @@ const THEMES = {
 };
 const ACCENTS = {
   magenta: ["마젠타", "#FF3DAE"],
+  nblue: ["네온 블루", "#2F8CFF"], nmint: ["네온 민트", "#10B477"], nsun: ["네온 선셋", "#FF5A1F"],
   yellow: ["노랑", "#FFD84D"], lime: ["라임", "#C8F560"], mint: ["민트", "#7BE0B0"], aqua: ["하늘", "#7FD6F2"],
   peach: ["복숭아", "#FFB38A"], pink: ["핑크", "#FF9EC7"], lavender: ["라벤더", "#C3B1FF"], apricot: ["살구", "#FFC56B"],
 };
@@ -128,6 +132,9 @@ function applyTheme(id, accentId, save = true) {
   const v = themeVars(id, accentId);
   const dark = !!(THEMES[id] || THEMES.neon).dark;
   document.documentElement.classList.toggle("dark-theme", dark);
+  const neon = (THEMES[id] || {}).neon || "";
+  document.documentElement.dataset.neon = neon;
+  try { localStorage.setItem("moa.neon", neon); } catch (e) { /* 저장 불가 */ }
   try { localStorage.setItem("moa.dark", dark ? "1" : "0"); } catch (e) { /* 저장 불가 */ }
   Object.entries(v).forEach(([k, val]) => document.documentElement.style.setProperty(k, val));
   const mc = document.querySelector('meta[name="theme-color"]');
@@ -140,7 +147,7 @@ function applyTheme(id, accentId, save = true) {
 
 // v4.12: 새 기본 테마(네온)로 한 번 옮긴다. 설정 → 화면에서 예전 테마로 되돌릴 수 있다.
 if (store.get("themeV") !== "5") { store.set("themeV", "5"); applyTheme("neon", "magenta"); }
-else document.documentElement.classList.toggle("dark-theme", !!(THEMES[store.get("theme") || "neon"] || {}).dark);
+else { const t0 = THEMES[store.get("theme") || "neon"] || {}; document.documentElement.classList.toggle("dark-theme", !!t0.dark); document.documentElement.dataset.neon = t0.neon || ""; }
 
 // ---------- 은행·단축어 ----------
 const BANKS = [["하나", "하나은행"], ["NH농협", "NH농협은행"], ["신한", "신한은행"], ["KB국민", "KB국민은행"], ["우리", "우리은행"],

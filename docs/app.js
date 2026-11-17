@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2220";
+const UI_VERSION = "261117.2229";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1529,18 +1529,29 @@ pages.invest = {
   // ---------- 발견: 실시간 순위 ----------
   async discover(box) {
     const S = this.dv || (this.dv = { m: "kr", kind: "value" });
+    if (S.m === "kr" && ["views", "watch", "buy"].includes(S.kind)) S.kind = "value";
     if (!$("#dvList", box)) {
       $(".fab")?.remove();
       box.innerHTML = `<div class="dv">
         ${seg("시장", [["kr", "국내"], ["us", "미국"]], S.m, "dv-mkt")}
-        <div class="chips dv-kind" id="dvChips" role="group" aria-label="순위 종류">${[["value", "거래대금"], ["up", "급상승"], ["down", "급하락"], ["volume", "거래량"]].map(([k, v]) => `<button type="button" class="chip" data-kind="${k}" aria-pressed="${k === S.kind}">${v}</button>`).join("")}</div>
+        <div class="chips dv-kind" id="dvChips" role="group" aria-label="순위 종류">${(S.m === "us" ? [["views", "조회 급상승"], ["value", "거래대금"], ["up", "급상승"], ["down", "급하락"], ["volume", "거래량"], ["watch", "관심 등록"], ["buy", "키움 매수"]] : [["value", "거래대금"], ["up", "급상승"], ["down", "급하락"], ["volume", "거래량"]]).map(([k, v]) => `<button type="button" class="chip" data-kind="${k}" aria-pressed="${k === S.kind}">${v}</button>`).join("")}</div>
         <div class="ss-row" id="dvSess"></div>
         <section class="card tight"><div class="dv-kwrap" id="dvKind"></div><div class="list" id="dvList"><div class="empty loading">불러오는 중</div></div></section>
         <div class="tiny" id="dvFoot" style="padding:0 3px"></div></div>`;
       $("#dvKind").append($("#dvChips"));
-      bindSeg(box, "시장", (v) => { S.m = v; if (v === "us" && S.kind === "value") S.kind = "up"; box.innerHTML = ""; this.discover(box); });
-      box.onclick = (e) => { const k = e.target.closest("[data-kind]"); if (k) { S.kind = k.dataset.kind; $$("[data-kind]", box).forEach((x) => x.setAttribute("aria-pressed", String(x === k))); $("#dvList").innerHTML = `<div class="empty loading">불러오는 중</div>`; this.discover(box); } };
+      bindSeg(box, "시장", (v) => { S.m = v; S.kind = v === "us" ? "views" : (["views", "watch", "buy"].includes(S.kind) ? "value" : S.kind); box.innerHTML = ""; this.discover(box); });
+      box.onclick = async (e) => {
+        const st = e.target.closest("[data-star]");
+        if (st) {
+          e.preventDefault();
+          const W = this.dvW[S.m] || (this.dvW[S.m] = new Set()), sym = st.dataset.star, on = !W.has(sym);
+          await run(() => api("POST", "/api/market/watch", { mkt: S.m, sym, on }), on ? "관심종목에 넣었어요" : "관심종목에서 뺐어요");
+          on ? W.add(sym) : W.delete(sym); st.setAttribute("aria-pressed", String(on)); delete mkt.snap[S.m];
+          return;
+        }
+        const k = e.target.closest("[data-kind]"); if (k) { S.kind = k.dataset.kind; $$("[data-kind]", box).forEach((x) => x.setAttribute("aria-pressed", String(x === k))); $("#dvList").innerHTML = `<div class="empty loading">불러오는 중</div>`; this.discover(box); } };
       const c = memo.get(`rk.${S.m}.${S.kind}`); if (c) this.dvRender(c);
+      if (!this.dvW[S.m]) GET(`/api/market/overview?mkt=${S.m}`).then((o) => { this.dvW[S.m] = new Set(o.items.map((x) => x.sym)); const c2 = memo.get(`rk.${S.m}.${S.kind}`); if (c2 && $("#dvList")) this.dvRender(c2); }).catch(() => {});
     }
     try {
       const r = await GET(`/api/invest/rank?mkt=${S.m}&kind=${S.kind}`);
@@ -1548,15 +1559,19 @@ pages.invest = {
       if (investState.tab === "discover" && S.m === r.mkt && S.kind === r.kind) this.dvRender(r);
     } catch (e) { if ($("#dvList")) $("#dvList").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   },
+  dvW: {},
   dvRender(r) {
-    const us = r.mkt === "us";
+    const us = r.mkt === "us", W = this.dvW[r.mkt] || new Set();
+    const mv = (x) => x.new ? `<em class="dv-mv new">NEW</em>` : x.move ? `<em class="dv-mv ${x.move > 0 ? "up" : "down"}">${x.move > 0 ? "▲" : "▼"}${Math.abs(x.move)}</em>` : "";
+    const sub = (x) => x.value ? ` · 거래대금 ${us ? "$" + (x.value >= 1e9 ? (x.value / 1e9).toFixed(1) + "B" : Math.round(x.value / 1e6) + "M") : bigNum(x.value * 1e6)}` : x.volume ? ` · 거래량 ${bigNum(x.volume)}` : "";
     if ($("#dvSess")) { const S = marketSession(r.mkt); $("#dvSess").innerHTML = `<span class="ss-chip ss-${S.phase}"><i></i><b>${us ? "미국" : "국내"}</b> ${esc(S.label)}</span><span class="tiny">${esc(S.sub)}</span>`; }
     $("#dvList").innerHTML = r.items.length ? r.items.map((x) => `<a class="item dv-row" href="#invest/stock?m=${r.mkt}&s=${encodeURIComponent(x.sym)}">
-      <span class="dv-rank ${x.rank <= 3 ? "dv-top" : ""}">${x.rank}</span>
-      <span class="main"><b>${esc(x.name)}</b><span class="sub">${esc(x.sym)}${x.value ? ` · 거래대금 ${bigNum(x.value * 1e6)}` : x.volume ? ` · 거래량 ${bigNum(x.volume)}` : ""}</span></span>
-      <span class="end"><b>${us ? usd(x.price) : won(x.price)}</b><span class="mk-c ${tone(x.change_pct)}">${pct(x.change_pct, 2)}</span></span></a>`).join("")
+      <span class="dv-rank ${x.rank <= 3 ? "dv-top" : ""}">${x.rank}${mv(x)}</span>
+      <span class="main"><b>${esc(x.name)}</b><span class="sub">${esc(x.sym)}${sub(x)}</span></span>
+      <span class="end"><b>${us ? usd(x.price) : won(x.price)}</b><span class="mk-c ${tone(x.change_pct)}">${pct(x.change_pct, 2)}</span></span>
+      <button type="button" class="star dv-star" data-star="${esc(x.sym)}" aria-pressed="${W.has(x.sym)}" aria-label="관심종목">${STAR}</button></a>`).join("")
       : `<div class="empty">순위가 비어 있어요(장 시작 전일 수 있어요)</div>`;
-    $("#dvFoot").textContent = `${r.at} 기준 · 키움 실시간 순위 · 몇 초마다 새로 받아요`;
+    $("#dvFoot").textContent = `${r.at} 기준 · ${{ views: "키움 고객이 최근 10분간 많이 찾아본 종목", watch: "오늘 관심종목에 많이 담긴 종목", buy: "오늘 키움 고객이 많이 산 종목" }[r.kind] || "키움 실시간 순위"} · ☆을 누르면 관심종목에 담겨요`;
   },
 
   // ---------- 내 계좌(조회 전용) ----------
@@ -2252,21 +2267,39 @@ const mkt = {
     if (!box || D.tab === "chart") return;
     const u = { book: "book", ticks: "ticks", info: "info" }[D.tab];
     try {
-      const r = await GET(`/api/invest/${u}/${D.m}/${encodeURIComponent(D.sym)}`);
+      const [r, tk] = await Promise.all([GET(`/api/invest/${u}/${D.m}/${encodeURIComponent(D.sym)}`),
+        D.tab === "book" ? GET(`/api/invest/ticks/${D.m}/${encodeURIComponent(D.sym)}`).catch(() => []) : null]);
       if (this.d !== D || !$("#dtPane")) return;
-      if (D.tab === "book") this.drawBook(r); else if (D.tab === "ticks") this.drawTicks(r); else this.drawInfo(r);
+      if (D.tab === "book") this.drawBook(r, tk || []); else if (D.tab === "ticks") this.drawTicks(r); else this.drawInfo(r);
     } catch (e) { if ($("#dtPane")) $("#dtPane").innerHTML = `<div class="empty small">${esc(e.message)}</div>`; }
   },
-  drawBook(b) {
-    const D = this.d, q = D.q, cur = q.currency, box = $("#dtPane");
+  drawBook(b, tk = []) {
+    const D = this.d, q = D.q, cur = q.currency, box = $("#dtPane"), us = D.m === "us", fx = q.fx;
     const mx = Math.max(1, ...b.asks.map((x) => x.qty), ...b.bids.map((x) => x.qty));
     const asks = b.asks.slice().sort((x, y) => y.price - x.price), bids = b.bids.slice().sort((x, y) => y.price - x.price);
-    const pc = (p) => { const r = q.prev ? (p / q.prev - 1) * 100 : 0; return `<span class="ob-p ${tone(r)} ${Math.abs(p - q.price) < 1e-9 ? "now" : ""}">${this.money(p, cur)}<small>${pct(r, 2)}</small></span>`; };
-    box.innerHTML = `<div class="ob">
-      ${asks.map((x) => `<button type="button" class="ob-row ask" data-px="${x.price}"><span class="ob-q"><i style="width:${x.qty / mx * 100}%"></i><em>${won(x.qty)}</em></span>${pc(x.price)}<span></span></button>`).join("")}
-      ${bids.map((x) => `<button type="button" class="ob-row bid" data-px="${x.price}"><span></span>${pc(x.price)}<span class="ob-q"><i style="width:${x.qty / mx * 100}%"></i><em>${won(x.qty)}</em></span></button>`).join("")}
+    const pc = (p) => { const r = q.prev ? (p / q.prev - 1) * 100 : 0; return `<span class="ob-p ${tone(r)} ${Math.abs(p - q.price) < 1e-9 ? "now" : ""}">${this.money(p, cur)}<small>${pct(r, 2)}${us && fx ? ` · ${won(p * fx)}원` : ""}</small></span>`; };
+    const M = (v) => v == null ? "-" : this.money(v, cur);
+    const st = tk.length ? tk[0].strength : 0, tb = b.tot_ask + b.tot_bid || 1;
+    box.innerHTML = `<div class="ob ${us ? "us" : ""}">
+      <div class="ob-half">
+        ${asks.map((x) => `<button type="button" class="ob-row ask" data-px="${x.price}"><span class="ob-q"><i style="width:${x.qty / mx * 100}%"></i><em>${won(x.qty)}</em></span>${pc(x.price)}<span></span></button>`).join("")}
+        <dl class="ob-side ob-info">
+          <div><dt>거래량</dt><dd>${q.volume != null ? bigNum(q.volume) : "-"}</dd></div>
+          <div><dt>52주 최고</dt><dd class="up">${M(q.high52)}</dd></div><div><dt>52주 최저</dt><dd class="down">${M(q.low52)}</dd></div>
+          <div><dt>시가</dt><dd class="${tone((q.open || 0) - (q.prev || 0))}">${M(q.open)}</dd></div>
+          <div><dt>고가</dt><dd class="up">${M(q.high)}</dd></div><div><dt>저가</dt><dd class="down">${M(q.low)}</dd></div>
+          <div><dt>전일 종가</dt><dd>${M(q.prev)}</dd></div>
+          ${us && fx ? `<div><dt>환율</dt><dd>${won(fx)}원</dd></div>` : ""}
+        </dl></div>
+      <div class="ob-half">
+        ${bids.map((x) => `<button type="button" class="ob-row bid" data-px="${x.price}"><span></span>${pc(x.price)}<span class="ob-q"><i style="width:${x.qty / mx * 100}%"></i><em>${won(x.qty)}</em></span></button>`).join("")}
+        <div class="ob-side ob-tk">
+          <div class="ob-st ${st >= 100 ? "up" : "down"}"><span>체결강도</span><b>${st ? st.toFixed(1) + "%" : "-"}</b></div>
+          ${tk.slice(0, 12).map((x) => `<div class="${x.qty > 0 ? "up" : "down"}"><span>${this.money(x.price, cur)}</span><b>${won(Math.abs(x.qty))}</b></div>`).join("") || `<div class="tiny">체결 없음</div>`}
+        </div></div>
+      <div class="ob-bal" aria-label="잔량 비율"><i class="a" style="flex:${b.tot_ask / tb}"></i><i class="b" style="flex:${b.tot_bid / tb}"></i></div>
       <div class="ob-tot"><span>매도 잔량 ${won(b.tot_ask)}</span><span>매수 잔량 ${won(b.tot_bid)}</span></div></div>
-      <div class="tiny">가격을 누르면 그 가격으로 주문 창이 열려요.</div>`;
+      <div class="tiny">가격을 누르면 그 가격으로 주문 창이 열려요. 체결은 빨강이 매수, 파랑이 매도 체결이에요.</div>`;
     box.onclick = (e) => { const r = e.target.closest("[data-px]"); if (r) orderSheet({ code: D.sym, market: D.m, side: r.classList.contains("ask") ? "buy" : "sell", price: Number(r.dataset.px), exch: q.exch, name: q.name, holding: q.holding }); };
   },
   drawTicks(t) {

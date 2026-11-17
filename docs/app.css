@@ -1185,3 +1185,25 @@ details.card>summary::after{border-color:var(--sec-i)}
 .ai-btn .ai-est{flex-basis:100%;text-align:center;font-size:9.5px;font-weight:600;color:rgba(255,255,255,.72);letter-spacing:0}
 .ai-turn .ai-cost{margin-top:6px}
 #oErr .notice{white-space:pre-line}
+
+/* ===== 호가 옆 정보·체결, 순위 별표 ===== */
+.ob-half{position:relative;display:flex;flex-direction:column;gap:1px}
+.ob-side{position:absolute;top:0;bottom:0;width:calc(50% - 52px);margin:0;padding:5px 7px;display:flex;flex-direction:column;justify-content:space-between;pointer-events:none;overflow:hidden}
+.ob-info{right:0}.ob-tk{left:0;justify-content:flex-start;gap:1px}
+.ob-info div,.ob-tk div{display:flex;justify-content:space-between;gap:4px;font-size:10px;line-height:1.5}
+.ob-info dt{color:var(--ink3);font-weight:600}.ob-info dd{margin:0;font-weight:800}
+.ob-tk span{font-weight:700}.ob-tk b{font-weight:800}
+.ob-st{padding:2px 5px;margin:0 -3px 3px;border-radius:6px;background:var(--amber-s)}
+.ob-st span{color:var(--amber-i)}
+.ob.us .ob-row{min-height:31px}
+.ob-p small{white-space:nowrap}
+.ob-bal{display:flex;height:5px;gap:2px;border-radius:3px;overflow:hidden;margin:6px 6px 0}
+.ob-bal .a{background:var(--down)}.ob-bal .b{background:var(--up)}
+.dv-rank{display:flex;flex-direction:column;align-items:center;line-height:1.1}
+.dv-mv{font-style:normal;font-size:8px;font-weight:800}
+.dv-mv.new{color:var(--violet)}
+.dv-star{flex:0 0 30px;width:30px;height:30px;border:0;background:transparent;color:var(--line2);display:flex;align-items:center;justify-content:center;margin-right:-6px}
+.dv-star svg{width:17px;height:17px}
+.dv-star[aria-pressed="true"]{color:var(--amber)}
+.dv-star[aria-pressed="true"] svg{fill:currentColor;animation:selPop .32s var(--pop)}
+.dv-kind{scrollbar-width:none}.dv-kind::-webkit-scrollbar{display:none}.dv-kind .chip{flex:0 0 auto;white-space:nowrap}

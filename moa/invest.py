@@ -72,7 +72,24 @@ class Invest:
     # ---------- 체결(틱) ----------
     def ticks(self, mkt, sym):
         if mkt != "kr":
-            raise MarketError("미국 체결은 아직 지원하지 않아요")
+            def load_us():
+                cl = self.kr()
+                if cl is None:
+                    raise MarketError("체결은 키움을 연결해야 볼 수 있어요")
+                d = cl.call("us_ticks", {"stex_tp": cl.us_exchange(sym)[0], "stk_cd": sym})
+                rows = (d.get("result_list") or [])[:40]
+                out = []
+                for r in rows:
+                    tm = str(r.get("cntr_tm", ""))
+                    out.append({"t": f"{tm[:2]}:{tm[2:4]}:{tm[4:6]}" if len(tm) >= 6 else tm, "price": abs(snum(r.get("cur_prc"))),
+                                "qty": int(snum(r.get("trde_qty"))), "change_pct": snum(r.get("flu_rt")), "strength": 0})
+                buy = sum(x["qty"] for x in out if x["qty"] > 0)
+                sell = -sum(x["qty"] for x in out if x["qty"] < 0)
+                st = round(min(999.0, buy / sell * 100), 1) if sell else (999.0 if buy else 0)
+                for x in out:  # 미국은 체결강도를 따로 주지 않아 최근 체결의 매수/매도 수량 비로 계산
+                    x["strength"] = st
+                return out
+            return self.cache.get(("tku", sym), 2, load_us, stale=30)
 
         def load():
             cl = self.kr()
@@ -158,7 +175,7 @@ class Invest:
     KR_RANK = {"value": "거래대금", "up": "급상승", "down": "급하락", "volume": "거래량"}
 
     def ranking(self, mkt, kind):
-        if kind not in self.KR_RANK:
+        if kind not in list(self.KR_RANK) + (["views", "watch", "buy"] if mkt == "us" else []):
             kind = "value"
         cl = self.kr()
         if cl is None:
@@ -186,6 +203,39 @@ class Invest:
                                 "change": snum(r.get("pred_pre")), "change_pct": snum(r.get("flu_rt")),
                                 "value": num(r.get(vkey)) if vkey else None,
                                 "volume": int(num(r.get("trde_qty") or r.get("now_trde_qty")))})
+            elif kind in ("views", "watch", "buy", "value"):
+                sg = lambda v, sign: -abs(snum(v)) if str(sign).strip() in ("-", "4", "5") else snum(v)
+                if kind == "views":
+                    d = cl.call("us_rank_views", {"svc_type": "B282"})
+                elif kind == "watch":
+                    d = cl.call("us_rank_watch", {"dt_unit_tp": "D", "stk_tp": "A"})
+                elif kind == "buy":
+                    d = cl.call("us_rank_kiwoom", {"qry_tp": "1", "dt_unit_tp": "1"})
+                else:
+                    d = cl.call("us_rank_value", {"stex_tp": "0", "inds_cd": "000", "stk_tp": "0", "trde_qty_tp": "0",
+                                                  "stk_cnd": "0", "pric_cnd": "0", "trde_prica_cnd": "0"})
+                for i, r in enumerate((d.get("result_list") or [])[:40]):
+                    sym = str(r.get("stk_cd", "")).strip()
+                    if not sym:
+                        continue
+                    ex = str(r.get("stex_tp") or "").strip()
+                    if ex in ("ND", "NY", "NA"):  # 순위에 거래소가 같이 오니 기억해 둔다(주문·호가가 빨라짐)
+                        cl._US_EX_CACHE.setdefault(sym, (ex, r.get("stk_nm") or sym))
+                    if kind == "views":
+                        mv = sg(r.get("chg_val"), r.get("sign"))
+                        cp = sg(r.get("diff_rate_for_gjga"), r.get("sign_for_gjga"))
+                        price = abs(snum(r.get("curr_pric")))
+                    else:
+                        mv = snum(r.get("rank_flu") or r.get("kw_high_rank_hl")) if kind != "value" else None
+                        if kind == "buy" and str(r.get("kw_high_rank_sig")) == "2" and mv:
+                            mv = -abs(mv)
+                        cp, price = snum(r.get("flu_rt")), abs(snum(r.get("cur_prc")))
+                    out.append({"rank": i + 1, "sym": sym, "name": r.get("stk_nm") or r.get("stk_enm") or sym, "price": price,
+                                "change": snum(r.get("pred_pre")) if r.get("pred_pre") else None, "change_pct": cp,
+                                "value": num(r.get("trde_prica")) * 1000 if r.get("trde_prica") else None,
+                                "volume": int(num(r.get("acc_trde_qty"))) if r.get("acc_trde_qty") else 0,
+                                "move": None if mv is None else int(mv),
+                                "new": str(r.get("rank_flu_sig")) == "N" or str(r.get("kw_high_rank_sig")) == "0"})
             else:
                 if kind in ("up", "down"):
                     d = cl.call("us_rank_price", {"stex_tp": "0", "stk_tp": "1", "inds_cd": "000", "stk_cnd": "0",

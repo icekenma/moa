@@ -24,6 +24,11 @@ API = {
     "rank_volume": ("/api/dostk/rkinfo", "ka10030"),# 당일거래량상위
     "rank_change": ("/api/dostk/rkinfo", "ka10027"),# 전일대비등락률상위
     "us_book": ("/api/us/mrkcond", "usa20101"),     # 미국 10호가
+    "us_ticks": ("/api/us/mrkcond", "usa20150"),     # 미국 체결내역
+    "us_rank_views": ("/api/us/rkinfo", "usa01980"), # 실시간 종목 조회 순위
+    "us_rank_watch": ("/api/us/rkinfo", "usa01990"), # 관심종목 등록 상위
+    "us_rank_value": ("/api/us/rkinfo", "usa20540"), # 당일 거래대금 상위
+    "us_rank_kiwoom": ("/api/us/rkinfo", "usa20880"),# 키움 고객 매수 상위
     "us_rank_price": ("/api/us/stkinfo", "usa20930"),  # 미국 가격급등락
     "us_rank_volume": ("/api/us/stkinfo", "usa20520"), # 미국 거래량급등
     "acctno": ("/api/dostk/acnt", "ka00001"),      # 계좌번호조회

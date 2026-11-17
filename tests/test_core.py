@@ -1337,3 +1337,29 @@ def test_ai_outcomes_judge_window_and_stats(rt, monkeypatch):
     assert any(x["key"] == "지표 자동 선정" for x in st["by_stance"]) and st["curve"] and sum(st["hist"]) == 3
     c = create_app(rt).test_client()
     assert c.get("/api/ai/stats?mkt=us").get_json()["all"]["n"] == 1
+
+
+def test_us_views_rank_and_ticks(rt):
+    from moa.broker.kiwoom import KiwoomClient
+    KiwoomClient._US_EX_CACHE.clear()
+
+    class CL:
+        _US_EX_CACHE = KiwoomClient._US_EX_CACHE
+
+        def us_exchange(self, sym, hint=None):
+            return self._US_EX_CACHE.get(sym, ("ND", sym))
+
+        def call(self, key, body):
+            if key == "us_rank_views":
+                return {"result_list": [{"rank": "1", "stk_cd": "SOXL", "stk_nm": "미국 반도체 3배", "sign": "+", "chg_val": "3",
+                                         "curr_pric": "31.2500", "sign_for_gjga": "-", "diff_rate_for_gjga": "2.1500", "stex_tp": "NA"}]}
+            if key == "us_ticks":
+                return {"result_list": [{"cur_prc": "+352.2100", "flu_rt": "-0.16", "trde_qty": "+300", "cntr_tm": "222201"},
+                                        {"cur_prc": "+352.2000", "flu_rt": "-0.16", "trde_qty": "-100", "cntr_tm": "222200"}]}
+            raise AssertionError(key)
+    rt.market.kr_client = lambda: CL()
+    r = rt.invest.ranking("us", "views")["items"][0]
+    assert r["sym"] == "SOXL" and r["move"] == 3 and r["change_pct"] == -2.15 and r["price"] == 31.25
+    assert KiwoomClient._US_EX_CACHE["SOXL"][0] == "NA"
+    t = rt.invest.ticks("us", "AAPL")
+    assert t[0] == {"t": "22:22:01", "price": 352.21, "qty": 300, "change_pct": -0.16, "strength": 300.0}

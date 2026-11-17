@@ -938,6 +938,8 @@ def test_ai_stream_contexts_usage_and_budget(rt):
     rt.market.kr_chart = lambda s, r: {"points": [{"t": "2026-11-16", "c": 71000}, {"t": "2026-11-17", "c": 70100}]}
     rt.market.yh_quote = lambda s: {"price": 1400.0}
     out = [json.loads(x) for x in c.post("/api/ai/ask", json={"kind": "stock", "sym": "005930", "mkt": "kr"}).get_data(as_text=True).splitlines() if x]
+    assert out[0]["t"] == "job"                      # 첫 줄은 이어 받기용 작업 번호
+    out = [x for x in out if x["t"] not in ("job", "ping")]
     kinds = [e["t"] for e in out]
     assert kinds[0] == "status" and "source" in kinds and kinds[-1] == "done"
     text = "".join(e["text"] for e in out if e["t"] == "text")
@@ -964,6 +966,7 @@ def test_ai_stream_contexts_usage_and_budget(rt):
         return _SSE(_claude_events("검색 없이 답"))
     rt.ai.session.post = fake_post2
     out = [json.loads(x) for x in c.post("/api/ai/ask", json={"kind": "chat", "question": "요즘 시장?"}).get_data(as_text=True).splitlines() if x]
+    out = [x for x in out if x["t"] not in ("job", "ping")]
     assert len(calls) == 2 and "tools" in calls[0] and "tools" not in calls[1]
     assert "".join(e.get("text", "") for e in out) == "검색 없이 답"
     # 월 예산을 넘으면 부르지 않음

@@ -3,6 +3,7 @@
 ※ 엔드포인트·api-id·응답 필드명은 키움 REST API 문서 기준으로 작성했다. 키움이 사양을 바꾸면
    아래 API 표만 고치면 된다. 처음 쓸 때 설정 화면의 '연결 확인'으로 꼭 확인할 것.
 """
+import re
 import threading
 import time
 from datetime import datetime
@@ -51,6 +52,19 @@ def _shared(appkey, mock):
 
 class KiwoomError(RuntimeError):
     pass
+
+
+def _empty_ok(fn):
+    """조회 결과가 없을 때 키움이 오류로 돌려주는 경우('…내역이 없습니다')를 빈 목록으로."""
+    def wrap(*a, **k):
+        try:
+            return fn(*a, **k)
+        except KiwoomError as e:
+            if re.search(r"(내역|잔고|데이터|조회할 자료)[이가]?\s*없", str(e)) or "571758" in str(e):
+                return []
+            raise
+    wrap.__name__ = fn.__name__
+    return wrap
 
 
 def snum(v):
@@ -237,6 +251,7 @@ class KiwoomClient:
         d = self.call("us_cancel", {"orig_ord_no": str(ord_no), "stex_tp": exch, "stk_cd": sym})
         return d.get("ord_no", "")
 
+    @_empty_ok
     def us_unfilled(self):
         d = self.call("us_unfilled", {"ord_dt": "", "slby_tp": "0", "stex_tp": "", "stk_cd": ""})
         out = []
@@ -253,6 +268,7 @@ class KiwoomClient:
                         "price": num(r.get("ord_uv")), "time": str(r.get("ord_time") or "")})
         return out
 
+    @_empty_ok
     def us_holdings(self):
         d = self.call("us_balance", {"stex_tp": "", "stk_cd": ""})
         out = []
@@ -275,6 +291,7 @@ class KiwoomClient:
         return {"usd_orderable": num(usd.get("fc_ord_alowa")), "usd": num(usd.get("fc_entra")),
                 "krw": num(d.get("krw_entra"))}
 
+    @_empty_ok
     def unfilled(self):
         """미체결 주문(ka10075). 응답 목록 이름이 문서마다 달라 주문번호가 있는 목록을 찾아 쓴다."""
         d = self.call("unfilled", {"all_stk_tp": "0", "trde_tp": "0", "stk_cd": "", "stex_tp": "0"})

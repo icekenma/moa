@@ -1088,3 +1088,27 @@ def test_cards_perf_billing_and_double_count_guards(rt):
     tid = c.post("/api/tx", json={"date": today.isoformat(), "kind": "out", "amount": 10000, "memo": "점심", "card_id": cid}).get_json()["id"]
     c.put(f"/api/tx/{tid}", json={"date": today.isoformat(), "kind": "out", "amount": 11000, "memo": "점심"})
     assert rt.db.one("SELECT card_id FROM transactions WHERE id=?", (tid,))["card_id"] == cid
+
+
+def test_empty_unfilled_is_not_error_and_orders_settle(rt):
+    class E(_FakeKiwoom):
+        def post(self, url, json=None, headers=None, timeout=None):
+            api = (headers or {}).get("api-id")
+            if api == "ust21050":
+                return _Resp({"return_code": 2000, "return_msg": "[2000](571758:해당 계좌의미체결 내역이 없습니다.)"})
+            if api == "ka10075":
+                return _Resp({"return_code": 0, "oso": []})
+            if api == "kt10000":
+                return _Resp({"return_code": 0, "ord_no": "0001234"})
+            return super().post(url, json, headers, timeout)
+    rt.settings.update({"trade_mode": {"scalp": "kiwoom"}, "real_orders_allowed": {"scalp": True},
+                        "kiwoom": {"scalp": {"appkey": "ke", "secretkey": "s", "mock": False}}})
+    rt.rebuild()
+    rt.brokers["scalp"].client.session = E()
+    c = create_app(rt).test_client()
+    rt.feed.quote = lambda code: {"price": 70000}
+    rt.feed.name = lambda code: "삼성전자"
+    assert c.post("/api/order", json={"engine": "scalp", "side": "buy", "code": "005930", "qty": 1}).status_code == 200
+    d = c.get("/api/orders/open").get_json()
+    assert d["errors"] == {} and d["items"] == []
+    assert c.get("/api/stocks").get_json()["orders"][0]["status"] == "filled"

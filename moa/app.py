@@ -412,6 +412,20 @@ def create_app(rt, updater=None):
                 and st["kiwoom"]["scalp"].get("appkey") == st["kiwoom"]["dca"].get("appkey")
                 and bool(st["kiwoom"]["scalp"].get("mock")) == bool(st["kiwoom"]["dca"].get("mock")))
 
+    def settle_orders(eng, ok_kr, ok_us, items):
+        """미체결 목록에 없는 오늘 '접수' 주문은 체결된 것으로 바꾼다(조회가 성공한 시장만)."""
+        today = rt.feed.now().date().isoformat()
+        open_nos = {str(o["ord_no"]).lstrip("0") for o in items}
+        engines = ("scalp", "dca") if eng == "scalp" and same_account() else (eng,)
+        for o in rt.db.q("SELECT id, code, broker_no, ts FROM orders WHERE status='accepted' AND ts >= ? AND engine IN (%s)"
+                         % ",".join("?" * len(engines)), (today,) + engines):
+            no = str(o["broker_no"] or "").split("|")[0].lstrip("0")
+            us = not str(o["code"]).isdigit()
+            if not no or (us and not ok_us) or (not us and not ok_kr):
+                continue
+            if no not in open_nos:
+                rt.db.x("UPDATE orders SET status='filled' WHERE id=?", (o["id"],))
+
     @app.get("/api/orders/open")
     def orders_open():
         out, errors = [], {}
@@ -421,16 +435,24 @@ def create_app(rt, updater=None):
             b = rt.brokers.get(eng)
             if b is None:
                 continue
+            mine, ok_kr, ok_us = [], False, False
             try:
-                out += [dict(o, engine=eng, market="kr") for o in b.unfilled()]
+                mine += [dict(o, engine=eng, market="kr") for o in b.unfilled()]
+                ok_kr = True
             except Exception as e:
                 errors[eng] = f"미체결 조회 실패: {e}"
             cl = getattr(b, "client", None)
             if cl is not None:
                 try:
-                    out += [dict(o, engine=eng) for o in cl.us_unfilled()]
+                    mine += [dict(o, engine=eng) for o in cl.us_unfilled()]
+                    ok_us = True
                 except Exception as e:
                     errors.setdefault(eng, f"미국 미체결 조회 실패: {e}")
+                try:
+                    settle_orders(eng, ok_kr, ok_us, mine)
+                except Exception:
+                    pass
+            out += mine
         return jsonify(items=out, errors=errors)
 
     @app.post("/api/orders/cancel")

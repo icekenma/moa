@@ -1222,6 +1222,13 @@ def test_aipick_parse_guard_and_estimate(rt, monkeypatch):
     assert r["stance"] == "보통" and len(r["picks"]) == 1 and r["picks"][0]["sym"] == "005930"
     assert ap.history()[0]["picks"][0]["win_prob"] == 62
     assert ap.parse("그냥 글", "kr", "m", 0) is None
+    # 관망이라 picks가 비어도 최소 1종목(지표 기반)
+    ap._cands["kr"] = [{"sym": "000660", "name": "SK하이닉스", "현재가": 10000, "등락률%": 2.0,
+                        "오늘_5분봉": {"VWAP대비%": 0.8, "최근30분%": 0.5, "고점대비%": -0.4, "최근30분_거래량배수": 1.6}},
+                       {"sym": "035720", "name": "카카오", "현재가": 10000, "등락률%": -1.0,
+                        "오늘_5분봉": {"VWAP대비%": -1.2, "최근30분%": -0.6, "고점대비%": -3.0, "최근30분_거래량배수": 0.8}}]
+    r2 = ap.parse("```json\n" + json.dumps({"stance": "관망", "market_view": "약세", "picks": []}) + "\n```", "kr", "m", 0)
+    assert r2["stance"] == "관망" and len(r2["picks"]) == 1 and r2["picks"][0]["sym"] == "000660" and r2["picks"][0]["auto"]
     # 감시 등록 → 정규장 가정 → 익절가 도달 시 매도
     g = ap.add_guard({"mkt": "kr", "engine": "scalp", "sym": "005930", "name": "삼성전자", "qty": 5, "entry": 10000,
                       "target_pct": 3, "stop_pct": 1.5, "trail_pct": 0, "exit_by": "15:10"})
@@ -1254,7 +1261,7 @@ def test_aipick_parse_guard_and_estimate(rt, monkeypatch):
     assert c.delete(f"/api/ai/guards/{g['id']}").get_json()["ok"]
     assert c.get("/api/ai/guards").get_json()[0]["status"] == "cancelled"
     e = c.get("/api/ai/pick/estimate?mkt=us").get_json()
-    assert len(e["models"]) == 3 and all(m["krw_hi"] > m["krw_lo"] > 0 for m in e["models"])
+    assert len(e["models"]) == 4 and all(m["krw_hi"] > m["krw_lo"] > 0 for m in e["models"])
 
 
 def test_aipick_us_session_dst():

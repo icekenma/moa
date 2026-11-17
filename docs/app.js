@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2040";
+const UI_VERSION = "261117.2058";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -314,6 +314,28 @@ function setTop(title, opt = {}) {
   $("#subdock").innerHTML = opt.menu ? subnav(opt.menu, opt.sub) : "";
   document.body.classList.toggle("has-sub", !!opt.menu);
 }
+// 큰 숫자는 처음 보일 때 0부터 올라가게(동작 줄이기 설정이면 생략)
+const RM = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)");
+function countUp(root) {
+  if (RM && RM.matches) return;
+  $$(".big, .ih-total, .ap-h-num", root).forEach((el) => {
+    const tn = [...el.childNodes].find((n) => n.nodeType === 3 && /\d/.test(n.nodeValue));
+    if (!tn) return;
+    const raw = tn.nodeValue, m = raw.match(/-?[\d,]+(\.\d+)?/);
+    if (!m) return;
+    const target = Number(m[0].replace(/,/g, "")), dec = (m[1] || "").length - (m[1] ? 1 : 0);
+    if (!isFinite(target) || Math.abs(target) < 10) return;
+    const pre = raw.slice(0, m.index), post = raw.slice(m.index + m[0].length), t0 = performance.now(), dur = 700;
+    const fmt = (v) => v.toLocaleString("ko-KR", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+    const step = (t) => {
+      if (!tn.isConnected) return;
+      const k = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+      tn.nodeValue = pre + fmt(k < 1 ? target * e : target) + post;
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
 function parseHash() {
   const raw = (location.hash || "#home").slice(1);
   const [path, query] = raw.split("?");
@@ -338,8 +360,13 @@ async function route() {
   closeSheet();
   $(".fab")?.remove();
   current = page;
-  view.innerHTML = `<div class="empty">불러오는 중</div>`;
-  try { await page.mount(h); }
+  view.innerHTML = `<div class="empty loading">불러오는 중</div>`;
+  try {
+    await page.mount(h);
+    view.classList.remove("enter"); void view.offsetWidth; view.classList.add("enter");
+    clearTimeout(route._t); route._t = setTimeout(() => view.classList.remove("enter"), 1100);
+    countUp(view);
+  }
   catch (e) {
     if (e instanceof NeedConnect && h.name !== "connect") { location.hash = "#connect"; return; }
     view.innerHTML = `<div class="notice warn">${esc(e.message)}</div><button class="btn wide" onclick="route()">다시 시도</button>`;
@@ -1205,7 +1232,7 @@ pages.invest = {
           <div class="ap-sess" id="apSess"></div>
         </section>
         <section class="card"><div class="card-head"><h2>추천 엔진</h2><span class="tiny" id="apFx"></span></div>
-          <div class="ap-models" id="apModels"><div class="empty small">불러오는 중</div></div>
+          <div class="ap-models" id="apModels"><div class="empty small loading">불러오는 중</div></div>
           <label class="ap-web"><input type="checkbox" id="apWeb" ${A.web ? "checked" : ""}><span><b>오늘 뉴스·공시 확인</b><small>웹 검색 최대 3회 · 재료 확인으로 정확도↑ · 비용↑</small></span></label>
           <button type="button" class="btn ap-go wide" id="apGo">지금 추천 받기</button>
           <div class="tiny" id="apWarn"></div>
@@ -1250,7 +1277,7 @@ pages.invest = {
     const A = this.ap, E = A.est || {}, el = $("#apModels");
     if (!el) return;
     if (E.error) { el.innerHTML = `<div class="notice warn">${esc(E.error)}</div>`; return; }
-    const note = { "claude-opus-5-5": "후보를 가장 깊게 비교 · 느림", "claude-sonnet-5-5": "정확도·속도·비용 균형", "claude-haiku-4-5": "빠르고 싸지만 판단이 얕음" };
+    const note = { "claude-fable-5-2": "가장 똑똑함 · 미묘한 신호까지 · 가장 비쌈", "claude-opus-5-5": "후보를 가장 깊게 비교 · 느림", "claude-sonnet-5-5": "정확도·속도·비용 균형", "claude-haiku-4-5": "빠르고 싸지만 판단이 얕음" };
     el.innerHTML = (E.models || []).map((x) => {
       const [nm] = x.label.split(" · ");
       return `<button type="button" class="ap-model" data-model="${esc(x.id)}" aria-pressed="${x.id === A.model}">
@@ -1269,7 +1296,7 @@ pages.invest = {
   async apRun() {
     const A = this.ap;
     if (A.busy) return;
-    A.busy = true; A.res = null; A.text = ""; A.src = []; A.status = "실시간 순위와 분봉을 모으는 중"; A.cost = "";
+    A.busy = true; A.res = null; A.text = ""; A.shown = false; A.src = []; A.status = "실시간 순위와 분봉을 모으는 중"; A.cost = "";
     this.apModels(); this.apDraw();
     let raf = 0;
     try {
@@ -1294,19 +1321,22 @@ pages.invest = {
     el.innerHTML = (A.busy || A.text || R || A.err) ? `<section class="card ap-res">
       ${A.busy ? `<div class="ai-status"><i class="ai-dot"></i><span>${esc(A.status || "")}</span></div>` : ""}
       ${R && R.stance ? `<div class="ap-stance s-${esc(R.stance)}"><b>${esc(R.stance)}</b><span>${esc(R.view || "")}</span></div>` : ""}
+      ${R && R.stance === "관망" && R.picks.length ? `<div class="notice">AI는 지금 관망을 권해요. 그래도 가장 나은 종목을 비중을 줄여 골라 뒀어요. 들어간다면 작게, 짧게.</div>` : ""}
       ${body ? `<div class="ai-ans ap-text">${mdLite(body)}</div>` : ""}
       ${A.err ? `<div class="notice warn">${esc(A.err)}</div>` : ""}
       ${A.src.length ? `<details class="ap-src"><summary class="tiny">찾아본 뉴스·자료 ${A.src.length}건</summary>${A.src.map((x) => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>`).join("")}</details>` : ""}
       ${A.cost ? `<div class="tiny">${esc(A.cost)}</div>` : ""}
     </section>
     ${R ? (R.picks.length ? R.picks.map((p, i) => {
+      const fresh = A.shown ? "" : "fresh";
       const ev = (p.win_prob / 100 * p.target_pct - (1 - p.win_prob / 100) * p.stop_pct).toFixed(2);
       const px = p.entry_type === "limit" && p.entry_price ? p.entry_price : p.price;
       const qty = cash && px ? Math.max(1, Math.floor(cash * (p.weight_pct / 100) / px)) : 1;
-      return `<section class="card ap-pick">
+      return `<section class="card ap-pick ${fresh}" style="--d:${i * 90}ms">
         <div class="ap-ph"><span class="ap-rank">${i + 1}</span>
           <a class="ap-pn" href="#invest/stock?m=${R.mkt}&s=${encodeURIComponent(p.sym)}"><b>${esc(p.name)}</b><small>${esc(p.sym)} · 지금 ${P(p.price)} <span class="${tone(p.change_pct)}">${p.change_pct == null ? "" : pct(p.change_pct, 2)}</span></small></a>
-          <span class="ap-win"><b>${p.win_prob}%</b><small>AI 추정 승률</small></span></div>
+          ${winRing(p.win_prob)}</div>
+        ${p.auto ? `<div class="tiny ap-auto">지표 자동 선정 · AI가 관망이라 앱이 실시간 지표로 고른 후보예요</div>` : ""}
         <div class="ap-bar"><i class="sl" style="width:${(p.stop_pct / (p.stop_pct + p.target_pct) * 100).toFixed(1)}%"></i><i class="tp"></i></div>
         <div class="ap-lv">
           <div><span>손절</span><b class="down">−${p.stop_pct}%</b><small>${P(px * (1 - p.stop_pct / 100))}</small></div>
@@ -1317,6 +1347,7 @@ pages.invest = {
         <button type="button" class="btn red wide" data-apbuy="${i}">매수하고 자동 익절·손절 걸기</button>
       </section>`;
     }).join("") : `<section class="card"><div class="empty">AI가 지금은 살 만한 종목이 없다고 봤어요. 관망을 권해요.</div></section>`) : ""}` : "";
+    if (R && R.picks.length && !A.shown) setTimeout(() => { A.shown = true; }, 50);
     $$("[data-apbuy]", el).forEach((b) => b.onclick = () => {
       const p = R.picks[Number(b.dataset.apbuy)], px = p.entry_type === "limit" && p.entry_price ? p.entry_price : p.price;
       const qty = cash && px ? Math.max(1, Math.floor(cash * (p.weight_pct / 100) / px)) : 1;
@@ -1376,11 +1407,11 @@ pages.invest = {
         ${seg("시장", [["kr", "국내"], ["us", "미국"]], S.m, "dv-mkt")}
         <div class="chips dv-kind" id="dvChips" role="group" aria-label="순위 종류">${[["value", "거래대금"], ["up", "급상승"], ["down", "급하락"], ["volume", "거래량"]].map(([k, v]) => `<button type="button" class="chip" data-kind="${k}" aria-pressed="${k === S.kind}">${v}</button>`).join("")}</div>
         <div class="ss-row" id="dvSess"></div>
-        <section class="card tight"><div class="dv-kwrap" id="dvKind"></div><div class="list" id="dvList"><div class="empty">불러오는 중</div></div></section>
+        <section class="card tight"><div class="dv-kwrap" id="dvKind"></div><div class="list" id="dvList"><div class="empty loading">불러오는 중</div></div></section>
         <div class="tiny" id="dvFoot" style="padding:0 3px"></div></div>`;
       $("#dvKind").append($("#dvChips"));
       bindSeg(box, "시장", (v) => { S.m = v; if (v === "us" && S.kind === "value") S.kind = "up"; box.innerHTML = ""; this.discover(box); });
-      box.onclick = (e) => { const k = e.target.closest("[data-kind]"); if (k) { S.kind = k.dataset.kind; $$("[data-kind]", box).forEach((x) => x.setAttribute("aria-pressed", String(x === k))); $("#dvList").innerHTML = `<div class="empty">불러오는 중</div>`; this.discover(box); } };
+      box.onclick = (e) => { const k = e.target.closest("[data-kind]"); if (k) { S.kind = k.dataset.kind; $$("[data-kind]", box).forEach((x) => x.setAttribute("aria-pressed", String(x === k))); $("#dvList").innerHTML = `<div class="empty loading">불러오는 중</div>`; this.discover(box); } };
       const c = memo.get(`rk.${S.m}.${S.kind}`); if (c) this.dvRender(c);
     }
     try {
@@ -1419,7 +1450,7 @@ pages.invest = {
       return;
     }
     const err = d.error ? `<div class="notice warn">${esc(d.error)}${/8010/.test(d.error) ? "<br>노트북 인터넷 주소(IP)가 바뀐 것 같아요. 키움 REST API 홈페이지 → 계좌 App Key 관리에서 현재 IP를 추가해 주세요." : ""}</div>` : "";
-    if (d.total == null) { box.innerHTML = err || `<div class="empty">불러오는 중</div>`; return; }
+    if (d.total == null) { box.innerHTML = err || `<div class="empty loading">불러오는 중</div>`; return; }
     const H = d.holdings || [];
     const mixTotal = H.reduce((s2, h) => s2 + h.value, 0) + (d.cash || 0);
     const colors = ["#172033", "#465269", "#7E8AA3", "#AFB8C9", "#D3D9E4"];
@@ -1976,14 +2007,14 @@ const mkt = {
         </div>
         <div id="mkSess"></div>
         <div id="mkNote"></div>
-        <section class="card tight"><div class="mk-head"><span>관심종목</span><button type="button" class="link" id="mkToggle"></button></div><div class="list" id="mkList"><div class="empty">불러오는 중</div></div></section>
+        <section class="card tight"><div class="mk-head"><span>관심종목</span><button type="button" class="link" id="mkToggle"></button></div><div class="list" id="mkList"><div class="empty loading">불러오는 중</div></div></section>
         <div class="tiny" id="mkFoot" style="padding:0 3px"></div>
         ${AI_BTN("chat", "AI에게 묻기 · 내 계좌·관심종목을 알고 답해요")}
       </div>`;
       bindSeg(box, "시장", (v) => {
         this.m = v; store.set("mkt", v === "us" ? "us" : ""); this.last = {};
         const c = this.snap[v] || memo.get("mk." + v);
-        if (c) this.renderBoard(c, v); else { $("#mkList").innerHTML = `<div class="empty">불러오는 중</div>`; $("#mkIdx").innerHTML = ""; $("#mkSess").innerHTML = sessionCard(v); }
+        if (c) this.renderBoard(c, v); else { $("#mkList").innerHTML = `<div class="empty loading">불러오는 중</div>`; $("#mkIdx").innerHTML = ""; $("#mkSess").innerHTML = sessionCard(v); }
         this.board(box);
       });
       $("#mkFind").onclick = () => this.search();
@@ -2065,7 +2096,7 @@ const mkt = {
     const m = h.params.get("m") === "us" ? "us" : "kr", sym = (h.params.get("s") || "").toUpperCase();
     this.d = { m, sym, range: this.lastRange || "1d", tab: "chart", q: null, chart: null, cd: null };
     setTop("시세", { back: "#invest/home", menu: "invest", sub: "stock", right: `<button type="button" class="star on-deep" id="mkBell" aria-label="가격 알림">${BELL}</button><button type="button" class="star on-deep" id="mkStar" aria-pressed="false" aria-label="관심종목">${STAR}</button>` });
-    view.innerHTML = `<div class="mk-d" id="mkD"><div class="empty">불러오는 중</div></div>`;
+    view.innerHTML = `<div class="mk-d" id="mkD"><div class="empty loading">불러오는 중</div></div>`;
     // 목록에서 이미 받은 값이 있으면 먼저 그려 둔다
     const pre = this.qmemo[m + sym] || ((this.snap[m] || {}).items || []).find((x) => x.sym === sym);
     const D = this.d;
@@ -2152,7 +2183,7 @@ const mkt = {
           <div class="mk-chart" id="mkChart"></div>
           ${seg("기간", [["1d", "1일"], ["m5", "5분"], ["d", "일"], ["w", "주"], ["mo", "월"]], D.range, "on-card mk-range")}
         </section>
-        <section class="card" id="dtPane" ${D.tab === "chart" ? "hidden" : ""}><div class="empty small">불러오는 중</div></section>
+        <section class="card" id="dtPane" ${D.tab === "chart" ? "hidden" : ""}><div class="empty small loading">불러오는 중</div></section>
         <div id="mkHold"></div>
         ${AI_BTN("stock", "AI로 이 종목 정리(뉴스 포함)", `data-sym="${esc(D.sym)}" data-mkt="${m}"`)}
         ${usd && !q.live ? `<div class="tiny" style="padding:0 3px">지금은 공개 시세(최대 15분 지연)예요. 키움을 연결하면 실시간으로 보여요.</div>` : ""}
@@ -2160,11 +2191,11 @@ const mkt = {
       bindSeg(box, "보기", (v) => {
         D.tab = v;
         $("#dtChart").hidden = v !== "chart"; $("#dtPane").hidden = v === "chart";
-        if (v === "chart") this.drawChart(); else { $("#dtPane").innerHTML = `<div class="empty small">불러오는 중</div>`; this.loadTab(); }
+        if (v === "chart") this.drawChart(); else { $("#dtPane").innerHTML = `<div class="empty small loading">불러오는 중</div>`; this.loadTab(); }
       });
       bindSeg(box, "기간", async (v) => {
         D.range = v; this.lastRange = v;
-        $("#mkChart").innerHTML = `<div class="empty small">불러오는 중</div>`;
+        $("#mkChart").innerHTML = `<div class="empty small loading">불러오는 중</div>`;
         try {
           if (v === "1d") { D.chart = this.cmemo[m + D.sym + "1d"] || await GET(`/api/market/chart/${m}/${encodeURIComponent(D.sym)}?range=1d`); }
           else D.cd = await GET(`/api/invest/candles/${m}/${encodeURIComponent(D.sym)}?tf=${v}`);
@@ -2190,7 +2221,7 @@ const mkt = {
   drawChart() {
     const D = this.d, el = $("#mkChart");
     if (!el) return;
-    if (D.range !== "1d") { el.innerHTML = candleChart(D.cd, D.q.currency, (n) => this.money(n, D.q.currency)); bindCandle(el, D.cd, (n) => this.money(n, D.q.currency)); return; }
+    if (D.range !== "1d") { const a0 = !$("svg", el); el.innerHTML = candleChart(D.cd, D.q.currency, (n) => this.money(n, D.q.currency)); bindCandle(el, D.cd, (n) => this.money(n, D.q.currency)); if (a0) $("svg", el)?.classList.add("anim"); return; }
     const c = D.chart || {}, pts = (c.points || []).filter((p) => p.c != null);
     if (pts.length < 2) { el.innerHTML = `<div class="empty small">${esc(c.error || "차트 자료가 아직 없어요")}</div>`; return; }
     const base = D.range === "1d" && c.prev ? c.prev : pts[0].c;
@@ -2203,11 +2234,12 @@ const mkt = {
     const hiI = pts.findIndex((p) => p.c === Math.max(...pts.map((x) => x.c))), loI = pts.findIndex((p) => p.c === Math.min(...pts.map((x) => x.c)));
     const cur = D.q.currency;
     const lab = (i, v, below) => { const x = X(i), anchor = x < 50 ? "start" : x > W - 50 ? "end" : "middle"; return `<text x="${x.toFixed(1)}" y="${(Y(v) + (below ? 14 : -6)).toFixed(1)}" text-anchor="${anchor}" class="mk-lab">${below ? "최저" : "최고"} ${this.money(v, cur)}</text>`; };
-    el.innerHTML = `<svg viewBox="0 -14 ${W} ${H + 28}" class="mk-svg" role="img" aria-label="가격 차트">
+    const anim = !$("svg", el);
+    el.innerHTML = `<svg viewBox="0 -14 ${W} ${H + 28}" class="mk-svg ${anim ? "anim" : ""}" role="img" aria-label="가격 차트">
       <defs><linearGradient id="mkG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${up ? "#D0342C" : "#2557D6"}" stop-opacity=".16"/><stop offset="1" stop-color="${up ? "#D0342C" : "#2557D6"}" stop-opacity="0"/></linearGradient></defs>
       ${D.range === "1d" && c.prev ? `<line x1="0" x2="${W}" y1="${Y(c.prev).toFixed(1)}" y2="${Y(c.prev).toFixed(1)}" stroke="var(--line2)" stroke-dasharray="3 4"/>` : ""}
       <path d="${line}L${W},${H}L0,${H}Z" fill="url(#mkG)"/>
-      <path d="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+      <path class="ln" pathLength="1" d="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
       ${lab(hiI, pts[hiI].c, false)}${lab(loI, pts[loI].c, true)}
       <g id="mkCur" visibility="hidden"><line y1="0" y2="${H}" stroke="var(--ink3)" stroke-width="1"/><circle r="4.5" fill="${col}" stroke="#fff" stroke-width="2"/></g>
     </svg><div class="mk-tip" id="mkTip" hidden></div>`;
@@ -2425,6 +2457,13 @@ document.addEventListener("click", (e) => {
   aiSheet(b.dataset.ai, b.dataset.sym ? { sym: b.dataset.sym, mkt: b.dataset.mkt } : {});
 }, true);
 const AI_BTN = (kind, label, attrs = "") => `<button type="button" class="btn ai-btn wide" data-ai="${kind}" ${attrs}><span class="ai-spark" aria-hidden="true">✦</span>${esc(label)}</button>`;
+
+function winRing(v) {
+  const r = 19, c = 2 * Math.PI * r, f = Math.max(0, Math.min(100, v)) / 100;
+  return `<span class="ap-ring" role="img" aria-label="AI 추정 승률 ${v}%"><svg viewBox="0 0 48 48"><defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8B5CF6"/><stop offset="1" stop-color="#E14F8C"/></linearGradient></defs>
+    <circle cx="24" cy="24" r="${r}" class="bg"/><circle cx="24" cy="24" r="${r}" class="fg" style="--c:${c.toFixed(1)};--o:${(c * (1 - f)).toFixed(1)}" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${(c * (1 - f)).toFixed(1)}"/></svg>
+    <b>${v}<small>%</small></b><em>승률</em></span>`;
+}
 
 // ---------- 주문 시트 ----------
 const usd = (n) => (n == null || isNaN(n) ? "-" : "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));

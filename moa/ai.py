@@ -19,6 +19,7 @@ import requests
 API_URL = "https://api.anthropic.com/v1/messages"
 API_VERSION = "2023-06-01"
 MODELS = {  # 화면에 보여 줄 모델과 백만 토큰당 가격(USD, 입력/출력)
+    "claude-fable-5-2": ("Fable 5.2 · 최상위 추론", 8.0, 40.0),
     "claude-sonnet-5-5": ("Sonnet 5.5 · 빠르고 똑똑함(추천)", 2.0, 10.0),
     "claude-opus-5-5": ("Opus 5.5 · 깊게 분석", 4.0, 20.0),
     "claude-haiku-4-5": ("Haiku 4.5 · 가장 빠르고 저렴", 1.0, 5.0),

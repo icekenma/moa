@@ -24,7 +24,7 @@ PICK_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 당
 - 비용: 국내 왕복 약 0.2%(세금 포함), 미국 왕복 약 0.25%+환전. 목표 수익률은 비용보다 충분히 커야 해.
 - 손익비: 목표(target_pct)는 보통 손절(stop_pct)의 1.5배 이상. 변동성이 큰 종목은 둘 다 넓게, 작은 종목은 좁게.
 - 승률(win_prob)은 '정리 시각 전에 손절보다 목표에 먼저 닿을 확률'의 솔직한 추정치(%)야. 과장하지 마. 근거가 약하면 낮게.
-- 시장 전체가 나쁘거나 장이 거의 끝나 가면 picks를 비우고 관망을 권해도 돼. 억지로 고르지 마.
+- 시장 전체가 나쁘거나 장이 거의 끝나 가면 stance를 '관망'으로 두되, picks는 절대 비우지 마. 그래도 가장 나은 1종목을 반드시 넣고 weight_pct는 5~10으로 작게, 목표·손절은 보수적으로 잡아.
 
 출력 형식(반드시 지켜)
 1) 먼저 한국어로 5~8줄 이내 짧은 판단: 첫 줄에 결론, 이어서 '- ' 항목으로 시장 분위기와 고른 이유.
@@ -35,7 +35,7 @@ PICK_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 당
   "target_pct":숫자,"stop_pct":숫자(양수),"trail_pct":숫자 또는 0,
   "exit_by":"HH:MM(한국 시간, 이때까지 안 닿으면 정리)","weight_pct":주문가능금액 중 권장 비중(5~40),
   "reasons":["근거1","근거2","근거3"],"risks":["위험1","위험2"]}]}
-picks는 최대 3개, 기대수익(승률×목표 − (1−승률)×손절)이 큰 순서로."""
+picks는 최소 1개·최대 3개, 기대수익(승률×목표 − (1−승률)×손절)이 큰 순서로."""
 
 KR_FEE = 0.2  # 왕복 비용(%) 대략
 
@@ -109,6 +109,7 @@ class AIPick:
             exit_by TEXT, status TEXT NOT NULL DEFAULT 'watching', base REAL, high REAL, last REAL,
             exit_reason TEXT, exit_price REAL, closed_at TEXT, pick_id INTEGER, msg TEXT)""")
         self._last = 0.0
+        self._cands = {}
 
     # ---------- 추천 자료 ----------
     def context(self, d):
@@ -155,6 +156,7 @@ class AIPick:
             deep.append(row)
         if not deep:
             raise ValueError("지금은 순위 자료가 비어 있어요(장 시작 전일 수 있어요)")
+        self._cands[mkt] = deep
         try:
             idx = rt.market.kr_indices() if mkt == "kr" else rt.market.us_indices()
             idx = [{k: i.get(k) for k in ("name", "price", "change_pct")} for i in idx]
@@ -232,11 +234,39 @@ class AIPick:
                               "risks": [str(x) for x in (p.get("risks") or [])][:3]})
             except Exception:
                 continue
+        if not picks:  # 관망이어도 최소 1종목: 지표로 가장 나은 후보를 고른다
+            fb = self.fallback(mkt)
+            if fb:
+                picks.append(fb)
         body = text.split("```json")[0].strip()
         pid = self.rt.db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text) VALUES(?,?,?,?,?,?,?,?)",
                            (datetime.now().isoformat(timespec="seconds"), mkt, model, usd, j.get("stance"),
                             j.get("market_view"), json.dumps(picks, ensure_ascii=False), body))
         return {"id": pid, "stance": j.get("stance"), "view": j.get("market_view"), "picks": picks, "mkt": mkt}
+
+    def fallback(self, mkt):
+        best, bs = None, -1e9
+        for c in self._cands.get(mkt) or []:
+            f = c.get("오늘_5분봉")
+            if not isinstance(f, dict):
+                continue
+            cp = c.get("등락률%") or 0
+            if cp < -3 or cp > 15:
+                continue
+            sc = (f.get("VWAP대비%") or 0) * 2 + (f.get("최근30분%") or 0) * 1.5 + (f.get("고점대비%") or 0) \
+                + min(2.0, f.get("최근30분_거래량배수") or 0) + (c.get("호가_매수잔량/매도잔량") or 1) - 1
+            if sc > bs:
+                best, bs = c, sc
+        if not best:
+            return None
+        q = self.quote(mkt, best["sym"])
+        price = q.get("price") or best.get("현재가")
+        return {"sym": best["sym"], "name": best.get("name") or best["sym"], "price": price, "change_pct": q.get("change_pct", best.get("등락률%")),
+                "exch": q.get("exch"), "score": 40, "win_prob": 45, "entry_type": "limit", "entry_price": price,
+                "target_pct": 1.8, "stop_pct": 1.0, "trail_pct": 0.8, "exit_by": "15:00" if mkt == "kr" else "",
+                "weight_pct": 5, "reasons": ["AI는 관망을 권했지만, 실시간 지표(VWAP 위치·최근 30분 흐름·거래량·호가)로 가장 나은 후보를 골랐어요",
+                                             "비중 5%, 목표·손절을 좁게 잡은 보수적 진입이에요"],
+                "risks": ["시장 분위기가 약해 승률이 낮아요"], "auto": True}
 
     def history(self):
         rows = self.rt.db.q("SELECT id,ts,mkt,model,usd,stance,view,picks FROM ai_picks ORDER BY id DESC LIMIT 15")

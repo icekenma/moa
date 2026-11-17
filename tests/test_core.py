@@ -806,3 +806,30 @@ def test_us_stock_orders_via_kiwoom(rt):
     rt.rebuild()
     assert c.post("/api/order", json={"engine": "scalp", "market": "us", "side": "buy", "code": "AAPL", "qty": 1}).status_code == 400
     assert c.get("/api/us/quote/BAD$").status_code in (400, 404)
+
+
+def test_kiwoom_total_includes_us_stocks_and_dollars(rt):
+    class Both(_FakeKiwoom):
+        def post(self, url, json=None, headers=None, timeout=None):
+            api = (headers or {}).get("api-id")
+            if api == "ust21070":
+                return _Resp({"return_code": 0, "result_list": [
+                    {"stk_cd": "NVDA", "frgn_stk_nm": "엔비디아", "qty": "3", "frgn_stk_book_uv": "120.50",
+                     "now_pric": "142.30", "evlt_amt_krw": "591000", "pl_amt_krw": "90500", "pl_rt": "18.09", "exch_rate": "1385.2"}]})
+            if api == "ust21110":
+                return _Resp({"return_code": 0, "krw_entra": "0", "result_list": [{"crnc_code": "USD", "fc_entra": "100.00", "fc_ord_alowa": "100.00"}]})
+            return super().post(url, json, headers, timeout)
+    rt.settings.update({"kiwoom_view": {"appkey": "kx", "secretkey": "s", "mock": False}})
+    rt.account.client().session = Both()
+    s = rt.account.snapshot(force=True)
+    assert s["kr_total"] == 6166000 and s["total"] == 6166000 + 591000 + 138520
+    assert any(h.get("market") == "us" for h in s["holdings"]) and s["us"]["usd_krw"] == 138520
+    c = create_app(rt).test_client()
+    assert c.get("/api/assets").get_json()["net"] == s["total"]  # 자산 탭도 합친 금액
+
+
+def test_kiwoom_total_without_overseas_account(rt):
+    rt.settings.update({"kiwoom_view": {"appkey": "ky", "secretkey": "s", "mock": False}})
+    rt.account.client().session = _FakeKiwoom()  # 미국 TR에 빈 응답 → 국내만
+    s = rt.account.snapshot(force=True)
+    assert s["total"] == 6166000 and "kr_total" not in s

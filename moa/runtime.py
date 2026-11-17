@@ -23,7 +23,7 @@ class Runtime:
         self.db = db
         self.settings = Settings(db)
         self.ledger = Ledger(db)
-        self.account = AccountView(self.settings)
+        self.account = AccountView(self.settings, fx=lambda: self.market.yh_quote("USDKRW=X")["price"])
         self.inbox = Inbox(db, self.ledger, self.settings)
         self.market = Market(self, data_dir or ".")
         self.assets = Assets(db, self.value_of, kiwoom_on=lambda: self.account.configured())

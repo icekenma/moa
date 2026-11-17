@@ -14,8 +14,9 @@ CACHE_SEC = 4
 
 
 class AccountView:
-    def __init__(self, settings):
+    def __init__(self, settings, fx=None):
         self.settings = settings
+        self.fx = fx  # 달러 환율(원) 알려 주는 함수. 미국 주식·달러 예수금을 원화로 합칠 때
         self._client = None
         self._key = None
         self._cache = None
@@ -56,6 +57,7 @@ class AccountView:
             try:
                 cl = self.client()
                 data = cl.account_summary()
+                self._add_us(cl, data)
                 data.update(configured=True, ok=True, server="모의투자" if cl.mock else "실전",
                             acct_no=self._account_no(cl), key_fp=self._fp(),
                             updated_at=datetime.now().isoformat(timespec="seconds"))
@@ -68,6 +70,35 @@ class AccountView:
                     return dict(last, ok=False, error=self._err, stale=True)
                 return {"configured": True, "ok": False, "error": self._err}
             return self._cache
+
+    def _add_us(self, cl, data):
+        """같은 계좌의 미국 주식 잔고와 달러 예수금을 원화로 바꿔 총자산에 합친다. 해외주식을 안 쓰는 계좌면 건너뛴다."""
+        try:
+            hold = cl.us_holdings()
+            cash = cl.us_cash()
+        except Exception as e:
+            data["us"] = {"error": str(e)}
+            return
+        fx = next((h["fx"] for h in hold if h.get("fx")), None)
+        if not fx and cash["usd"]:
+            try:
+                fx = float(self.fx()) if self.fx else None
+            except Exception:
+                fx = None
+        usd_krw = round(cash["usd"] * fx) if fx else 0
+        ev = sum(h["value"] for h in hold)
+        pl = sum(h["pnl"] for h in hold)
+        data["us"] = {"eval": ev, "pnl": pl, "usd": cash["usd"], "usd_orderable": cash["usd_orderable"],
+                      "usd_krw": usd_krw, "fx": fx, "count": len(hold)}
+        if not (hold or usd_krw):
+            return
+        data["kr_total"] = data["total"]
+        data["total"] += ev + usd_krw
+        data["eval"] += ev
+        data["buy"] += ev - pl
+        data["pnl"] += pl
+        data["pnl_pct"] = round(data["pnl"] / data["buy"] * 100, 2) if data["buy"] else 0
+        data["holdings"] = sorted(data["holdings"] + hold, key=lambda x: -x["value"])
 
     def _account_no(self, cl):
         """계좌번호(ka00001). 못 받아도 조회에는 지장 없게 빈 값."""

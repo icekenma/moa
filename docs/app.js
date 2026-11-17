@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1703";
+const UI_VERSION = "261117.1706";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -148,6 +148,11 @@ async function kwFetch(force) {
   }
 }
 const fullAcct = (no) => { const d = String(no || "").replace(/\D/g, ""); return d.length >= 8 ? `${d.slice(0, 4)}-${d.slice(4, 8)}${d.length > 8 ? "-" + d.slice(8) : ""}` : d; };
+function usLine(d) {  // 미국 주식·달러가 총자산에 합쳐졌을 때 한 줄 설명
+  const u = d.us;
+  if (!u || u.error || !(u.eval || u.usd_krw)) return "";
+  return `<div class="tiny">국내 ${won(d.kr_total)}원 + 미국 주식 ${won(u.eval)}원${u.usd ? ` + 달러 ${usd(u.usd)}(약 ${won(u.usd_krw)}원)` : ""}${u.fx ? ` · 환율 ${won(u.fx)}원` : ""}</div>`;
+}
 function kwCardHtml(d) {
   if (!d || !d.configured) return `<h2>키움 계좌</h2><div class="small muted">아래 키움증권(조회 전용)에 앱키·시크릿키를 넣고 연결 확인을 누르면 여기서 언제든 계좌를 볼 수 있어요.</div>`;
   if (d.total == null) return `<div class="kw-top"><b>키움증권</b></div><div class="notice warn">${esc(d.error || "불러오는 중")}</div>`;
@@ -161,6 +166,7 @@ function kwCardHtml(d) {
     <div><div class="kw-lbl">총자산(추정예탁자산)</div><div class="kw-total">${won(d.total)}<small>원</small></div>
       <div class="kw-pnl ${tone(d.pnl)}">평가손익 ${signed(d.pnl)}원 (${pct(d.pnl_pct, 2)})</div></div>
     <div class="kw-kv"><div><span>주식 평가</span><b>${won(d.eval)}</b></div><div><span>예수금</span><b>${won(d.cash)}</b></div><div><span>주문 가능</span><b>${won(d.orderable)}</b></div></div>
+    ${usLine(d)}
     ${H.length ? `<div class="kw-list">${H.slice(0, 6).map((h) => `<div><span class="kw-nm">${esc(h.name)}<i>${won(h.qty)}주</i></span><b>${won(h.value)}</b><em class="${tone(h.pnl)}">${pct(h.pnl_pct, 2)}</em></div>`).join("")}
       ${H.length > 6 ? `<div class="kw-more">외 ${H.length - 6}종목</div>` : ""}</div>` : `<div class="kw-more">보유 종목 없음</div>`}
     ${!live && d.error ? `<div class="kw-err">${esc(d.error)}</div>` : ""}
@@ -910,6 +916,7 @@ pages.invest = {
         <div><div class="small muted" style="font-weight:700">총자산(추정예탁자산)</div><div class="big">${won(d.total)}원</div></div>
         <div class="small ${tone(d.pnl)}" style="font-weight:700">평가손익 ${signed(d.pnl)}원 (${pct(d.pnl_pct, 2)})</div>
         <div class="kv"><div>주식 평가<b>${won(d.eval)}</b></div><div>예수금<b>${won(d.cash)}</b></div><div>주문 가능<b>${won(d.orderable)}</b></div></div>
+        ${usLine(d)}
         ${mixTotal ? `<div class="mix" role="img" aria-label="보유 비중">${H.slice(0, 5).map((h, i) => `<div style="flex:${h.value} 1 0;background:${colors[i]}"></div>`).join("")}${H.length > 5 ? `<div style="flex:${H.slice(5).reduce((a, h) => a + h.value, 0)} 1 0;background:#E3E7F0"></div>` : ""}<div style="flex:${d.cash || 0} 1 0;background:var(--hl)"></div></div>
           <div class="legend tiny">${H.slice(0, 5).map((h, i) => `<span><i class="sw" style="background:${colors[i]}"></i>${esc(h.name)} ${Math.round((h.value / mixTotal) * 100)}%</span>`).join("")}<span><i class="sw" style="background:var(--hl)"></i>예수금 ${Math.round(((d.cash || 0) / mixTotal) * 100)}%</span></div>` : ""}
       </section>
@@ -917,7 +924,7 @@ pages.invest = {
       <section class="card tight"><div class="list">${H.length ? H.map((h) => `<div class="item">
         <span class="ico">${esc(h.name.slice(0, 2))}</span>
         <span class="main"><b>${esc(h.name)} <span class="tiny">${esc(h.code)}</span></b>
-          <span class="sub">${won(h.qty)}주 · 평균 ${won(h.avg_price)} · 현재 ${won(h.price)}</span></span>
+          <span class="sub">${h.market === "us" ? "미국 · " : ""}${won(h.qty)}주 · 평균 ${h.market === "us" ? usd(h.avg_price) : won(h.avg_price)} · 현재 ${h.market === "us" ? usd(h.price) : won(h.price)}</span></span>
         <span class="end"><b>${won(h.value)}</b><span class="small ${tone(h.pnl)}" style="font-weight:700">${signed(h.pnl)} (${pct(h.pnl_pct, 2)})</span></span></div>`).join("")
         : `<div class="empty">보유 종목이 없어요</div>`}</div></section>
       <div class="tiny" style="padding:0 4px">몇 초마다 키움에서 새로 받아요. 자산 탭에서 이 계좌를 연결하면 순자산에도 자동으로 들어가요.</div>`;

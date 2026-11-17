@@ -130,6 +130,7 @@ const pages = {};
 let current = null, timer = null;
 function setTop(title, opt = {}) {
   $("#title").textContent = title;
+  if (opt.badge) $("#title").insertAdjacentHTML("beforeend", ` <span class="ver">${esc(opt.badge)}</span>`);
   document.title = title === "moa" ? "moa" : `${title} · moa`;
   const top = $("#top");
   $(".back", top)?.remove();
@@ -221,8 +222,8 @@ async function categories() { if (!catCache) catCache = (await GET(`/api/ledger?
 
 pages.home = {
   async mount() {
-    setTop("moa", { right: `<span class="tiny">${korDate(localToday())}</span>` });
-    const d = await GET("/api/home");
+    const [d, ping] = await Promise.all([GET("/api/home"), GET("/api/ping").catch(() => ({}))]);
+    setTop("홈", { badge: ping.version ? "v " + ping.version : "", right: `<span class="tiny">${korDate(localToday())}</span>` });
     const L = d.ledger, A = d.assets, S = d.scalp, D = d.dca;
     const m = Number(L.month.slice(5));
     const hero = L.budget > 0

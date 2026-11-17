@@ -22,6 +22,7 @@ h1,h2,h3{margin:0;letter-spacing:-0.02em}
 /* 틀 */
 .top{position:sticky;top:0;z-index:20;background:rgba(238,241,244,.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
   padding:calc(10px + var(--safe-t)) 16px 10px;display:flex;align-items:center;gap:8px;min-height:56px;max-width:var(--w);margin:0 auto}
+.top .ver{display:inline-block;vertical-align:4px;margin-left:6px;padding:2px 8px;border-radius:6px;background:#E2E6EB;font-size:12px;font-weight:700;color:var(--ink2);letter-spacing:0;font-family:ui-monospace,Consolas,monospace}
 .top h1{font-size:22px;font-weight:800;letter-spacing:-0.03em;flex:1 1 auto;min-width:0}
 .top .back{width:44px;height:44px;margin-left:-10px;border:0;background:transparent;display:inline-flex;align-items:center;justify-content:center;border-radius:10px}
 main{max-width:var(--w);margin:0 auto;padding:4px 16px calc(96px + var(--safe-b));display:flex;flex-direction:column;gap:12px}

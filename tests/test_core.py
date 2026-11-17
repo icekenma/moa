@@ -1307,7 +1307,8 @@ def test_ai_outcomes_judge_window_and_stats(rt, monkeypatch):
     b = lambda o, h, l, c: {"o": o, "h": h, "l": l, "c": c}
     assert AP.judge([b(100, 101, 99.5, 100.5), b(100.5, 103.2, 100, 103)], 100, 3, 1.5)[0] == "익절"
     assert AP.judge([b(100, 101, 98.4, 99)], 100, 3, 1.5)[0] == "손절"
-    assert AP.judge([b(100, 104, 98, 101)], 100, 3, 1.5)[0] == "손절"  # 한 봉에 둘 다 → 보수적으로 손절
+    assert AP.judge([b(100, 104, 98, 101)], 100, 3, 1.5)[0] == "손절"  # 한 봉에 둘 다, 양봉 → 저가가 먼저
+    assert AP.judge([b(101, 104, 98, 100)], 100, 3, 1.5)[0] == "익절"  # 음봉 → 고가가 먼저
     r = AP.judge([b(100, 101, 99.8, 100.4)], 100, 3, 1.5)
     assert r[0] == "시간 정리" and round(r[2], 1) == 100.4
     assert AP.judge([b(100, 101, 99.8, 100)], 100, 3, 1.5, "limit", 99)[0] == "미체결"
@@ -1410,10 +1411,10 @@ def test_ai_outcome_ignores_pre_recommendation_bar_range(rt, monkeypatch):
     monkeypatch.setattr(rt.invest, "candles", lambda m, s, tf: {"bars": bars})
     rt.aipick.evaluate(force=True)
     lim, mkt_ = rt.db.q("SELECT * FROM ai_outcomes ORDER BY pick_id")
-    assert lim["result"] == "미체결" and lim["status"] == "done" and lim["alt_result"] == "익절" and lim["alt_net"] == 2.25
-    assert mkt_["result"] == "익절" and mkt_["net_pct"] == 2.25 and mkt_["mae"] > -1
+    assert lim["result"] == "익절" and lim["net_pct"] == 2.25 and lim["status"] == "done" and lim["alt_result"] == "미체결"
+    assert mkt_["result"] == "익절" and mkt_["net_pct"] == 2.25 and mkt_["mae"] > -1 and mkt_["alt_result"] is None
     a = rt.aipick.stats()["all"]
-    assert a["unfilled"] == 1 and a["tp"] == 1 and a["alt_tp_rate"] == 100.0
+    assert a["tp"] == 2 and a["unfilled"] == 0 and a["alt_n"] == 1 and a["alt_unfilled"] == 1
     # 예전 방식으로 잘못 채점된 기록도 다시 채점된다
     db.x("UPDATE ai_outcomes SET result='손절', net_pct=-1.75, gv=NULL WHERE pick_id=?", (mkt_["pick_id"],))
     rt.aipick.evaluate(force=True)

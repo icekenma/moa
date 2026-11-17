@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.0714";
+const UI_VERSION = "261118.0718";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1538,7 +1538,7 @@ pages.invest = {
           <div><span>최고 / 최저</span><b><em class="up">${a.best == null ? "-" : pct(a.best, 1)}</em> / <em class="down">${a.worst == null ? "-" : pct(a.worst, 1)}</em></b></div></div>
         ${resultBar(a)}
         <div class="tiny">추천 ${a.n}건 · 채점 끝 ${a.done} · 진행 중 ${a.live} · 미체결 ${a.unfilled} · AI 비용 ${won$(a.cost_usd)}</div>
-        ${a.alt_n ? `<div class="notice">지정가를 기다리지 않고 <b>추천 순간 시장가로 바로 샀다면</b>: ${a.alt_n}건 평균 <b class="${tone(a.alt_avg)}">${pct(a.alt_avg, 2)}</b> · 익절 도달 ${a.alt_tp_rate}%</div>` : ""}
+        ${a.alt_n ? `<div class="notice">성적은 <b>추천을 보고 바로 샀을 때</b> 기준이에요. AI가 말한 지정가를 기다렸다면: ${a.alt_n}건 중 미체결 ${a.alt_unfilled}건${a.alt_avg == null ? "" : ` · 체결된 것 평균 <b class="${tone(a.alt_avg)}">${pct(a.alt_avg, 2)}</b>`}</div>` : ""}
       </section>
       <section class="card as-learn" id="asLearn"><div class="empty small loading">자체 학습 상태 불러오는 중</div></section>
       <section class="card as-ins"><h2>한눈에 해석</h2><ul>${insight.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></section>
@@ -1563,8 +1563,8 @@ pages.invest = {
         <span class="as-badge r-${esc(r.result || "진행 중")}">${esc(r.result || "진행 중")}</span>
         <span class="main"><b>${esc(r.name || r.sym)} ${r.bought ? `<span class="tag g">샀음</span>` : ""}</b>
           <span class="sub">${esc(r.ts.slice(5, 16).replace("T", " "))} · ${r.mkt === "us" ? "미국" : "국내"} · ${esc(mn(r.model))} · 예측 ${r.win_prob ?? "-"}% · +${r.target_pct}/−${r.stop_pct}${r.mfe != null ? ` · 최대 ${pct(r.mfe, 1)}/${pct(r.mae, 1)}` : ""}</span></span>
-        <span class="end"><b class="${tone(r.net_pct)}">${r.net_pct == null ? "-" : pct(r.net_pct, 2)}</b><span class="tiny">${r.entry_type === "limit" && r.alt_result ? `바로 샀다면 <span class="${tone(r.alt_net)}">${esc(r.alt_result)} ${pct(r.alt_net, 1)}</span>` : r.src ? esc(r.src) : ""}</span></span></a>`).join("") : `<div class="empty">아직 추천 기록이 없어요</div>`}</div></section>
-      <div class="tiny" style="padding:0 3px 8px">채점 방법: 추천 시점 가격에 샀다고 봐요. 지정가 추천은 추천 뒤 30분 안에 그 가격에 닿았을 때만 산 것으로 보고, 안 닿으면 '미체결'이에요(그때는 시장가로 바로 샀을 때의 결과를 따로 보여 줘요). 추천 시각이 낀 5분봉은 추천 전 움직임이 섞여 있어 종가만 써요. 그 뒤 5분봉에서 손절가·익절가 중 먼저 닿은 쪽으로 판정해요. 한 봉 안에 둘 다 닿으면 손절로 봐요. 둘 다 안 닿으면 정리 시각(국내 추천 정리 시각, 미국 정규장 마감) 가격으로 끝내요. 수익률은 왕복 비용(국내 0.2%, 미국 0.25%)을 뺀 값이에요.</div>`;
+        <span class="end"><b class="${tone(r.net_pct)}">${r.net_pct == null ? "-" : pct(r.net_pct, 2)}</b><span class="tiny">${r.alt_result ? `지정가였다면 <span class="${tone(r.alt_net)}">${esc(r.alt_result)}${r.alt_net == null ? "" : " " + pct(r.alt_net, 1)}</span>` : r.src ? esc(r.src) : ""}</span></span></a>`).join("") : `<div class="empty">아직 추천 기록이 없어요</div>`}</div></section>
+      <div class="tiny" style="padding:0 3px 8px">채점 방법: 추천을 보고 그 순간 가격에 바로 샀다고 봐요(AI가 지정가를 말했어도 기다리지 않아요. 지정가를 기다렸을 때의 결과는 참고로 따로 보여 줘요). 추천 시각이 낀 5분봉은 추천 전 움직임이 섞여 있어 종가만 써요. 그 뒤 5분봉에서 손절가·익절가 중 먼저 닿은 쪽으로 판정해요. 한 봉 안에 둘 다 닿으면 봉 모양으로 순서를 짐작해요(음봉이면 익절, 양봉이면 손절). 둘 다 안 닿으면 정리 시각(국내 추천 정리 시각, 미국 정규장 마감) 가격으로 끝내요. 수익률은 왕복 비용(국내 0.2%, 미국 0.25%)을 뺀 값이에요.</div>`;
     this.asLearn();
     $("#asRoot").onclick = async (e) => {
       if (e.target.closest("#lrRun")) { aiSheet("learn"); sheet.addEventListener("close", () => this.asLearn(), { once: true }); return; }
@@ -2340,7 +2340,7 @@ const mkt = {
       const p = await GET(`/api/ai/picks/${D.pk}`);
       const x = p.picks.find((y) => String(y.sym).toUpperCase() === D.sym);
       if (!x || this.d !== D) return;
-      const o = x.outcome || {}, entry = o.entry || (x.entry_type === "limit" && x.entry_price ? x.entry_price : x.price);
+      const o = x.outcome || {}, entry = o.entry || x.price;
       D.mark = { ts: p.ts, end: o.end_ts && o.end_ts.length >= 16 ? o.end_ts : null, entry, tp: entry * (1 + x.target_pct / 100), sl: entry * (1 - x.stop_pct / 100),
         tp_pct: x.target_pct, sl_pct: x.stop_pct };
       D.pick = { p, x, o };
@@ -2357,8 +2357,7 @@ const mkt = {
       <div class="tiny">${esc(p.ts.slice(5, 16).replace("T", " "))} 추천 · ${esc(p.model.replace("claude-", ""))} · 예측 승률 ${x.win_prob}%${o.end_ts ? ` · 평가 마감 ${esc(String(o.end_ts).slice(5, 16).replace("T", " "))}` : ""}</div>
       <div class="pk-lv"><div class="en"><span>추천가</span><b>${M(D.mark.entry)}</b></div><div class="tp"><span>익절 +${x.target_pct}%</span><b>${M(D.mark.tp)}</b></div><div class="sl"><span>손절 −${x.stop_pct}%</span><b>${M(D.mark.sl)}</b></div>
         ${o.exit ? `<div><span>가상 청산</span><b>${M(o.exit)}</b></div>` : ""}</div>
-      ${res === "미체결" ? `<div class="notice">AI가 추천한 지정가 ${M(D.mark.entry)}에 추천 뒤 30분 안에 닿지 않아 '미체결'로 봐요.${o.alt_result ? ` 추천 순간 가격 ${M(x.price)}에 바로 샀다면 <b class="${tone(o.alt_net)}">${esc(o.alt_result)} ${pct(o.alt_net, 2)}</b>였어요.` : ""}</div>`
-        : o.alt_result && x.entry_type === "limit" ? `<div class="tiny">추천 순간 가격 ${M(x.price)}에 바로 샀다면 <b class="${tone(o.alt_net)}">${esc(o.alt_result)} ${pct(o.alt_net, 2)}</b></div>` : ""}
+      ${o.alt_result ? `<div class="tiny">추천 순간 가격에 바로 샀을 때 기준이에요. AI 지정가 ${M(x.entry_price)}를 기다렸다면 <b class="${tone(o.alt_net)}">${esc(o.alt_result)}${o.alt_net == null ? "" : " " + pct(o.alt_net, 2)}</b></div>` : ""}
       <div class="tiny">차트에 추천 시점(세로선)과 익절·손절·추천가 선을 함께 그렸어요. 색칠된 구간이 평가 기간이에요.</div>
       <button type="button" class="btn sm" id="pkOpen">추천 근거·전체 내용 보기</button></section>`;
     $("#pkOpen").onclick = () => pickSheet(D.pk);
@@ -2815,9 +2814,9 @@ async function pickSheet(id) {
           <div><dt>추천 때 가격</dt><dd>${P(x.price)}</dd></div><div><dt>지금 가격</dt><dd class="${tone(since)}">${P(x.now)}${since == null ? "" : ` (${pct(since, 2)})`}</dd></div>
           <div><dt>익절 / 손절</dt><dd><span class="up">+${x.target_pct}%</span> / <span class="down">−${x.stop_pct}%</span></dd></div>
           <div><dt>AI 예측 승률</dt><dd>${x.win_prob}%</dd></div>
-          ${o.entry ? `<div><dt>가상 매수 → 청산</dt><dd>${P(o.entry)} → ${P(o.exit)}</dd></div>` : ""}
+          ${o.entry ? `<div><dt>바로 매수 → 청산</dt><dd>${P(o.entry)} → ${P(o.exit)}</dd></div>` : ""}
           ${o.mfe != null ? `<div><dt>추천 뒤 최대 상승 / 하락</dt><dd><span class="up">${pct(o.mfe, 2)}</span> / <span class="down">${pct(o.mae, 2)}</span></dd></div>` : ""}
-${o.alt_result && x.entry_type === "limit" ? `<div><dt>추천 순간 시장가로 샀다면</dt><dd class="${tone(o.alt_net)}">${esc(o.alt_result)} ${pct(o.alt_net, 2)}</dd></div>` : ""}
+${o.alt_result ? `<div><dt>AI 지정가(${P(x.entry_price)})를 기다렸다면</dt><dd class="${tone(o.alt_net)}">${esc(o.alt_result)}${o.alt_net == null ? "" : " " + pct(o.alt_net, 2)}</dd></div>` : ""}
           <div><dt>평가 마감</dt><dd>${esc((o.end_ts || "").slice(5, 16).replace("T", " ") || "-")}${o.src ? ` · ${esc(o.src)}` : ""}</dd></div>
           <div><dt>직접 매수</dt><dd>${x.guard ? `했어요 · ${esc(x.guard.status === "watching" ? "감시 중" : x.guard.exit_reason || x.guard.status)}` : "안 했어요"}</dd></div>
         </dl>

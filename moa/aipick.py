@@ -514,7 +514,11 @@ def judge(bars, entry, tp, sl, entry_type="market", limit=None, fill_bars=FILL_B
     for b in bars[i0:]:
         hi, lo = max(hi, b["h"]), min(lo, b["l"])
         hit_dn, hit_up = b["l"] <= dn, b["h"] >= up
-        if hit_dn:  # 한 봉 안에서 둘 다 닿으면 보수적으로 손절
+        if hit_dn and hit_up:
+            # 한 봉 안에서 둘 다 닿았을 때: 봉 모양으로 순서를 짐작한다(음봉은 고가가 먼저 → 익절, 양봉은 저가가 먼저 → 손절)
+            first_up = b["c"] < b["o"]
+            return ("익절" if first_up else "손절", px, up if first_up else dn, (hi / px - 1) * 100, (lo / px - 1) * 100, True)
+        if hit_dn:
             return ("손절", px, dn, (hi / px - 1) * 100, (lo / px - 1) * 100, True)
         if hit_up:
             return ("익절", px, up, (hi / px - 1) * 100, (lo / px - 1) * 100, True)
@@ -592,7 +596,8 @@ def evaluate(self, force=False):
                 src = "일봉(순서 추정)"
             except Exception:
                 bars = []
-        res = judge(bars, r["rec_price"], r["target_pct"], r["stop_pct"], r["entry_type"], r["entry_price"])
+        # 주 성적: 추천을 보고 그 순간 가격에 바로 샀다고 본다(지정가를 기다리지 않음)
+        res = judge(bars, r["rec_price"], r["target_pct"], r["stop_pct"], "market")
         if not res:
             if done and now - end > timedelta(days=3):
                 self.rt.db.x("UPDATE ai_outcomes SET status='done', result='자료 없음', updated_at=? WHERE pick_id=? AND idx=?",
@@ -601,14 +606,18 @@ def evaluate(self, force=False):
         result, entry, exit_, mfe, mae, filled = res
         ret = (exit_ / entry - 1) * 100 if entry and exit_ else None
         net = ret - FEE[r["mkt"]] if ret is not None else None
-        final = done or result in ("익절", "손절") or (result == "미체결" and now >= ts + timedelta(minutes=5 * FILL_BARS + 5))
+        final = done or result in ("익절", "손절")
         if not final:
             result = "진행 중"
-        # 참고: 지정가를 기다리지 않고 추천 순간 시장가로 샀다면
-        alt = judge(bars, r["rec_price"], r["target_pct"], r["stop_pct"], "market")
+        # 참고: AI가 말한 지정가를 기다렸다면(추천 뒤 30분 안에 닿아야 체결)
         alt_result, alt_net = None, None
-        if alt and (done or alt[0] in ("익절", "손절")):
-            alt_result, alt_net = alt[0], round((alt[2] / alt[1] - 1) * 100 - FEE[r["mkt"]], 3)
+        if r["entry_type"] == "limit" and r["entry_price"] and r["entry_price"] < r["rec_price"] * 0.999:
+            alt = judge(bars, r["rec_price"], r["target_pct"], r["stop_pct"], "limit", r["entry_price"])
+            if alt and alt[0] == "미체결":
+                if done or now >= ts + timedelta(minutes=5 * FILL_BARS + 5):
+                    alt_result = "미체결"
+            elif alt and (done or alt[0] in ("익절", "손절")):
+                alt_result, alt_net = alt[0], round((alt[2] / alt[1] - 1) * 100 - FEE[r["mkt"]], 3)
         self.rt.db.x("UPDATE ai_outcomes SET status=?, result=?, filled=?, entry=?, exit=?, ret_pct=?, net_pct=?, mfe=?, mae=?, "
                      "last=?, src=?, updated_at=?, alt_result=?, alt_net=?, gv=? WHERE pick_id=? AND idx=?",
                      ("done" if final else "live", result, int(filled), entry, exit_,
@@ -660,10 +669,9 @@ def stats(self, days=0, mkt="", model=""):
                 "pred": round(sum(r["win_prob"] or 0 for r in fin) / len(fin), 1) if fin else None,
                 "mfe": round(sum(r["mfe"] or 0 for r in fin) / len(fin), 2) if fin else None,
                 "mae": round(sum(r["mae"] or 0 for r in fin) / len(fin), 2) if fin else None,
-                "alt_n": len([r for r in rs if r.get("alt_net") is not None]),
+                "alt_n": len([r for r in rs if r.get("alt_result")]),
+                "alt_unfilled": len([r for r in rs if r.get("alt_result") == "미체결"]),
                 "alt_avg": (lambda xs: round(sum(xs) / len(xs), 2) if xs else None)([r["alt_net"] for r in rs if r.get("alt_net") is not None]),
-                "alt_tp_rate": (lambda xs: round(sum(1 for x in xs if x == "익절") / len(xs) * 100, 1) if xs else None)(
-                    [r["alt_result"] for r in rs if r.get("alt_net") is not None]),
                 "cost_usd": round(cost, 4)}
     ORDER = ["~40%", "40~50%", "50~60%", "60~70%", "70%~", "장 전", "장 초반(~10시)", "장 초반", "장 중반(~14시)", "장 중반", "장 후반", "장 마감 뒤",
              "공격", "보통", "관망", "지표 자동 선정", "샀음", "안 삼", "kr", "us"]
@@ -755,7 +763,7 @@ def _feat_of(c, ss):
             "left": ss.get("left_min"), "open": bool(ss.get("open"))}
 
 
-GRADE_V = 2  # 채점 방식 버전(바뀌면 최근 추천을 다시 채점)
+GRADE_V = 3  # 채점 방식 버전(바뀌면 최근 추천을 다시 채점)
 
 
 def _ensure_cols(db):

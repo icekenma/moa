@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.0718";
+const UI_VERSION = "261118.0724";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -385,6 +385,7 @@ async function route() {
     view.classList.remove("enter"); void view.offsetWidth; view.classList.add("enter");
     clearTimeout(route._t); route._t = setTimeout(() => view.classList.remove("enter"), 1100);
     countUp(view);
+    restoreScroll();
   }
   catch (e) {
     if (e instanceof NeedConnect && h.name !== "connect") { location.hash = "#connect"; return; }
@@ -393,7 +394,22 @@ async function route() {
   if (page.refresh) timer = setInterval(() => { if (current === page && !document.hidden && !sheet.open) page.refresh(h).catch(() => {}); }, page.every || 3000);
   window.scrollTo(0, 0);
 }
-window.addEventListener("hashchange", route);
+// 뒤로 가기: 직전에 보던 화면으로(스크롤 위치도 되살린다)
+const nav = { cur: location.hash, prev: "", scroll: {}, restore: "" };
+function navBack(fallback) { return nav.prev && nav.prev !== location.hash && !nav.prev.startsWith("#invest/stock") ? nav.prev : nav.prevNonStock || fallback; }
+window.addEventListener("hashchange", () => {
+  nav.scroll[nav.cur] = window.scrollY;
+  nav.prev = nav.cur; nav.cur = location.hash;
+  if (!nav.prev.startsWith("#invest/stock")) nav.prevNonStock = nav.prev;
+  route();
+});
+document.addEventListener("click", (e) => { const b = e.target.closest("a.back"); if (b) nav.restore = b.getAttribute("href"); }, true);
+function restoreScroll() {
+  if (nav.restore && nav.restore === location.hash && nav.scroll[location.hash] != null) {
+    const y = nav.scroll[location.hash]; nav.restore = "";
+    [0, 250, 700].forEach((t) => setTimeout(() => window.scrollTo(0, y), t));
+  } else nav.restore = "";
+}
 // 가계부 월 이동(어느 2뎁스 화면이든 공통)
 view.addEventListener("click", (e) => {
   const b = e.target.closest("[data-mon]");
@@ -1455,6 +1471,7 @@ pages.invest = {
     let st;
     try { st = await GET("/api/ai/stats?days=30"); } catch (e) { el.innerHTML = `<div class="tiny">${esc(e.message)}</div>`; return; }
     if (!$("#apScore")) return;
+    el.onclick = (e) => { const g = e.target.closest("[data-go]"); if (g) { e.preventDefault(); location.hash = g.dataset.go; } };
     const a = st.all;
     el.innerHTML = a.n ? `<div class="card-head"><h2>AI 추천 성적 · 최근 30일</h2><span class="link">자세히 ›</span></div>
       <div class="sc-kpi">
@@ -1462,7 +1479,8 @@ pages.invest = {
         <div><span>익절 도달률</span><b>${a.tp_rate == null ? "-" : a.tp_rate + "%"}</b></div>
         <div><span>AI 예측 승률</span><b>${a.pred == null ? "-" : a.pred + "%"}</b></div></div>
       ${resultBar(a)}
-      <div class="tiny">추천 ${a.n}건 · 채점 ${a.done} · 진행 중 ${a.live}${a.unfilled ? ` · 미체결 ${a.unfilled}` : ""} · 사지 않은 종목도 추천 시점 가격으로 채점해요</div>`
+      <div class="sc-recent">${st.rows.slice(0, 4).map((r) => `<span class="sc-r" data-go="#invest/stock?m=${r.mkt}&s=${encodeURIComponent(r.sym)}&pk=${r.pick_id}"><i class="as-badge r-${esc(r.result || "진행 중")}">${esc(r.result || "진행 중")}</i><b>${esc(r.name || r.sym)}</b><em class="${tone(r.net_pct)}">${r.net_pct == null ? "" : pct(r.net_pct, 1)}</em></span>`).join("")}</div>
+      <div class="tiny">추천 ${a.n}건 · 채점 ${a.done} · 진행 중 ${a.live} · 종목을 누르면 차트에서 추적, 카드를 누르면 전체 성적</div>`
       : `<div class="card-head"><h2>AI 추천 성적</h2></div><div class="tiny">추천을 받으면, 사지 않아도 그 뒤 실제 가격으로 익절·손절·시간 정리 결과를 매겨 여기 모아 보여 드려요.</div>`;
   },
   async asLearn() {
@@ -1540,6 +1558,12 @@ pages.invest = {
         <div class="tiny">추천 ${a.n}건 · 채점 끝 ${a.done} · 진행 중 ${a.live} · 미체결 ${a.unfilled} · AI 비용 ${won$(a.cost_usd)}</div>
         ${a.alt_n ? `<div class="notice">성적은 <b>추천을 보고 바로 샀을 때</b> 기준이에요. AI가 말한 지정가를 기다렸다면: ${a.alt_n}건 중 미체결 ${a.alt_unfilled}건${a.alt_avg == null ? "" : ` · 체결된 것 평균 <b class="${tone(a.alt_avg)}">${pct(a.alt_avg, 2)}</b>`}</div>` : ""}
       </section>
+      <div class="sec-title" id="asList">추천 하나하나 · ${st.rows.length}건 <span class="tiny" style="margin-left:auto;font-weight:600">누르면 차트에 추천 시점·익절·손절 선</span></div>
+      <section class="card tight"><div class="list">${st.rows.length ? st.rows.map((r, ri) => `<a class="item as-r ${ri >= 8 ? "more" : ""}" href="#invest/stock?m=${r.mkt}&s=${encodeURIComponent(r.sym)}&pk=${r.pick_id}">
+        <span class="as-badge r-${esc(r.result || "진행 중")}">${esc(r.result || "진행 중")}</span>
+        <span class="main"><b>${esc(r.name || r.sym)} ${r.bought ? `<span class="tag g">샀음</span>` : ""}</b>
+          <span class="sub">${esc(r.ts.slice(5, 16).replace("T", " "))} · ${r.mkt === "us" ? "미국" : "국내"} · ${esc(mn(r.model))} · 예측 ${r.win_prob ?? "-"}% · +${r.target_pct}/−${r.stop_pct}${r.mfe != null ? ` · 최대 ${pct(r.mfe, 1)}/${pct(r.mae, 1)}` : ""}</span></span>
+        <span class="end"><b class="${tone(r.net_pct)}">${r.net_pct == null ? "-" : pct(r.net_pct, 2)}</b><span class="tiny">${r.alt_result ? `지정가였다면 <span class="${tone(r.alt_net)}">${esc(r.alt_result)}${r.alt_net == null ? "" : " " + pct(r.alt_net, 1)}</span>` : r.src ? esc(r.src) : ""}</span></span></a>`).join("") : `<div class="empty">아직 추천 기록이 없어요</div>`}</div>${st.rows.length > 8 ? `<button type="button" class="btn sm soft as-more" id="asMore">나머지 ${st.rows.length - 8}건 더 보기</button>` : ""}</section>
       <section class="card as-learn" id="asLearn"><div class="empty small loading">자체 학습 상태 불러오는 중</div></section>
       <section class="card as-ins"><h2>한눈에 해석</h2><ul>${insight.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></section>
       ${st.by_mkt.length ? `<div class="as-duo">${["kr", "us"].map((k) => { const x = st.by_mkt.find((y) => y.key === k); return `<section class="card as-m ${k}">
@@ -1558,15 +1582,11 @@ pages.invest = {
       ${table("AI 태도별", st.by_stance, (k) => k)}
       ${table("추천 받은 시간대별", st.by_tod, (k) => k)}
       ${table("직접 산 것 vs 안 산 것", st.by_bought, (k) => k)}
-      <div class="sec-title">추천 하나하나 · ${st.rows.length}건</div>
-      <section class="card tight"><div class="list">${st.rows.length ? st.rows.map((r) => `<a class="item as-r" href="#invest/stock?m=${r.mkt}&s=${encodeURIComponent(r.sym)}&pk=${r.pick_id}">
-        <span class="as-badge r-${esc(r.result || "진행 중")}">${esc(r.result || "진행 중")}</span>
-        <span class="main"><b>${esc(r.name || r.sym)} ${r.bought ? `<span class="tag g">샀음</span>` : ""}</b>
-          <span class="sub">${esc(r.ts.slice(5, 16).replace("T", " "))} · ${r.mkt === "us" ? "미국" : "국내"} · ${esc(mn(r.model))} · 예측 ${r.win_prob ?? "-"}% · +${r.target_pct}/−${r.stop_pct}${r.mfe != null ? ` · 최대 ${pct(r.mfe, 1)}/${pct(r.mae, 1)}` : ""}</span></span>
-        <span class="end"><b class="${tone(r.net_pct)}">${r.net_pct == null ? "-" : pct(r.net_pct, 2)}</b><span class="tiny">${r.alt_result ? `지정가였다면 <span class="${tone(r.alt_net)}">${esc(r.alt_result)}${r.alt_net == null ? "" : " " + pct(r.alt_net, 1)}</span>` : r.src ? esc(r.src) : ""}</span></span></a>`).join("") : `<div class="empty">아직 추천 기록이 없어요</div>`}</div></section>
       <div class="tiny" style="padding:0 3px 8px">채점 방법: 추천을 보고 그 순간 가격에 바로 샀다고 봐요(AI가 지정가를 말했어도 기다리지 않아요. 지정가를 기다렸을 때의 결과는 참고로 따로 보여 줘요). 추천 시각이 낀 5분봉은 추천 전 움직임이 섞여 있어 종가만 써요. 그 뒤 5분봉에서 손절가·익절가 중 먼저 닿은 쪽으로 판정해요. 한 봉 안에 둘 다 닿으면 봉 모양으로 순서를 짐작해요(음봉이면 익절, 양봉이면 손절). 둘 다 안 닿으면 정리 시각(국내 추천 정리 시각, 미국 정규장 마감) 가격으로 끝내요. 수익률은 왕복 비용(국내 0.2%, 미국 0.25%)을 뺀 값이에요.</div>`;
     this.asLearn();
+    if (this.asOpen) $("#asRoot").classList.add("show-all");
     $("#asRoot").onclick = async (e) => {
+      if (e.target.closest("#asMore")) { this.asOpen = true; $("#asRoot").classList.add("show-all"); return; }
       if (e.target.closest("#lrRun")) { aiSheet("learn"); sheet.addEventListener("close", () => this.asLearn(), { once: true }); return; }
       if (e.target.closest("#lrAuto")) { const b = e.target.closest("#lrAuto"), on = b.getAttribute("aria-checked") !== "true"; await run(() => api("PUT", "/api/ai/learn", { auto: on }), on ? "자동 복기를 켰어요" : "자동 복기를 껐어요"); return this.asLearn(); }
       if (e.target.closest("#lrClear")) { if (!confirmTap(e.target.closest("#lrClear"), "한 번 더 누르면 규칙을 지워요")) return; await run(() => api("PUT", "/api/ai/learn", { clear: true }), "규칙을 지웠어요"); return this.asLearn(); }
@@ -2310,7 +2330,7 @@ const mkt = {
     const pk = h.params.get("pk");
     this.d = { m, sym, range: pk ? "m5" : this.lastRange || "1d", tab: "chart", q: null, chart: null, cd: null, pk };
     if (pk) this.loadMark(this.d);
-    setTop("시세", { back: "#invest/home", menu: "invest", sub: "stock", right: `<button type="button" class="star on-deep" id="mkBell" aria-label="가격 알림">${BELL}</button><button type="button" class="star on-deep" id="mkStar" aria-pressed="false" aria-label="관심종목">${STAR}</button>` });
+    setTop("시세", { back: navBack("#invest/home"), menu: "invest", sub: pk ? "aistat" : "stock", right: `<button type="button" class="star on-deep" id="mkBell" aria-label="가격 알림">${BELL}</button><button type="button" class="star on-deep" id="mkStar" aria-pressed="false" aria-label="관심종목">${STAR}</button>` });
     view.innerHTML = `<div class="mk-d" id="mkD"><div class="empty loading">불러오는 중</div></div>`;
     // 목록에서 이미 받은 값이 있으면 먼저 그려 둔다
     const pre = this.qmemo[m + sym] || ((this.snap[m] || {}).items || []).find((x) => x.sym === sym);

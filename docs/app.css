@@ -1484,3 +1484,12 @@ dialog.upd{overscroll-behavior:contain}
 .pk-info .btn{align-self:flex-start}
 
 .as-badge.r-미체결{background:var(--slate-s);color:var(--slate-i)}
+
+.as-r.more{display:none}.show-all .as-r.more{display:flex}.show-all .as-more{display:none}
+.as-more{margin:6px 0 8px;width:100%}
+.sc-recent{display:flex;flex-direction:column;gap:4px}
+.sc-r{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:10px;background:color-mix(in srgb,var(--ink) 5%,transparent);font-size:12px;cursor:pointer}
+.sc-r i{font-style:normal;flex:0 0 46px;padding:3px 0;font-size:9.5px}
+.sc-r b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700}
+.sc-r em{font-style:normal;font-weight:800}
+.sc-r:active{transform:scale(.98)}

@@ -26,7 +26,7 @@ class Runtime:
         self.account = AccountView(self.settings)
         self.inbox = Inbox(db, self.ledger, self.settings)
         self.market = Market(self, data_dir or ".")
-        self.assets = Assets(db, self.value_of)
+        self.assets = Assets(db, self.value_of, kiwoom_on=lambda: self.account.configured())
         self.feed = None
         self.brokers = {}
         self.errors = {}

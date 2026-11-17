@@ -697,3 +697,17 @@ def test_unfilled_orders_and_cancel(rt):
     rt.settings.update({"trade_mode": {"scalp": "paper"}})
     rt.rebuild()
     assert c.post("/api/orders/cancel", json=o).status_code == 400
+
+
+def test_kiwoom_account_auto_added_to_assets(rt):
+    c = create_app(rt).test_client()
+    assert c.get("/api/assets").get_json()["net"] == 0  # 연결 전엔 없음
+    rt.settings.update({"kiwoom_view": {"appkey": "k", "secretkey": "s", "mock": False}})
+    rt.account.client().session = _FakeKiwoom()
+    a = c.get("/api/assets").get_json()
+    assert a["net"] == 6166000
+    acc = [x for g in a["groups"] for x in g["items"] if x["linked"] == "kiwoom"]
+    assert len(acc) == 1 and acc[0]["name"] == "키움증권" and acc[0]["synced"]
+    assert rt.db.one("SELECT balance FROM accounts WHERE linked='kiwoom'")["balance"] == 6166000
+    c.delete(f"/api/accounts/{acc[0]['id']}")
+    assert c.get("/api/assets").get_json()["net"] == 0  # 지우면 다시 만들지 않음

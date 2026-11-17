@@ -10,17 +10,31 @@ class AssetError(ValueError):
 
 
 class Assets:
-    def __init__(self, db, value_of_engine):
+    def __init__(self, db, value_of_engine, kiwoom_on=None):
         self.db = db
         self.value_of_engine = value_of_engine  # engine -> 평가금(현금+주식)
+        self.kiwoom_on = kiwoom_on or (lambda: False)  # 키움 계좌(조회 전용)가 연결돼 있는지
+
+    def _ensure_kiwoom(self):
+        """키움 계좌를 연결해 두었으면 자산에 자동으로 넣는다(한 번만, 지우면 다시 만들지 않음)."""
+        if not self.kiwoom_on() or self.db.get_setting("kiwoom_asset_auto"):
+            return
+        if not self.db.one("SELECT id FROM accounts WHERE linked='kiwoom'"):
+            self.db.x("INSERT INTO accounts(name,type,balance,note,linked,sort,bank,acct_no) VALUES(?,?,?,?,?,?,?,?)",
+                      ("키움증권", "stock", 0, "키움 계좌와 자동 연결", "kiwoom", 50, "", ""))
+        self.db.set_setting("kiwoom_asset_auto", True)
 
     def accounts(self):
+        self._ensure_kiwoom()
         rows = self.db.q("SELECT * FROM accounts ORDER BY sort, id")
         for r in rows:
             r["type_label"] = TYPES.get(r["type"], r["type"])
             if r["linked"] in ("scalp", "dca", "kiwoom"):
                 try:
-                    r["balance"] = int(self.value_of_engine(r["linked"]))
+                    v = int(self.value_of_engine(r["linked"]))
+                    if v != r["balance"]:  # 마지막 값을 남겨 두어 연결이 끊겨도 순자산이 0이 되지 않게
+                        self.db.x("UPDATE accounts SET balance=? WHERE id=?", (v, r["id"]))
+                    r["balance"] = v
                     r["synced"] = True
                 except Exception as e:  # 연결 실패 시 마지막 저장값 사용
                     r["synced"] = False

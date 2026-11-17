@@ -854,6 +854,13 @@ def create_app(rt, updater=None):
     def ai_pick_estimate():
         return jsonify(rt.aipick.estimate("us" if request.args.get("mkt") == "us" else "kr"))
 
+    @app.get("/api/ai/stats")
+    def ai_stats():
+        if request.args.get("refresh"):
+            rt.aipick.evaluate(force=True)
+        return jsonify(rt.aipick.stats(int(request.args.get("days") or 0), request.args.get("mkt") or "",
+                                       request.args.get("model") or ""))
+
     @app.get("/api/ai/picks")
     def ai_picks():
         return jsonify(rt.aipick.history())

@@ -1295,3 +1295,45 @@ def test_us_exchange_probes_when_blank_rejected():
     cl.call = lambda k, b: (calls.append(b["stex_tp"]) or {"stk_cd": "KO", "stk_nm": "코카콜라", "stex_tp": "NY"}) if b["stex_tp"] == "NY" else (_ for _ in ()).throw(KiwoomError("x"))
     assert cl.us_exchange("KO")[0] == "NY" and calls == ["NY"]
     assert cl.us_exchange("KO")[0] == "NY"  # 기억해 둔 값
+
+
+def test_ai_outcomes_judge_window_and_stats(rt, monkeypatch):
+    import moa.aipick as AP
+    from datetime import datetime as D
+    assert AP.window_end("kr", D(2026, 11, 17, 10, 5), "15:10") == D(2026, 11, 17, 15, 10)
+    assert AP.window_end("kr", D(2026, 11, 20, 16, 0), "") == D(2026, 11, 23, 15, 20)  # 금요일 장 뒤 → 월요일
+    assert AP.window_end("us", D(2026, 11, 17, 21, 0), "") == D(2026, 11, 18, 6, 0)    # 겨울: 다음날 06:00
+    assert AP.window_end("us", D(2026, 7, 15, 23, 0), "") == D(2026, 7, 16, 5, 0)      # 여름: 05:00
+    b = lambda o, h, l, c: {"o": o, "h": h, "l": l, "c": c}
+    assert AP.judge([b(100, 101, 99.5, 100.5), b(100.5, 103.2, 100, 103)], 100, 3, 1.5)[0] == "익절"
+    assert AP.judge([b(100, 101, 98.4, 99)], 100, 3, 1.5)[0] == "손절"
+    assert AP.judge([b(100, 104, 98, 101)], 100, 3, 1.5)[0] == "손절"  # 한 봉에 둘 다 → 보수적으로 손절
+    r = AP.judge([b(100, 101, 99.8, 100.4)], 100, 3, 1.5)
+    assert r[0] == "시간 정리" and round(r[2], 1) == 100.4
+    assert AP.judge([b(100, 101, 99.8, 100)], 100, 3, 1.5, "limit", 99)[0] == "미체결"
+    assert AP.judge([b(100, 101, 98.9, 100), b(100, 102.1, 99.5, 102)], 100, 3, 1.5, "limit", 99)[0] == "익절"  # 99 진입 → 101.97
+    # 추천 2건(국내 Sonnet, 미국 Fable) → 채점 → 통계
+    db = rt.db
+    db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text) VALUES(?,?,?,?,?,?,?,?)",
+         ("2026-11-17T10:00:00", "kr", "claude-sonnet-5-5", 0.2, "보통", "", json.dumps([
+             {"sym": "005930", "name": "삼성전자", "price": 100, "entry_type": "market", "entry_price": 100, "target_pct": 3, "stop_pct": 1.5, "win_prob": 60, "exit_by": "15:10"},
+             {"sym": "000660", "name": "SK하이닉스", "price": 100, "entry_type": "market", "entry_price": 100, "target_pct": 3, "stop_pct": 1.5, "win_prob": 55, "exit_by": "15:10"}]), ""))
+    db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text) VALUES(?,?,?,?,?,?,?,?)",
+         ("2026-11-16T23:40:00", "us", "claude-fable-5-2", 0.5, "관망", "", json.dumps([
+             {"sym": "NVDA", "name": "엔비디아", "price": 100, "entry_type": "market", "entry_price": 100, "target_pct": 2, "stop_pct": 1, "win_prob": 45, "auto": True}]), ""))
+    bars = {"005930": [{"t": "11/17 10:00", "o": 100, "h": 101, "l": 99.6, "c": 100.8, "v": 1}, {"t": "11/17 10:05", "o": 100.8, "h": 103.5, "l": 100.5, "c": 103, "v": 1}],
+            "000660": [{"t": "11/17 10:00", "o": 100, "h": 100.2, "l": 98.2, "c": 98.4, "v": 1}],
+            "NVDA": [{"t": "11/16 23:40", "o": 100, "h": 100.6, "l": 99.7, "c": 100.4, "v": 1}, {"t": "11/17 05:55", "o": 100.4, "h": 100.9, "l": 100.1, "c": 100.7, "v": 1}]}
+    monkeypatch.setattr(rt.invest, "candles", lambda m, s, tf: {"bars": bars[s]})
+    rt.aipick.evaluate(force=True)
+    st = rt.aipick.stats()
+    a = st["all"]
+    assert a["n"] == 3 and a["done"] == 3 and a["tp"] == 1 and a["sl"] == 1 and a["time"] == 1
+    assert {x["key"] for x in st["by_model"]} == {"claude-sonnet-5-5", "claude-fable-5-2"}
+    kr = next(x for x in st["by_mkt"] if x["key"] == "kr")
+    assert kr["tp_rate"] == 50.0 and kr["avg"] == round(((3 - .2) + (-1.5 - .2)) / 2, 2)
+    us = next(x for x in st["by_mkt"] if x["key"] == "us")
+    assert us["avg"] == round(0.7 - 0.25, 2)
+    assert any(x["key"] == "지표 자동 선정" for x in st["by_stance"]) and st["curve"] and sum(st["hist"]) == 3
+    c = create_app(rt).test_client()
+    assert c.get("/api/ai/stats?mkt=us").get_json()["all"]["n"] == 1

@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2144";
+const UI_VERSION = "261117.2150";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -281,7 +281,7 @@ const MENU = {
   home: { title: "홈", subs: [["summary", "요약"], ["activity", "최근 활동"]] },
   ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["fixed", "고정비"], ["cards", "카드"], ["analysis", "분석"], ["budget", "예산"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
-  invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["dca", "적립"]], extra: { scalp: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
+  invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["dca", "적립"]], extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
   settings: { title: "설정", subs: [["connect", "서버"], ["accounts", "계좌 연결"], ["trading", "매매"], ["ai", "AI"], ["theme", "화면"], ["app", "앱 정보"]] },
 };
 const lastSub = {};
@@ -1170,6 +1170,7 @@ pages.invest = {
     if (sub === "rules") return this.rules();
     if (sub === "sweep") return this.sweep();
     if (sub === "stock") return mkt.detail(h);
+    if (sub === "aistat") return this.aiStat();
     investState.tab = ["home", "ai", "market", "discover", "account", "trade", "dca"].includes(sub) ? sub : sub === "scalp" ? "ai" : "home";
     setTop("투자", { menu: "invest", sub: investState.tab });
     view.innerHTML = `<div id="iv" style="display:flex;flex-direction:column;gap:8.5px"></div>`;
@@ -1178,6 +1179,7 @@ pages.invest = {
   async refresh(h) {
     if (["backtest", "rules"].includes(h.sub)) return;
     if (h.sub === "stock") return mkt.refreshDetail();
+    if (h.sub === "aistat") return;
     if (h.sub === "sweep") return this.sweepPoll();
     if (investState.tab === "ai") { this.apSess(); if (!this._apT || Date.now() - this._apT > 5000) { this._apT = Date.now(); this.apGuards(); } return; }
     if (investState.tab !== "dca") await this.fill();
@@ -1258,6 +1260,7 @@ pages.invest = {
           <div class="tiny" id="apWarn"></div>
         </section>
         <div id="apOut"></div>
+        <a class="card ap-score" id="apScore" href="#invest/aistat"><div class="empty small loading">추천 성적 불러오는 중</div></a>
         <div id="apGuards"></div>
         <div id="apHist"></div>
         <div class="tiny" style="padding:0 3px 6px">AI 추천은 실시간 자료로 낸 추정이라 틀릴 수 있어요. 승률은 AI가 매긴 추정치예요. 매수 여부는 직접 결정하고, 자동 매도는 켜 둔 종목만 정해진 값으로 실행돼요.</div>
@@ -1269,6 +1272,7 @@ pages.invest = {
       if (A.res || A.text) this.apDraw();
       this.apEstimate();
       this.apHistory();
+      this.apScore();
     }
     this.apSess();
     this.apGuards();
@@ -1417,6 +1421,107 @@ pages.invest = {
       <div class="list">${H.map((h) => `<div class="item"><span class="main"><b>${esc(h.ts.slice(5, 16).replace("T", " "))} · ${h.mkt === "us" ? "미국" : "국내"} · ${esc(h.stance || "-")}</b>
         <span class="sub">${h.picks.length ? h.picks.map((p) => `${esc(p.name)}(${p.win_prob}%·+${p.target_pct}/−${p.stop_pct})`).join(", ") : "관망"}</span></span>
         <span class="end tiny">${esc(h.model.replace("claude-", ""))}</span></div>`).join("")}</div></details>`;
+  },
+
+  async apScore() {
+    const el = $("#apScore");
+    if (!el) return;
+    let st;
+    try { st = await GET("/api/ai/stats?days=30"); } catch (e) { el.innerHTML = `<div class="tiny">${esc(e.message)}</div>`; return; }
+    if (!$("#apScore")) return;
+    const a = st.all;
+    el.innerHTML = a.n ? `<div class="card-head"><h2>AI 추천 성적 · 최근 30일</h2><span class="link">자세히 ›</span></div>
+      <div class="sc-kpi">
+        <div><span>추천 1건당 평균</span><b class="${tone(a.avg)}">${a.avg == null ? "-" : pct(a.avg, 2)}</b></div>
+        <div><span>익절 도달률</span><b>${a.tp_rate == null ? "-" : a.tp_rate + "%"}</b></div>
+        <div><span>AI 예측 승률</span><b>${a.pred == null ? "-" : a.pred + "%"}</b></div></div>
+      ${resultBar(a)}
+      <div class="tiny">추천 ${a.n}건 · 채점 ${a.done} · 진행 중 ${a.live}${a.unfilled ? ` · 미체결 ${a.unfilled}` : ""} · 사지 않은 종목도 추천 시점 가격으로 채점해요</div>`
+      : `<div class="card-head"><h2>AI 추천 성적</h2></div><div class="tiny">추천을 받으면, 사지 않아도 그 뒤 실제 가격으로 익절·손절·시간 정리 결과를 매겨 여기 모아 보여 드려요.</div>`;
+  },
+  async aiStat() {
+    setTop("AI 추천 성적", { back: "#invest/ai", menu: "invest", sub: "aistat" });
+    const F = this.sf || (this.sf = { days: 30, mkt: "", model: "" });
+    view.innerHTML = `<div id="asRoot" class="as"><div class="empty loading">채점하는 중</div></div>`;
+    const load = async (refresh) => {
+      const st = await GET(`/api/ai/stats?days=${F.days}&mkt=${F.mkt}&model=${encodeURIComponent(F.model)}${refresh ? "&refresh=1" : ""}`);
+      if (!$("#asRoot")) return;
+      this.asDraw(st, F, load);
+    };
+    try { await load(true); } catch (e) { $("#asRoot").innerHTML = `<div class="notice warn">${esc(e.message)}</div>`; }
+  },
+  asDraw(st, F, load) {
+    const a = st.all, M = st.models, mn = (k) => M[k] || String(k).replace("claude-", "");
+    const won$ = (u) => `${won(Math.round((u || 0) * st.fx))}원`;
+    const chips = (name, opts, cur) => `<div class="chips as-f" data-f="${name}">${opts.map(([v, l]) => `<button type="button" class="chip" data-v="${esc(v)}" aria-pressed="${String(v) === String(cur)}">${esc(l)}</button>`).join("")}</div>`;
+    const row = (x, label) => `<tr><th>${esc(label)}</th><td>${x.n}</td><td>${x.tp_rate == null ? "-" : x.tp_rate + "%"}</td><td>${x.win_rate == null ? "-" : x.win_rate + "%"}</td>
+      <td class="${tone(x.avg)}"><b>${x.avg == null ? "-" : pct(x.avg, 2)}</b></td><td>${x.pf == null ? "-" : x.pf}</td></tr>`;
+    const table = (title, list, lab, extra = "") => list.length ? `<section class="card"><h2>${title}</h2>${extra}
+      <div class="as-tw"><table class="as-t"><thead><tr><th></th><th>건수</th><th>익절률</th><th>이익률</th><th>평균</th><th>손익비</th></tr></thead>
+      <tbody>${list.map((x) => row(x, lab(x.key))).join("")}</tbody></table></div></section>` : "";
+    const maxH = Math.max(1, ...st.hist);
+    const hl = ["−3%↓", "−3~−2", "−2~−1", "−1~0", "0~1", "1~2", "2~3", "3%↑"];
+    const insight = [];
+    if (a.done >= 3) {
+      if (a.pred != null && a.tp_rate != null) insight.push(a.tp_rate >= a.pred ? `AI가 말한 승률(${a.pred}%)보다 실제 익절률(${a.tp_rate}%)이 높아요. AI가 보수적으로 말하는 편이에요.` : `AI 예측 승률(${a.pred}%)보다 실제 익절률(${a.tp_rate}%)이 낮아요. 화면의 승률을 그만큼 낮춰 보세요.`);
+      if (a.mfe != null) insight.push(`추천 뒤 평균 최대 ${pct(a.mfe, 2)}까지 올랐고 ${pct(a.mae, 2)}까지 내렸어요.`);
+      const best = st.by_model.filter((x) => x.done >= 3 && x.avg != null).sort((x, y) => y.avg - x.avg)[0];
+      if (best && st.by_model.length > 1) insight.push(`엔진 중에선 ${mn(best.key)}가 1건당 평균 ${pct(best.avg, 2)}로 가장 좋아요.`);
+      const sb = st.by_bought.find((x) => x.key === "샀음"), nb = st.by_bought.find((x) => x.key === "안 삼");
+      if (sb && nb && sb.avg != null && nb.avg != null) insight.push(`직접 산 종목 평균 ${pct(sb.avg, 2)}, 안 산 종목 평균 ${pct(nb.avg, 2)} — ${sb.avg >= nb.avg ? "고르는 눈이 AI보다 나아요" : "안 산 쪽이 더 좋았어요"}.`);
+    } else insight.push("채점이 3건 이상 쌓이면 엔진·시장별 비교와 해석을 보여 드려요.");
+    const W = 320, H = 110, cv = st.curve, cmin = Math.min(0, ...cv.map((x) => x.v)), cmax = Math.max(0, ...cv.map((x) => x.v)), cr = cmax - cmin || 1;
+    const X = (i) => (cv.length < 2 ? W / 2 : i / (cv.length - 1) * W), Y = (v) => 8 + (1 - (v - cmin) / cr) * (H - 16);
+    const line = cv.map((p, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join("");
+    $("#asRoot").innerHTML = `
+      <div class="as-filters">
+        ${chips("days", [[7, "7일"], [30, "30일"], [90, "90일"], [0, "전체"]], F.days)}
+        ${chips("mkt", [["", "전체 시장"], ["kr", "국내"], ["us", "미국"]], F.mkt)}
+        ${chips("model", [["", "모든 엔진"], ...Object.entries(M)], F.model)}
+      </div>
+      <section class="card as-hero">
+        <div class="as-big"><span>추천 1건당 평균 수익(비용 뺀 뒤)</span><b class="${tone(a.avg)}">${a.avg == null ? "-" : pct(a.avg, 2)}</b>
+          <small>전부 같은 금액으로 샀다면 누적 ${pct(a.sum, 2)} · 손익비 ${a.pf == null ? "-" : a.pf}</small></div>
+        <div class="sc-kpi">
+          <div><span>익절 도달률</span><b>${a.tp_rate == null ? "-" : a.tp_rate + "%"}</b></div>
+          <div><span>이익으로 끝남</span><b>${a.win_rate == null ? "-" : a.win_rate + "%"}</b></div>
+          <div><span>AI 예측 승률</span><b>${a.pred == null ? "-" : a.pred + "%"}</b></div>
+          <div><span>최고 / 최저</span><b><em class="up">${a.best == null ? "-" : pct(a.best, 1)}</em> / <em class="down">${a.worst == null ? "-" : pct(a.worst, 1)}</em></b></div></div>
+        ${resultBar(a)}
+        <div class="tiny">추천 ${a.n}건 · 채점 끝 ${a.done} · 진행 중 ${a.live} · 미체결 ${a.unfilled} · AI 비용 ${won$(a.cost_usd)}</div>
+      </section>
+      <section class="card as-ins"><h2>한눈에 해석</h2><ul>${insight.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></section>
+      ${st.by_mkt.length ? `<div class="as-duo">${["kr", "us"].map((k) => { const x = st.by_mkt.find((y) => y.key === k); return `<section class="card as-m ${k}">
+        <h2>${k === "kr" ? "국내" : "미국"}</h2>${x ? `<b class="${tone(x.avg)}">${x.avg == null ? "-" : pct(x.avg, 2)}</b><span>${x.n}건 · 익절 ${x.tp_rate ?? "-"}%</span>
+        <div class="as-mini">${resultBar(x)}</div>` : `<span>아직 없어요</span>`}</section>`; }).join("")}</div>` : ""}
+      ${st.by_model.length ? `<section class="card"><h2>엔진별</h2><div class="as-eng">${st.by_model.map((x) => `<div class="as-e">
+        <div class="as-eh"><b>${esc(mn(x.key))}</b><span>${x.n}건 · 1건 비용 ${won$(x.cost_usd / Math.max(1, x.n))}</span></div>
+        <div class="as-eb"><i class="${(x.avg || 0) >= 0 ? "pos" : "neg"}" style="width:${Math.min(100, Math.abs(x.avg || 0) * 25)}%"></i><b class="${tone(x.avg)}">${x.avg == null ? "-" : pct(x.avg, 2)}</b></div>
+        <div class="tiny">익절 ${x.tp_rate ?? "-"}% · 이익 ${x.win_rate ?? "-"}% · 예측 ${x.pred ?? "-"}% · 손익비 ${x.pf ?? "-"}</div></div>`).join("")}</div></section>` : ""}
+      <section class="card"><h2>누적 수익 흐름</h2>${cv.length >= 2 ? `<svg viewBox="0 0 ${W} ${H}" class="as-curve anim mk-svg"><line x1="0" x2="${W}" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--line2)" stroke-dasharray="3 4"/>
+        <path class="ln" pathLength="1" d="${line}" fill="none" stroke="${cv[cv.length - 1].v >= 0 ? "var(--up)" : "var(--down)"}" stroke-width="2.2" stroke-linejoin="round"/></svg>
+        <div class="as-axis"><span>${esc(cv[0].t.slice(5))}</span><span>${pct(cv[cv.length - 1].v, 2)}</span><span>${esc(cv[cv.length - 1].t.slice(5))}</span></div>` : `<div class="empty small">채점이 2건 이상 쌓이면 그려요</div>`}</section>
+      <section class="card"><h2>수익률 분포</h2><div class="as-hist">${st.hist.map((n, i) => `<div><em>${n || ""}</em><i class="${i < 4 ? "neg" : "pos"}" style="height:${n / maxH * 100}%"></i><span>${hl[i]}</span></div>`).join("")}</div></section>
+      ${table("AI가 말한 승률 vs 실제", st.by_band, (k) => `예측 ${k}`, `<div class="tiny">예측이 높을수록 실제 익절률도 높아야 믿을 만한 승률이에요.</div>`)}
+      ${table("추천 순위별", st.by_rank, (k) => k)}
+      ${table("AI 태도별", st.by_stance, (k) => k)}
+      ${table("추천 받은 시간대별", st.by_tod, (k) => k)}
+      ${table("직접 산 것 vs 안 산 것", st.by_bought, (k) => k)}
+      <div class="sec-title">추천 하나하나 · ${st.rows.length}건</div>
+      <section class="card tight"><div class="list">${st.rows.length ? st.rows.map((r) => `<a class="item as-r" href="#invest/stock?m=${r.mkt}&s=${encodeURIComponent(r.sym)}">
+        <span class="as-badge r-${esc(r.result || "진행 중")}">${esc(r.result || "진행 중")}</span>
+        <span class="main"><b>${esc(r.name || r.sym)} ${r.bought ? `<span class="tag g">샀음</span>` : ""}</b>
+          <span class="sub">${esc(r.ts.slice(5, 16).replace("T", " "))} · ${r.mkt === "us" ? "미국" : "국내"} · ${esc(mn(r.model))} · 예측 ${r.win_prob ?? "-"}% · +${r.target_pct}/−${r.stop_pct}${r.mfe != null ? ` · 최대 ${pct(r.mfe, 1)}/${pct(r.mae, 1)}` : ""}</span></span>
+        <span class="end"><b class="${tone(r.net_pct)}">${r.net_pct == null ? "-" : pct(r.net_pct, 2)}</b><span class="tiny">${r.src ? esc(r.src) : ""}</span></span></a>`).join("") : `<div class="empty">아직 추천 기록이 없어요</div>`}</div></section>
+      <div class="tiny" style="padding:0 3px 8px">채점 방법: 추천 시점 가격(지정가 추천은 그 가격에 닿았을 때)에 샀다고 보고, 그 뒤 5분봉에서 손절가·익절가 중 먼저 닿은 쪽으로 판정해요. 한 봉 안에 둘 다 닿으면 손절로 봐요. 둘 다 안 닿으면 정리 시각(국내 추천 정리 시각, 미국 정규장 마감) 가격으로 끝내요. 수익률은 왕복 비용(국내 0.2%, 미국 0.25%)을 뺀 값이에요.</div>`;
+    $("#asRoot").onclick = async (e) => {
+      const c = e.target.closest(".as-f [data-v]");
+      if (!c) return;
+      const f = c.closest("[data-f]").dataset.f;
+      F[f] = f === "days" ? Number(c.dataset.v) : c.dataset.v;
+      $$(`[data-f="${f}"] .chip`).forEach((x) => x.setAttribute("aria-pressed", String(x === c)));
+      try { await load(false); } catch (err) { toast(err.message); }
+    };
   },
 
   // ---------- 발견: 실시간 순위 ----------
@@ -2479,6 +2584,11 @@ document.addEventListener("click", (e) => {
 }, true);
 const AI_BTN = (kind, label, attrs = "") => `<button type="button" class="btn ai-btn wide" data-ai="${kind}" ${attrs}><span class="ai-spark" aria-hidden="true">✦</span>${esc(label)}</button>`;
 
+function resultBar(a) {
+  const t = Math.max(1, a.tp + a.sl + a.time);
+  return a.done ? `<div class="rbar" role="img" aria-label="익절 ${a.tp}, 시간 정리 ${a.time}, 손절 ${a.sl}"><i class="tp" style="flex:${a.tp}"></i><i class="tm" style="flex:${a.time}"></i><i class="sl" style="flex:${a.sl}"></i></div>
+    <div class="rleg"><span><i class="tp"></i>익절 ${a.tp}</span><span><i class="tm"></i>시간 정리 ${a.time}</span><span><i class="sl"></i>손절 ${a.sl}</span></div>` : "";
+}
 function winRing(v) {
   const r = 19, c = 2 * Math.PI * r, f = Math.max(0, Math.min(100, v)) / 100;
   return `<span class="ap-ring" role="img" aria-label="AI 추정 승률 ${v}%"><svg viewBox="0 0 48 48"><defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8B5CF6"/><stop offset="1" stop-color="#E14F8C"/></linearGradient></defs>

@@ -125,6 +125,7 @@ class Runtime:
                     # 단타 엔진은 화면에서 뺐다(AI 탭 자동매매로 대체 예정). 엔진은 멈춘 채로 둔다.
                     try:
                         self.aipick.check()  # AI 추천 종목 자동 익절·손절(5초마다)
+                        self.aipick.evaluate()  # AI 추천 성적 채점(4분마다)
                     except Exception as e:
                         self.db.log("system", "error", f"AI 익절·손절 확인 오류: {e}", datetime.now().isoformat(timespec="seconds"))
                     if time.time() - self._last_dca > 30:

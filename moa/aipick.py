@@ -432,3 +432,244 @@ class AIPick:
                     reason = "시간 정리"
             if reason:
                 self._sell(g, qty, reason, price)
+
+
+# ======================================================================
+# 추천 성적: 사지 않았어도 추천 시점 이후 실제 가격으로 결과를 매긴다
+# ======================================================================
+FEE = {"kr": 0.2, "us": 0.25}  # 왕복 비용(%)
+
+
+def _bar_dt(t, ref):
+    """분봉 시각 'MM/DD HH:MM'을 datetime으로(연도는 추천 시각 기준)."""
+    try:
+        md, hm = t.split(" ")
+        m, d = map(int, md.split("/"))
+        H, M = map(int, hm.split(":"))
+        y = ref.year + (1 if ref.month == 12 and m == 1 else 0)
+        return datetime(y, m, d, H, M)
+    except Exception:
+        return None
+
+
+def window_end(mkt, ts, exit_by=""):
+    """추천을 평가할 마지막 시각(한국 시간, naive). 국내는 그날(또는 다음 거래일) 정리 시각, 미국은 그 정규장 마감."""
+    if mkt == "kr":
+        hm = exit_by if re.match(r"^\d\d:\d\d$", exit_by or "") and exit_by <= "15:20" else "15:20"
+        d = ts
+        if ts.strftime("%H:%M") >= hm or ts.weekday() >= 5:
+            d = ts + timedelta(days=1)
+            while d.weekday() >= 5:
+                d += timedelta(days=1)
+        h, m = map(int, hm.split(":"))
+        return d.replace(hour=h, minute=m, second=0, microsecond=0)
+    # 미국: 추천 시각을 뉴욕 시간으로 바꿔 그 정규장(또는 다음 정규장) 16:00
+    u = ts - timedelta(hours=9)  # KST → UTC(naive)
+    off = -4 if _us_dst(u.replace(tzinfo=timezone.utc)) else -5
+    et = u + timedelta(hours=off)
+    d = et
+    if et.hour * 60 + et.minute >= 960 or et.weekday() >= 5:
+        d = et + timedelta(days=1)
+        while d.weekday() >= 5:
+            d += timedelta(days=1)
+    close_et = d.replace(hour=16, minute=0, second=0, microsecond=0)
+    cu = close_et - timedelta(hours=off)
+    off2 = -4 if _us_dst(cu.replace(tzinfo=timezone.utc)) else -5
+    return close_et - timedelta(hours=off2) + timedelta(hours=9)
+
+
+def judge(bars, entry, tp, sl, entry_type="market", limit=None):
+    """bars: 추천 이후 시간순 [{o,h,l,c}]. 반환: (결과, 진입가, 청산가, 최대상승%, 최대하락%, 체결여부)."""
+    if not bars:
+        return None
+    px, filled, i0 = entry, True, 0
+    if entry_type == "limit" and limit and limit < entry * 0.999:
+        filled = False
+        for i, b in enumerate(bars):
+            if b["l"] <= limit:
+                filled, px, i0 = True, limit, i
+                break
+        if not filled:
+            return ("미체결", None, None, None, None, False)
+    up, dn = px * (1 + tp / 100), px * (1 - sl / 100)
+    hi, lo = px, px
+    for b in bars[i0:]:
+        hi, lo = max(hi, b["h"]), min(lo, b["l"])
+        hit_dn, hit_up = b["l"] <= dn, b["h"] >= up
+        if hit_dn:  # 한 봉 안에서 둘 다 닿으면 보수적으로 손절
+            return ("손절", px, dn, (hi / px - 1) * 100, (lo / px - 1) * 100, True)
+        if hit_up:
+            return ("익절", px, up, (hi / px - 1) * 100, (lo / px - 1) * 100, True)
+    last = bars[-1]["c"]
+    return ("시간 정리", px, last, (hi / px - 1) * 100, (lo / px - 1) * 100, True)
+
+
+def _init_outcomes(db):
+    db.x("""CREATE TABLE IF NOT EXISTS ai_outcomes(
+        pick_id INTEGER NOT NULL, idx INTEGER NOT NULL, ts TEXT NOT NULL, mkt TEXT NOT NULL, model TEXT NOT NULL,
+        sym TEXT NOT NULL, name TEXT, stance TEXT, auto INTEGER DEFAULT 0, score INTEGER, win_prob INTEGER,
+        entry_type TEXT, rec_price REAL, entry_price REAL, target_pct REAL, stop_pct REAL, end_ts TEXT,
+        status TEXT NOT NULL DEFAULT 'live', result TEXT, filled INTEGER, entry REAL, exit REAL,
+        ret_pct REAL, net_pct REAL, mfe REAL, mae REAL, last REAL, src TEXT, updated_at TEXT, cost_usd REAL,
+        PRIMARY KEY(pick_id, idx))""")
+
+
+def _sync_outcomes(self):
+    """새 추천을 성적표에 올린다."""
+    have = {r["pick_id"] for r in self.rt.db.q("SELECT DISTINCT pick_id FROM ai_outcomes")}
+    for p in self.rt.db.q("SELECT * FROM ai_picks ORDER BY id"):
+        if p["id"] in have:
+            continue
+        picks = json.loads(p["picks"] or "[]")
+        ts = datetime.fromisoformat(p["ts"])
+        for i, x in enumerate(picks):
+            if not x.get("price"):
+                continue
+            end = window_end(p["mkt"], ts, x.get("exit_by") or "")
+            self.rt.db.x("INSERT OR IGNORE INTO ai_outcomes(pick_id,idx,ts,mkt,model,sym,name,stance,auto,score,win_prob,entry_type,"
+                         "rec_price,entry_price,target_pct,stop_pct,end_ts,cost_usd) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                         (p["id"], i, p["ts"], p["mkt"], p["model"], x["sym"], x.get("name"), p.get("stance"), int(bool(x.get("auto"))),
+                          x.get("score"), x.get("win_prob"), x.get("entry_type"), x["price"], x.get("entry_price") or x["price"],
+                          x.get("target_pct"), x.get("stop_pct"), end.isoformat(timespec="minutes"),
+                          (p.get("usd") or 0) / max(1, len(picks))))
+
+
+def evaluate(self, force=False):
+    """진행 중인 추천을 실제 가격으로 채점. 정리 시각이 지나면 확정."""
+    import time as _t
+    if not force and _t.time() - getattr(self, "_ev_last", 0) < 240:
+        return
+    self._ev_last = _t.time()
+    _sync_outcomes(self)
+    now = datetime.now()
+    rows = self.rt.db.q("SELECT * FROM ai_outcomes WHERE status='live' AND ts >= ?", ((now - timedelta(days=14)).isoformat(),))
+    for r in rows:
+        ts, end = datetime.fromisoformat(r["ts"]), datetime.fromisoformat(r["end_ts"])
+        bars, src = [], ""
+        try:
+            cd = self.rt.invest.candles(r["mkt"], r["sym"], "m5").get("bars") or []
+            start = ts.replace(second=0, microsecond=0)
+            for b in cd:
+                dt = _bar_dt(b["t"], ts)
+                if dt and start - timedelta(minutes=4) <= dt < end:
+                    bars.append(b)
+            src = "5분봉"
+        except Exception:
+            bars = []
+        done = now >= end
+        if done and not bars:  # 분봉이 지나가 버렸으면 일봉으로(같은 날 고가·저가)
+            try:
+                day = end.strftime("%Y-%m-%d") if r["mkt"] == "kr" else (end - timedelta(hours=14)).strftime("%Y-%m-%d")
+                bars = [b for b in self.rt.invest.candles(r["mkt"], r["sym"], "d").get("bars") or [] if b["t"] == day]
+                src = "일봉(순서 추정)"
+            except Exception:
+                bars = []
+        res = judge(bars, r["rec_price"], r["target_pct"], r["stop_pct"], r["entry_type"], r["entry_price"])
+        if not res:
+            if done and now - end > timedelta(days=3):
+                self.rt.db.x("UPDATE ai_outcomes SET status='done', result='자료 없음', updated_at=? WHERE pick_id=? AND idx=?",
+                             (now.isoformat(timespec="seconds"), r["pick_id"], r["idx"]))
+            continue
+        result, entry, exit_, mfe, mae, filled = res
+        ret = (exit_ / entry - 1) * 100 if entry and exit_ else None
+        net = ret - FEE[r["mkt"]] if ret is not None else None
+        final = done or result in ("익절", "손절")
+        if not final:
+            result = "진행 중"
+        self.rt.db.x("UPDATE ai_outcomes SET status=?, result=?, filled=?, entry=?, exit=?, ret_pct=?, net_pct=?, mfe=?, mae=?, "
+                     "last=?, src=?, updated_at=? WHERE pick_id=? AND idx=?",
+                     ("done" if final else "live", result, int(filled), entry, exit_,
+                      None if ret is None else round(ret, 3), None if net is None else round(net, 3),
+                      None if mfe is None else round(mfe, 3), None if mae is None else round(mae, 3),
+                      bars[-1]["c"] if bars else None, src, now.isoformat(timespec="seconds"), r["pick_id"], r["idx"]))
+
+
+def stats(self, days=0, mkt="", model=""):
+    """성적 요약: 전체·시장별·엔진별·승률 구간별·순위별·태도별·시간대별 + 개별 목록."""
+    _sync_outcomes(self)
+    q, a = "SELECT * FROM ai_outcomes WHERE 1=1", []
+    if days:
+        q += " AND ts >= ?"
+        a.append((datetime.now() - timedelta(days=int(days))).isoformat())
+    if mkt in ("kr", "us"):
+        q += " AND mkt=?"
+        a.append(mkt)
+    if model:
+        q += " AND model=?"
+        a.append(model)
+    rows = self.rt.db.q(q + " ORDER BY ts DESC, idx", a)
+    bought = {(g["pick_id"], g["sym"]) for g in self.rt.db.q("SELECT pick_id, sym FROM ai_guards WHERE pick_id IS NOT NULL")}
+    for r in rows:
+        r["bought"] = (r["pick_id"], r["sym"]) in bought
+
+    def agg(rs):
+        fin = [r for r in rs if r["status"] == "done" and r["result"] in ("익절", "손절", "시간 정리")]
+        nets = [r["net_pct"] for r in fin if r["net_pct"] is not None]
+        wins = [x for x in nets if x > 0]
+        tp = sum(1 for r in fin if r["result"] == "익절")
+        sl = sum(1 for r in fin if r["result"] == "손절")
+        gw, gl = sum(wins), -sum(x for x in nets if x <= 0)
+        cost = sum(r["cost_usd"] or 0 for r in rs)
+        return {"n": len(rs), "done": len(fin), "live": sum(1 for r in rs if r["status"] == "live"),
+                "unfilled": sum(1 for r in rs if r["result"] == "미체결"),
+                "tp": tp, "sl": sl, "time": len(fin) - tp - sl,
+                "tp_rate": round(tp / len(fin) * 100, 1) if fin else None,
+                "win_rate": round(len(wins) / len(nets) * 100, 1) if nets else None,
+                "avg": round(sum(nets) / len(nets), 2) if nets else None,
+                "sum": round(sum(nets), 2) if nets else 0,
+                "best": round(max(nets), 2) if nets else None, "worst": round(min(nets), 2) if nets else None,
+                "pf": round(gw / gl, 2) if gl > 0 else (None if not wins else 99),
+                "pred": round(sum(r["win_prob"] or 0 for r in fin) / len(fin), 1) if fin else None,
+                "mfe": round(sum(r["mfe"] or 0 for r in fin) / len(fin), 2) if fin else None,
+                "mae": round(sum(r["mae"] or 0 for r in fin) / len(fin), 2) if fin else None,
+                "cost_usd": round(cost, 4)}
+    ORDER = ["~40%", "40~50%", "50~60%", "60~70%", "70%~", "장 전", "장 초반(~10시)", "장 초반", "장 중반(~14시)", "장 중반", "장 후반", "장 마감 뒤",
+             "공격", "보통", "관망", "지표 자동 선정", "샀음", "안 삼", "kr", "us"]
+    by = lambda key: [{"key": k, **agg([r for r in rows if key(r) == k])}
+                      for k in sorted({key(r) for r in rows}, key=lambda k: (ORDER.index(k) if k in ORDER else 99, str(k)))]
+
+    def tod(r):
+        h = int(r["ts"][11:13]) if r["mkt"] == "kr" else (int(r["ts"][11:13]) - 14) % 24
+        t = h * 60 + int(r["ts"][14:16])
+        if r["mkt"] == "kr":
+            return "장 전" if t < 540 else "장 초반(~10시)" if t < 600 else "장 중반(~14시)" if t < 840 else "장 후반" if t < 920 else "장 마감 뒤"
+        return "장 전" if t < 570 else "장 초반" if t < 660 else "장 중반" if t < 900 else "장 후반" if t < 960 else "장 마감 뒤"
+
+    def band(r):
+        w = r["win_prob"] or 0
+        return "~40%" if w < 40 else "40~50%" if w < 50 else "50~60%" if w < 60 else "60~70%" if w < 70 else "70%~"
+    fin = [r for r in rows if r["status"] == "done" and r["net_pct"] is not None]
+    curve, acc = [], 0.0
+    for r in sorted(fin, key=lambda x: (x["ts"], x["idx"])):
+        acc += r["net_pct"]
+        curve.append({"t": r["ts"][:10], "v": round(acc, 2)})
+    hist = [0] * 8  # -3% 이하 … +3% 이상
+    edges = [-3, -2, -1, 0, 1, 2, 3]
+    for r in fin:
+        x = r["net_pct"]
+        hist[next((i for i, e in enumerate(edges) if x < e), 7)] += 1
+    from .ai import MODELS
+    fx = 1400.0
+    try:
+        fx = float(self.rt.market.yh_quote("USDKRW=X")["price"]) or fx
+    except Exception:
+        pass
+    return {"all": agg(rows), "by_mkt": by(lambda r: r["mkt"]), "by_model": by(lambda r: r["model"]),
+            "by_band": by(band), "by_rank": by(lambda r: f"{r['idx'] + 1}순위"),
+            "by_stance": by(lambda r: ("지표 자동 선정" if r["auto"] else (r["stance"] or "-"))),
+            "by_tod": by(tod), "by_bought": by(lambda r: "샀음" if r["bought"] else "안 삼"),
+            "curve": curve, "hist": hist, "rows": rows[:200], "fx": fx,
+            "models": {k: v[0].split(" · ")[0] for k, v in MODELS.items()}}
+
+
+AIPick.evaluate = evaluate
+AIPick.stats = stats
+_orig_init = AIPick.__init__
+
+
+def _init(self, rt):
+    _orig_init(self, rt)
+    _init_outcomes(rt.db)
+
+
+AIPick.__init__ = _init

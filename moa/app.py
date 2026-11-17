@@ -979,27 +979,30 @@ def create_app(rt, updater=None):
 
     @app.get("/api/ai/pick/estimate")
     def ai_pick_estimate():
-        return jsonify(rt.aipick.estimate("us" if request.args.get("mkt") == "us" else "kr"))
+        return jsonify(rt.aipick.estimate("us" if request.args.get("mkt") == "us" else "kr", request.args.get("h") or "day"))
 
     @app.get("/api/ai/learn")
     def ai_learn():
-        return jsonify(rt.aipick.learn_view())
+        return jsonify(rt.aipick.learn_view(request.args.get("h") or "day"))
 
     @app.put("/api/ai/learn")
     def ai_learn_set():
         d = body()
         if "auto" in d:
             rt.db.set_setting("ai_learn_auto", bool(d["auto"]))
+        from .aipick import _lkey, hz
+        h = hz(d.get("h") or request.args.get("h"))
         if d.get("clear"):
-            rt.db.set_setting("ai_lessons", {})
-        return jsonify(rt.aipick.learn_view())
+            old = rt.aipick.lessons(h)  # 규칙만 지우고, 몇 판째인지는 이어 간다(판별 성적 비교용)
+            rt.db.set_setting(_lkey(h), {"ver": old.get("ver") or 0, "n": old.get("n") or 0, "hist": old.get("hist") or []})
+        return jsonify(rt.aipick.learn_view(h))
 
     @app.get("/api/ai/stats")
     def ai_stats():
         if request.args.get("refresh"):
             rt.aipick.evaluate(force=True)
         return jsonify(rt.aipick.stats(int(request.args.get("days") or 0), request.args.get("mkt") or "",
-                                       request.args.get("model") or ""))
+                                       request.args.get("model") or "", request.args.get("h") or "day"))
 
     @app.get("/api/ai/picks")
     def ai_picks():

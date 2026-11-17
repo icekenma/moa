@@ -130,7 +130,7 @@ class AI:
 
     # 화면 공통 비용 표시: 예상 비용 + 현재 잔액
     KIND_TOK = {"stock": (9000, 1500), "portfolio": (7000, 1600), "review": (9000, 1500), "sweep": (7000, 1500),
-                "chat": (6000, 1200), "pick": (16000, 2200), "learn": (14000, 1500), "test": (30, 10)}
+                "chat": (6000, 1200), "pick": (16000, 2200), "pickw": (18000, 2600), "learn": (14000, 1500), "test": (30, 10)}
 
     def fx(self):
         try:
@@ -147,7 +147,8 @@ class AI:
         pi, po = _model_price(model)
         tin, tout = self.KIND_TOK.get(kind, (6000, 1200))
         lo = (tin * pi + tout * po) / 1e6
-        hi = ((tin + (30000 if web else 0)) * pi + tout * 1.8 * po) / 1e6 + (3 * SEARCH_USD if web else 0)
+        ns = 6 if kind == "pickw" else 3  # 웹 검색 최대 횟수
+        hi = ((tin + (10000 * ns if web else 0)) * pi + tout * 1.8 * po) / 1e6 + (ns * SEARCH_USD if web else 0)
         rows = self.rt.db.q("SELECT usd FROM ai_usage WHERE kind=? AND model=? ORDER BY id DESC LIMIT 10", (kind, model))
         avg = sum(r["usd"] for r in rows) / len(rows) if rows else None
         fx = self.fx()
@@ -243,7 +244,7 @@ class AI:
             return "조건 훑기 해석", ask, {"결과": slim}
         if kind == "learn":
             try:
-                return self.rt.aipick.learn_context()
+                return self.rt.aipick.learn_context(d.get("horizon") or "day")
             except ValueError as e:
                 raise AIError(str(e))
         if kind == "pick":
@@ -291,13 +292,13 @@ class AI:
         if d.get("model") in MODELS:  # 화면에서 고른 엔진
             model = d["model"]
         pick = kind == "pick"
-        if pick:
-            from .aipick import PICK_SYSTEM
-        body = {"model": model, "max_tokens": 9000 if pick else 2500, "system": PICK_SYSTEM if pick else SYSTEM,
+        from .aipick import hz, system_prompt
+        hzn = hz(d.get("horizon"))
+        body = {"model": model, "max_tokens": 9000 if pick else 2500, "system": system_prompt(hzn) if pick else SYSTEM,
                 "messages": messages, "stream": True}
         web = d["web_search"] if isinstance(d.get("web_search"), bool) else c.get("web_search", True)
         if web and kind not in ("sweep", "learn"):
-            body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3 if pick else 4,
+            body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": (3 if hzn == "day" else 6) if pick else 4,
                               "user_location": {"type": "approximate", "country": "KR", "timezone": "Asia/Seoul"}}]
         usage = {"in": 0, "out": 0, "searches": 0}
         sources, seen = [], set()
@@ -324,18 +325,18 @@ class AI:
             else:
                 yield {"t": "error", "msg": str(e)}
                 return
-        usd = self._record(kind, model, usage)
+        usd = self._record("pickw" if pick and hzn != "day" else kind, model, usage)  # 중기 추천은 검색이 많아 비용을 따로 센다
         fx = FX_DEFAULT
         try:
             fx = float(self.rt.market.yh_quote("USDKRW=X")["price"]) or FX_DEFAULT
         except Exception:
             pass
         if kind == "learn" and "".join(buf).strip():
-            self.rt.aipick.save_lessons("".join(buf), model, usd)
+            self.rt.aipick.save_lessons("".join(buf), model, usd, hzn)
         if pick:
             try:
                 res = self.rt.aipick.parse("".join(buf), "us" if d.get("mkt") == "us" else "kr", model, usd,
-                                           cut=usage.get("stop") == "max_tokens")
+                                           cut=usage.get("stop") == "max_tokens", horizon=hzn, theme=d.get("theme") or "")
             except Exception as e:
                 res = None
                 yield {"t": "status", "msg": f"추천 결과 정리 실패: {e}"}

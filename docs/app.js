@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.0803";
+const UI_VERSION = "261118.0829";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -219,6 +219,15 @@ const thisMonth = () => localToday().slice(0, 7);
 const WD = "일월화수목금토";
 const korDate = (iso, wd = true) => { const [y, m, d] = iso.split("-").map(Number); return `${m}월 ${d}일` + (wd ? ` ${WD[new Date(y, m - 1, d).getDay()]}요일` : ""); };
 const STATE = { running: "가동 중", paused: "새 매수 멈춤", stopped: "멈춤" };
+// AI 추천 종류(보유 기간)
+const AI_H = {
+  day: { label: "당일", sub: "오늘 안에 정리", days: 0, go: "지금 추천 받기", title: "지금 사면 오늘 안에 수익 낼 확률이 높은 종목",
+    desc: "누르는 순간의 실시간 순위·분봉 흐름·호가·뉴스를 Claude가 보고 최대 3종목을 골라요. 매수는 직접 고르고, 산 뒤에는 AI가 정한 값으로 자동 익절·손절해요." },
+  swing: { label: "1주", sub: "5거래일 보유", days: 5, go: "1주 추천 받기", title: "지금 사서 1주일 들고 갈 종목",
+    desc: "앞으로 1주 안에 주가를 움직일 재료(정책·실적·수주·수급)를 뉴스에서 먼저 찾고, 일봉 흐름으로 아직 덜 오른 수혜 종목을 최대 3개 골라요. 순위에 없는 종목도 찾아와요." },
+  month: { label: "1달", sub: "20거래일 보유", days: 20, go: "1달 추천 받기", title: "지금 사서 한 달 들고 갈 종목",
+    desc: "한 달 동안 이어질 재료(예산·법안·실적 시즌·업황)와 추세를 보고 최대 3종목을 골라요. 목표·손절을 넓게 잡고, 한 번의 뉴스로 끝날 테마는 걸러요." },
+};
 
 function toast(msg, err) {
   // 열린 시트(모달) 위에서도 보이게 알림 상자를 맨 위 창 안으로 옮긴다
@@ -1442,14 +1451,15 @@ pages.invest = {
 
   // ---------- AI 추천 ----------
   async aiPick(box) {
-    const A = this.ap || (this.ap = { m: store.get("apMkt") === "us" ? "us" : "kr", model: store.get("apModel") || "", web: store.get("apWeb") !== "0", est: {}, busy: false, res: null, text: "", src: [] });
+    const A = this.ap || (this.ap = { m: store.get("apMkt") === "us" ? "us" : "kr", h: AI_H[store.get("apH")] ? store.get("apH") : "day", theme: "", model: store.get("apModel") || "", web: store.get("apWeb") !== "0", est: {}, busy: false, res: null, text: "", src: [] });
     if (!$("#apRoot", box)) {
       A.m = curMkt(A.m);
       $(".fab")?.remove();
       box.innerHTML = `<div id="apRoot" class="ap">
         <section class="ap-hero">
-          <div class="ap-h1">지금 사면 오늘 안에 수익 낼 확률이 높은 종목</div>
-          <div class="ap-h2">누르는 순간의 실시간 순위·분봉 흐름·호가·뉴스를 Claude가 보고 최대 3종목을 골라요. 매수는 직접 고르고, 산 뒤에는 AI가 정한 값으로 자동 익절·손절해요.</div>
+          <div class="ap-hz" role="group" aria-label="추천 종류">${Object.entries(AI_H).map(([k, v]) => `<button type="button" data-hz="${k}" aria-pressed="${k === A.h}"><b>${v.label}</b><small>${v.sub}</small></button>`).join("")}</div>
+          <div class="ap-h1" id="apH1"></div>
+          <div class="ap-h2" id="apH2"></div>
           ${seg("AI시장", [["kr", "국내장"], ["us", "미국장"]], A.m, "ap-mkt")}
           <div class="ap-sess" id="apSess"></div>
           <a class="btn ap-statbtn" href="#invest/aistat">📊 AI 추천 전체 성적 · 자체 학습 보기 ›</a>
@@ -1457,7 +1467,9 @@ pages.invest = {
         <a class="card ap-score" id="apScore" href="#invest/aistat"><div class="empty small loading">추천 성적 불러오는 중</div></a>
         <section class="card"><div class="card-head"><h2>추천 엔진</h2><span class="tiny" id="apFx"></span></div>
           <div class="ap-models" id="apModels"><div class="empty small loading">불러오는 중</div></div>
-          <label class="ap-web"><input type="checkbox" id="apWeb" ${A.web ? "checked" : ""}><span><b>오늘 뉴스·공시 확인</b><small>웹 검색 최대 3회 · 재료 확인으로 정확도↑ · 비용↑</small></span></label>
+          <label class="field ap-theme" id="apThemeBox" hidden>궁금한 테마(선택)<input id="apTheme" maxlength="60" autocomplete="off" placeholder="예: 시험장 전파 탐지, 원전, 방산" value="${esc(A.theme)}">
+            <span class="hint">적으면 그 테마의 재료가 아직 유효한지부터 따지고 관련 종목을 찾아 평가해요. 비우면 AI가 재료를 직접 찾아요.</span></label>
+          <label class="ap-web"><input type="checkbox" id="apWeb" ${A.web ? "checked" : ""}><span><b id="apWebT"></b><small id="apWebS"></small></span></label>
           <button type="button" class="btn ap-go wide" id="apGo">지금 추천 받기</button>
           <div id="apMeter" class="cm-slot"></div>
           <div class="tiny" id="apWarn"></div>
@@ -1468,6 +1480,15 @@ pages.invest = {
         <div class="tiny" style="padding:0 3px 6px">AI 추천은 실시간 자료로 낸 추정이라 틀릴 수 있어요. 승률은 AI가 매긴 추정치예요. 매수 여부는 직접 결정하고, 자동 매도는 켜 둔 종목만 정해진 값으로 실행돼요.</div>
       </div>`;
       bindSeg(box, "AI시장", (v) => { setMkt(v); A.m = v; store.set("apMkt", v === "us" ? "us" : ""); this.apEstimate(); });
+      $(".ap-hz", box).onclick = (e) => {
+        const b = e.target.closest("[data-hz]");
+        if (!b || A.busy || b.dataset.hz === A.h) return;
+        A.h = b.dataset.hz; store.set("apH", A.h === "day" ? "" : A.h);
+        $$(".ap-hz [data-hz]", box).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+        this.apKind(); this.apEstimate(); this.apScore();
+      };
+      $("#apTheme").oninput = (e) => { A.theme = e.target.value; };
+      this.apKind();
       $("#apWeb").onchange = (e) => { A.web = e.target.checked; store.set("apWeb", A.web ? "" : "0"); this.apModels(); };
       $("#apModels").onclick = (e) => { const b = e.target.closest("[data-model]"); if (b) { A.model = b.dataset.model; store.set("apModel", A.model); this.apModels(); } };
       $("#apGo").onclick = () => this.apRun();
@@ -1479,17 +1500,28 @@ pages.invest = {
     this.apSess();
     this.apGuards();
   },
+  // 추천 종류(당일·1주·1달)에 맞춰 설명 문구와 입력 칸을 바꾼다
+  apKind() {
+    const A = this.ap, H = AI_H[A.h], day = A.h === "day";
+    if (!$("#apH1")) return;
+    $("#apH1").textContent = H.title;
+    $("#apH2").textContent = H.desc;
+    $("#apThemeBox").hidden = day;
+    $("#apWebT").textContent = day ? "오늘 뉴스·공시 확인" : "뉴스·정책·공시에서 재료 찾기";
+    $("#apWebS").textContent = day ? "웹 검색 최대 3회 · 재료 확인으로 정확도↑ · 비용↑" : "웹 검색 최대 6회 · 중기 추천의 핵심이에요. 끄면 일봉 흐름만 보고 골라요";
+  },
   apSess() {
     const A = this.ap, S = marketSession(A.m), el = $("#apSess");
     if (!el) return;
     el.innerHTML = `<span class="ss-chip ss-${S.phase}"><i></i>${esc(S.label)}</span><span>${esc(S.sub)}</span>`;
+    if (A.h !== "day") { $("#apWarn").textContent = S.phase === "open" ? "" : "지금은 정규장이 아니에요. 마지막 가격 기준으로 고르고, 다음 정규장에 사는 것으로 봐요. 그사이 시가가 크게 달라질 수 있어요."; return; }
     $("#apWarn").textContent = S.phase === "open" ? "" : S.phase === "closed"
       ? "지금은 정규장이 아니라, 다음 정규장 시작 직후 기준으로 추천해요. 자동 익절·손절은 정규장에만 움직여요."
       : "지금은 정규장 밖이에요. 시간외·프리마켓은 호가가 얇아 추천 정확도가 떨어져요. 자동 익절·손절은 정규장에만 움직여요.";
   },
   async apEstimate() {
     const A = this.ap;
-    try { A.est = await GET(`/api/ai/pick/estimate?mkt=${A.m}`); } catch (e) { A.est = { error: e.message, models: [] }; }
+    try { A.est = await GET(`/api/ai/pick/estimate?mkt=${A.m}&h=${A.h}`); } catch (e) { A.est = { error: e.message, models: [] }; }
     if (!A.model || !A.est.models.some((x) => x.id === A.model)) A.model = A.est.default || (A.est.models[0] || {}).id;
     this.apModels(); this.apSess();
   },
@@ -1515,19 +1547,19 @@ pages.invest = {
     $("#apFx").textContent = E.fx ? `환율 ${won(E.fx)}원 기준` : "";
     const go = $("#apGo");
     go.disabled = A.busy || !E.configured || !E.kiwoom;
-    go.innerHTML = A.busy ? "AI가 고르는 중…" : `<span class="ai-spark" aria-hidden="true">✦</span> 지금 추천 받기`;
-    aiMeter.get("pick", A.model, A.web).then((m) => { A.meter = m; if ($("#apMeter")) $("#apMeter").innerHTML = meterHTML(m); }).catch(() => {});
+    go.innerHTML = A.busy ? "AI가 고르는 중…" : `<span class="ai-spark" aria-hidden="true">✦</span> ${AI_H[A.h].go}`;
+    aiMeter.get(A.h === "day" ? "pick" : "pickw", A.model, A.web).then((m) => { A.meter = m; if ($("#apMeter")) $("#apMeter").innerHTML = meterHTML(m); }).catch(() => {});
     if (!E.configured) $("#apWarn").innerHTML = `Claude API 키가 필요해요. <a href="#settings/ai">설정 → AI</a>`;
-    else if (!E.kiwoom) $("#apWarn").innerHTML = `실시간 순위를 쓰려면 키움 계좌 연결이 필요해요. <a href="#settings/accounts">연결하기</a>`;
+    else if (!E.kiwoom) $("#apWarn").innerHTML = `실시간 순위·일봉을 쓰려면 키움 계좌 연결이 필요해요. <a href="#settings/accounts">연결하기</a>`;
   },
   async apRun() {
     const A = this.ap;
     if (A.busy) return;
-    A.busy = true; A.res = null; A.text = ""; A.shown = false; A.used = null; A.src = []; A.status = "실시간 순위와 분봉을 모으는 중";
+    A.busy = true; A.res = null; A.text = ""; A.shown = false; A.used = null; A.src = []; A.status = A.h === "day" ? "실시간 순위와 분봉을 모으는 중" : "순위·관심종목의 일봉 흐름을 모으는 중";
     this.apModels(); this.apDraw();
     let raf = 0;
     try {
-      await aiStream({ kind: "pick", mkt: A.m, model: A.model, web_search: A.web }, (ev) => {
+      await aiStream({ kind: "pick", mkt: A.m, model: A.model, web_search: A.web, horizon: A.h, theme: A.h === "day" ? "" : A.theme.trim() }, (ev) => {
         if (ev.t === "status") { A.status = ev.msg; this.apDraw(); }
         else if (ev.t === "text") { A.text += ev.text; A.status = "분석 중"; if (!raf) raf = requestAnimationFrame(() => { raf = 0; this.apDraw(); }); }
         else if (ev.t === "source") { A.src.push(ev); }
@@ -1536,7 +1568,7 @@ pages.invest = {
         else if (ev.t === "done") { A.used = ev; aiMeter.clear(); }
       });
     } catch (e) { if (e instanceof NeedConnect) { location.hash = "#connect"; return; } A.err = e.message; }
-    finally { if (raf) cancelAnimationFrame(raf); A.busy = false; A.status = ""; this.apDraw(); this.apEstimate(); this.apHistory(); }
+    finally { if (raf) cancelAnimationFrame(raf); A.busy = false; A.status = ""; this.apDraw(); this.apEstimate(); this.apHistory(); this.apScore(); }
   },
   apDraw() {
     const A = this.ap, el = $("#apOut");
@@ -1549,7 +1581,8 @@ pages.invest = {
       ${A.busy ? `<div class="ai-status"><i class="ai-dot"></i><span>${esc(A.status || "")}</span></div>` : ""}
       ${R && R.stance ? `<div class="ap-stance s-${esc(R.stance)}"><b>${esc(R.stance)}</b><span>${esc(R.view || "")}</span></div>` : ""}
       ${R && R.note ? `<div class="notice">${esc(R.note)}</div>` : ""}
-      ${R && R.stance === "관망" && R.picks.length && !R.note ? `<div class="notice">AI는 지금 관망을 권해요. 그래도 가장 나은 종목을 비중을 줄여 골라 뒀어요. 들어간다면 작게, 짧게.</div>` : ""}
+      ${R && R.horizon && R.horizon !== "day" ? `<div class="ap-kind"><span class="tag v">${esc(R.label)} 추천</span>${R.theme ? `<span class="tag">테마: ${esc(R.theme)}</span>` : ""}<span class="tiny">몇 분 안에 끝나는 단타가 아니라, 약 ${AI_H[R.horizon].days}거래일 들고 가는 기준이에요</span></div>` : ""}
+      ${R && R.stance === "관망" && R.picks.length && !R.note ? `<div class="notice">AI는 지금 관망을 권해요. 그래도 가장 나은 종목을 비중을 줄여 골라 뒀어요. 들어간다면 작게${R.horizon && R.horizon !== "day" ? "" : ", 짧게"}.</div>` : ""}
       ${body ? `<div class="ai-ans ap-text">${mdLite(body)}</div>` : ""}
       ${A.err ? `<div class="notice warn">${esc(A.err)}</div>` : ""}
       ${A.src.length ? `<details class="ap-src"><summary class="tiny">찾아본 뉴스·자료 ${A.src.length}건</summary>${A.src.map((x) => `<a href="${safeUrl(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>`).join("")}</details>` : ""}
@@ -1560,18 +1593,23 @@ pages.invest = {
       const ev = (p.win_prob / 100 * p.target_pct - (1 - p.win_prob / 100) * p.stop_pct).toFixed(2);
       const px = p.entry_type === "limit" && p.entry_price ? p.entry_price : p.price;
       const qty = cash && px ? Math.max(1, Math.floor(cash * (p.weight_pct / 100) / px)) : 1;
+      const sw = !!(p.horizon && p.horizon !== "day"), dl = p.daily || {};
+      const dchip = (l, v, suf = "%", sign = true) => v == null ? "" : `<span>${l} <b class="${sign ? tone(v) : ""}">${sign && v > 0 ? "+" : ""}${v}${suf}</b></span>`;
       return `<section class="card ap-pick ${fresh}" style="--d:${i * 90}ms">
         <div class="ap-ph"><span class="ap-rank">${i + 1}</span>
           <a class="ap-pn" href="#invest/stock?m=${R.mkt}&s=${encodeURIComponent(p.sym)}"><b>${esc(p.name)}</b><small>${esc(p.sym)} · 지금 ${P(p.price)} <span class="${tone(p.change_pct)}">${p.change_pct == null ? "" : pct(p.change_pct, 2)}</span></small></a>
           ${winRing(p.win_prob)}</div>
         ${p.cal_prob != null ? `<div class="ap-cal"><b>보정 승률 ${p.cal_prob}%</b><span>AI는 ${p.win_prob}%라고 했지만, 비슷하게 말한 지난 추천 ${p.cal_n}건의 실제 결과로 맞춘 값이에요</span></div>` : ""}
-        ${p.auto ? `<div class="tiny ap-auto">지표 자동 선정 · AI가 관망이라 앱이 실시간 지표로 고른 후보예요</div>` : ""}
+        ${p.auto ? `<div class="tiny ap-auto">지표 자동 선정 · AI가 종목을 주지 않아 앱이 ${sw ? "일봉" : "실시간"} 지표로 고른 후보예요</div>` : ""}
+        ${sw ? `<div class="ap-cat"><div class="ap-ct"><span class="tag c-${esc(p.catalyst_type)}">${esc(p.catalyst_type)}</span>${p.theme ? `<span class="tag">${esc(p.theme)}</span>` : ""}${p.in_cand ? "" : `<span class="tag y">뉴스에서 찾음</span>`}</div>
+          ${p.catalyst ? `<b>${esc(p.catalyst)}</b>` : ""}${p.catalyst_date ? `<small>확인 시기: ${esc(p.catalyst_date)}</small>` : ""}</div>
+          ${p.daily ? `<div class="ap-daily">${dchip("5일", dl["5일%"])}${dchip("20일", dl["20일%"])}${dchip("20일선", dl["20일선대비%"])}${dchip("고점 대비", dl["60일고점대비%"])}${dchip("거래량", dl["5일거래량배수"], "배", false)}${dchip("하루 변동", dl["하루변동폭%"], "%", false)}</div>` : ""}` : ""}
         <div class="ap-bar"><i class="sl" style="width:${(p.stop_pct / (p.stop_pct + p.target_pct) * 100).toFixed(1)}%"></i><i class="tp"></i></div>
         <div class="ap-lv">
           <div><span>손절</span><b class="down">−${p.stop_pct}%</b><small>${P(px * (1 - p.stop_pct / 100))}</small></div>
           <div><span>${p.entry_type === "limit" ? "지정가 매수" : "시장가 매수"}</span><b>${P(px)}</b><small>기대값 ${ev > 0 ? "+" : ""}${ev}%</small></div>
           <div><span>익절</span><b class="up">+${p.target_pct}%</b><small>${P(px * (1 + p.target_pct / 100))}</small></div></div>
-        <div class="ap-meta">${p.trail_pct ? `<span>추적 익절 ${p.trail_pct}%</span>` : ""}<span>${us ? "정규장 마감 8분 전 정리" : `${esc(p.exit_by || "15:12")}까지 안 닿으면 정리`}</span><span>권장 비중 ${p.weight_pct}%${cash ? ` · 약 ${won(qty)}주` : ""}</span><span>점수 ${p.score}</span></div>
+        <div class="ap-meta">${p.trail_pct ? `<span>추적 익절 ${p.trail_pct}%</span>` : ""}<span>${sw ? `약 ${p.hold_days}거래일 보유 · ${esc((p.end_date || "").slice(5).replace("-", "/"))} 장 마감 전까지 안 닿으면 정리` : us ? "정규장 마감 8분 전 정리" : `${esc(p.exit_by || "15:12")}까지 안 닿으면 정리`}</span><span>권장 비중 ${p.weight_pct}%${cash ? ` · 약 ${won(qty)}주` : ""}</span><span>점수 ${p.score}</span></div>
         <ul class="ap-why">${p.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}${p.risks.map((r) => `<li class="risk">${esc(r)}</li>`).join("")}</ul>
         <button type="button" class="btn red wide" data-apbuy="${i}">매수하고 자동 익절·손절 걸기</button>
       </section>`;
@@ -1582,7 +1620,9 @@ pages.invest = {
       const qty = cash && px ? Math.max(1, Math.floor(cash * (p.weight_pct / 100) / px)) : 1;
       orderSheet({ code: p.sym, market: R.mkt, side: "buy", name: p.name, exch: p.exch, qty,
         price: p.entry_type === "limit" ? (us ? px : Math.round(px / krTick(px)) * krTick(px)) : null,
-        guard: { target_pct: p.target_pct, stop_pct: p.stop_pct, trail_pct: p.trail_pct, exit_by: R.mkt === "kr" ? (p.exit_by || "15:12") : "", pick_id: R.id },
+        guard: p.horizon && p.horizon !== "day"
+          ? { target_pct: p.target_pct, stop_pct: p.stop_pct, trail_pct: p.trail_pct, exit_by: "", pick_id: R.id, horizon: p.horizon, hold_days: p.hold_days, end_date: p.end_date }
+          : { target_pct: p.target_pct, stop_pct: p.stop_pct, trail_pct: p.trail_pct, exit_by: R.mkt === "kr" ? (p.exit_by || "15:12") : "", pick_id: R.id },
         after: () => this.apGuards() });
     });
   },
@@ -1599,10 +1639,10 @@ pages.invest = {
       const x = cur && hi > lo ? Math.min(100, Math.max(0, (cur - lo) / (hi - lo) * 100)) : null, base = (g.base - lo) / (hi - lo) * 100;
       const st = { watching: g.msg || "감시 중", done: `${g.exit_reason} · ${P(g, g.exit_price)}`, cancelled: "감시 끔", expired: g.msg }[g.status] || g.status;
       return `<div class="ap-g ${g.status}">
-        <div class="ap-gh"><a href="#invest/stock?m=${g.mkt}&s=${encodeURIComponent(g.sym)}"><b>${esc(g.name)}</b> <small>${won(g.qty)}주 · 매수 ${P(g, g.base)}</small></a>
+        <div class="ap-gh"><a href="#invest/stock?m=${g.mkt}&s=${encodeURIComponent(g.sym)}"><b>${esc(g.name)}</b>${g.horizon && g.horizon !== "day" ? ` <span class="tag v">${AI_H[g.horizon].label}</span>` : ""} <small>${won(g.qty)}주 · 매수 ${P(g, g.base)}</small></a>
           <span class="${tone(g.pnl_pct)}" style="font-weight:800">${g.pnl_pct == null ? "" : pct(g.pnl_pct, 2)}</span></div>
         <div class="ap-gbar"><i class="b" style="left:${base.toFixed(1)}%"></i>${x == null ? "" : `<i class="c ${tone(g.pnl_pct)}" style="left:${x.toFixed(1)}%"></i>`}</div>
-        <div class="ap-gl"><span class="down">손절 ${P(g, lo)}</span><span class="tiny">${esc(st)}${g.trail_pct ? ` · 추적 ${g.trail_pct}%` : ""}${g.exit_by ? ` · ${esc(g.exit_by)} 정리` : ""}</span><span class="up">익절 ${P(g, hi)}</span></div>
+        <div class="ap-gl"><span class="down">손절 ${P(g, lo)}</span><span class="tiny">${esc(st)}${g.trail_pct ? ` · 추적 ${g.trail_pct}%` : ""}${g.exit_by ? ` · ${esc(g.exit_by)} 정리` : ""}${g.exit_date ? ` · ${esc(g.exit_date.slice(5).replace("-", "/"))}까지 보유` : ""}</span><span class="up">익절 ${P(g, hi)}</span></div>
         ${g.status === "watching" ? `<button type="button" class="btn sm soft" data-gcancel="${g.id}">감시 끄기</button>` : ""}</div>`;
     };
     el.innerHTML = G.length ? `<div class="sec-title">자동 익절·손절 ${on.length ? `· 감시 중 ${on.length}` : ""}</div>
@@ -1622,7 +1662,7 @@ pages.invest = {
     const H = await GET("/api/ai/picks").catch(() => []);
     if (!$("#apHist") || !H.length) return;
     el.innerHTML = `<details class="card ap-hist"><summary><b>지난 추천</b> <span class="tiny">${H.length}회 · 비용 합계 약 ${won(Math.round(H.reduce((a, x) => a + (x.usd || 0), 0) * ((this.ap.est || {}).fx || 1400)))}원</span></summary>
-      <div class="list">${H.map((h) => `<button type="button" class="item" data-pick="${h.id}"><span class="main"><b>${esc(h.ts.slice(5, 16).replace("T", " "))} · ${h.mkt === "us" ? "미국" : "국내"} · ${esc(h.stance || "-")}</b>
+      <div class="list">${H.map((h) => `<button type="button" class="item" data-pick="${h.id}"><span class="main"><b>${esc(h.ts.slice(5, 16).replace("T", " "))} · ${AI_H[h.horizon || "day"].label} · ${h.mkt === "us" ? "미국" : "국내"} · ${esc(h.stance || "-")}</b>
         <span class="sub">${h.picks.length ? h.picks.map((p) => `${esc(p.name)}(${p.win_prob}%·+${p.target_pct}/−${p.stop_pct})`).join(", ") : "관망"}</span></span>
         <span class="end tiny">${esc(h.model.replace("claude-", ""))} ›</span></button>`).join("")}</div></details>`;
     el.onclick = (e) => { const b = e.target.closest("[data-pick]"); if (b) pickSheet(b.dataset.pick); };
@@ -1632,38 +1672,51 @@ pages.invest = {
     const el = $("#apScore");
     if (!el) return;
     let st;
-    try { st = await GET("/api/ai/stats?days=30"); } catch (e) { el.innerHTML = `<div class="tiny">${esc(e.message)}</div>`; return; }
-    if (!$("#apScore")) return;
+    const hz = this.ap.h, dd = hz === "day" ? 30 : 90, sw = hz !== "day";
+    (this.sf || (this.sf = { days: dd, mkt: "", model: "", h: hz })).h = hz; this.sf.days = dd;  // 성적 화면도 같은 종류로 열리게
+    try { st = await GET(`/api/ai/stats?days=${dd}&h=${hz}`); } catch (e) { el.innerHTML = `<div class="tiny">${esc(e.message)}</div>`; return; }
+    if (!$("#apScore") || this.ap.h !== hz) return;
     el.onclick = (e) => { const g = e.target.closest("[data-go]"); if (g) { e.preventDefault(); location.hash = g.dataset.go; } };
     const a = st.all;
-    el.innerHTML = a.n ? `<div class="card-head"><h2>AI 추천 성적 · 최근 30일</h2><span class="link">자세히 ›</span></div>
+    el.innerHTML = a.n ? `<div class="card-head"><h2>AI ${AI_H[hz].label} 추천 성적 · 최근 ${dd}일</h2><span class="link">자세히 ›</span></div>
       <div class="sc-kpi">
         <div><span>추천 1건당 평균</span><b class="${tone(a.avg)}">${a.avg == null ? "-" : pct(a.avg, 2)}</b></div>
         <div><span>익절 도달률</span><b>${a.tp_rate == null ? "-" : a.tp_rate + "%"}</b></div>
         <div><span>AI 예측 승률</span><b>${a.pred == null ? "-" : a.pred + "%"}</b></div></div>
-      ${resultBar(a)}
-      <div class="sc-recent">${st.rows.slice(0, 4).map((r) => `<span class="sc-r" data-go="#invest/stock?m=${r.mkt}&s=${encodeURIComponent(r.sym)}&pk=${r.pick_id}"><i class="as-badge r-${esc(r.result || "진행 중")}">${esc(r.result || "진행 중")}</i><b>${esc(r.name || r.sym)}</b><em class="${tone(r.net_pct)}">${r.net_pct == null ? "" : pct(r.net_pct, 1)}</em></span>`).join("")}</div>
+      ${resultBar(a, sw ? "기간 만료" : "시간 정리")}
+      <div class="sc-recent">${st.rows.slice(0, 4).map((r) => `<span class="sc-r" data-go="#invest/stock?m=${r.mkt}&s=${encodeURIComponent(r.sym)}&pk=${r.pick_id}${sw ? "&ph=" + hz : ""}"><i class="as-badge r-${esc(r.result || "진행 중")}">${esc(sw && r.result === "시간 정리" ? "기간 만료" : r.result || "진행 중")}</i><b>${esc(r.name || r.sym)}</b><em class="${tone(r.net_pct)}">${r.net_pct == null ? "" : pct(r.net_pct, 1)}</em></span>`).join("")}</div>
       <div class="tiny">추천 ${a.n}건 · 채점 ${a.done} · 진행 중 ${a.live} · 종목을 누르면 차트에서 추적, 카드를 누르면 전체 성적</div>`
-      : `<div class="card-head"><h2>AI 추천 성적</h2></div><div class="tiny">추천을 받으면, 사지 않아도 그 뒤 실제 가격으로 익절·손절·시간 정리 결과를 매겨 여기 모아 보여 드려요.</div>`;
+      : `<div class="card-head"><h2>AI ${AI_H[hz].label} 추천 성적</h2></div><div class="tiny">${sw ? `추천을 받으면, 사지 않아도 그 뒤 ${AI_H[hz].days}거래일 동안 일봉으로 익절·손절·기간 만료 결과를 매기고, 지수와 견준 성적까지 여기 모아요.` : "추천을 받으면, 사지 않아도 그 뒤 실제 가격으로 익절·손절·시간 정리 결과를 매겨 여기 모아 보여 드려요."}</div>`;
   },
   async asLearn() {
     const el = $("#asLearn");
     if (!el) return;
+    const hz = (this.sf || {}).h || "day", HL = AI_H[hz].label;
     let L;
-    try { L = await GET("/api/ai/learn"); } catch (e) { el.innerHTML = `<div class="tiny">${esc(e.message)}</div>`; return; }
-    if (!$("#asLearn")) return;
-    const step = L.n < L.min ? 0 : L.lessons.text ? 2 : 1, ls = L.lessons || {};
-    el.innerHTML = `<div class="card-head"><h2>자체 학습</h2><span class="tag ${step ? "g" : "y"}">${esc(L.stage)}</span></div>
-      <div class="lr-steps">${[["자료 쌓기", `채점 ${L.n}/${L.min}건`], ["통계 되먹임", "추천할 때마다 자동"], ["AI 복기 규칙", ls.at ? esc(ls.at.slice(5).replace("T", " ")) + " 갱신" : "아직 없음"]].map(([a, b], i) => `<div class="${i <= step ? "on" : ""}"><i>${i + 1}</i><b>${a}</b><span>${b}</span></div>`).join("")}</div>
-      <div class="tiny">추천 뒤 실제 가격을 추적한 결과를 다음 추천 때 AI에게 함께 보여 줘요. 잘 통한 조건은 더 고르고, 안 통한 조건은 피하고, 승률·목표·손절 폭을 실제 결과에 맞추게 돼요.</div>
-      ${L.n < L.min ? `<div class="bar"><div style="width:${L.n / L.min * 100}%"></div></div><div class="tiny">채점이 ${L.min}건 쌓이면 학습 내용이 추천에 들어가기 시작해요. 추천을 받아 두기만 해도(사지 않아도) 쌓여요.</div>` : `
+    try { L = await GET(`/api/ai/learn?h=${hz}`); } catch (e) { el.innerHTML = `<div class="tiny">${esc(e.message)}</div>`; return; }
+    if (!$("#asLearn") || ((this.sf || {}).h || "day") !== hz) return;
+    const step = L.n < L.min ? 0 : L.lessons.text ? 2 : 1, ls = L.lessons || {}, T = L.tune || {};
+    const arrow = (a, b) => a === b ? `<b>${b}%</b>` : `<span>${a}%</span><i aria-hidden="true">→</i><b>${b}%</b>`;
+    el.innerHTML = `<div class="card-head"><h2>자체 학습 · ${HL} 추천</h2><span class="tag ${step ? "g" : "y"}">${esc(L.stage)}</span></div>
+      <div class="lr-steps">${[["자료 쌓기", `채점 ${L.n}/${L.min}건${L.live ? ` · 진행 ${L.live}` : ""}`], ["통계·자동 조정", "추천할 때마다 자동"], ["AI 복기 규칙", ls.at && ls.text ? esc(ls.at.slice(5).replace("T", " ")) + ` · ${ls.ver}판` : "아직 없음"]].map(([a, b], i) => `<div class="${i <= step ? "on" : ""}"><i>${i + 1}</i><b>${a}</b><span>${b}</span></div>`).join("")}</div>
+      <div class="tiny">추천 뒤 실제 가격을 추적한 결과를 다음 ${HL} 추천 때 AI에게 함께 보여 줘요. 잘 통한 조건은 더 고르고, 안 통한 조건은 피하고, 승률·목표·손절${hz === "day" ? "" : "·보유일"}을 실제 결과에 맞추게 돼요. 당일·1주·1달은 서로 섞지 않고 따로 배워요.</div>
+      ${L.n < L.min ? `<div class="bar"><div style="width:${L.n / L.min * 100}%"></div></div><div class="tiny">채점이 ${L.min}건 쌓이면 학습 내용이 추천에 들어가기 시작해요. 추천을 받아 두기만 해도(사지 않아도) 쌓여요.${hz === "day" ? "" : ` ${HL} 추천은 결과가 나오기까지 최대 ${AI_H[hz].days}거래일이 걸려요.`}</div>` : `
+      ${T.ready ? `<h3 class="lr-h">자동 조정값</h3>
+        <div class="lr-tune"><div><span>목표 폭</span><p>${arrow(T.now_tp, T.tp)}</p><small>절반은 실제로 닿았던 상승폭</small></div>
+          <div><span>손절 폭</span><p>${arrow(T.now_sl, T.sl)}</p><small>이긴 추천이 견딘 하락폭</small></div>
+          ${T.hold ? `<div><span>보유일</span><p><b>${T.hold}거래일</b></p><small>이때 평균 ${pct(T.hold_avg, 2)}</small></div>` : ""}</div>
+        ${T.prefer.length ? `<ul class="lr-ins good">${T.prefer.map((x) => `<li><b>우선</b> ${esc(x)}</li>`).join("")}</ul>` : ""}
+        ${T.avoid.length ? `<ul class="lr-ins bad">${T.avoid.map((x) => `<li><b>피함</b> ${esc(x)}</li>`).join("")}</ul>` : ""}
+        <div class="tiny">왼쪽은 지금까지 AI가 잡은 평균, 오른쪽은 실제 결과에서 계산한 값이에요. 다음 추천부터 이 값을 기준으로 잡게 하고, 같은 조건의 후보에는 가산점을 줘요.</div>` : ""}
       <h3 class="lr-h">지금 추천에 반영 중인 통계</h3>
       ${L.insights.length ? `<ul class="lr-ins">${L.insights.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : `<div class="tiny">아직 뚜렷한 차이가 나는 조건이 없어요. 조건별 성적표는 그대로 AI에게 전달돼요.</div>`}
       ${L.bands.length ? `<h3 class="lr-h">승률 보정</h3><div class="lr-cal">${L.bands.map((b) => `<div><span>AI ${esc(b.band)}</span><div class="lr-cb"><i class="p" style="width:${b.pred}%"></i><i class="a" style="width:${b.actual}%"></i></div><b>실제 ${b.actual}%</b><small>${b.n}건</small></div>`).join("")}</div>
         <div class="tiny">옅은 막대는 AI가 말한 승률, 진한 막대는 실제 익절률이에요. 새 추천 카드에는 이걸로 맞춘 '보정 승률'이 함께 나와요.</div>` : ""}
-      <h3 class="lr-h">AI 복기 규칙</h3>
+      <h3 class="lr-h">AI 복기 규칙${ls.text ? ` · ${ls.ver}판` : ""}</h3>
       ${ls.text ? `<div class="ai-ans lr-rules">${mdLite(ls.text)}</div><div class="tiny">${esc((ls.model || "").replace("claude-", ""))} · 채점 ${ls.n}건 기준 · 새 채점 ${L.next_in}건 더 쌓이면 다시 복기</div>`
         : `<div class="tiny">Claude가 성적표 전체를 읽고 '추천 규칙'을 써 두면, 그 뒤 추천마다 그 규칙을 따라요.</div>`}
+      ${L.by_ver.length > 1 ? `<div class="lr-ver">${L.by_ver.map((v) => `<div><span>${v.ver ? `규칙 ${v.ver}판` : "규칙 없음"}</span><b class="${tone(v.avg)}">${pct(v.avg, 2)}</b><small>${v.n}건 · 이익 ${v.win}%</small></div>`).join("")}</div>
+        <div class="tiny">규칙을 고칠 때마다 판이 올라가고, 그 판을 읽고 낸 추천의 성적을 따로 재요. 규칙이 실제로 도움이 됐는지 여기서 보여요.</div>` : ""}
       <div class="lr-act"><button type="button" class="btn ai-btn" id="lrRun" data-ai-x="learn"><span class="ai-spark" aria-hidden="true">✦</span>지금 복기해서 규칙 ${ls.text ? "갱신" : "만들기"}</button>
         ${ls.text ? `<button type="button" class="btn sm soft" id="lrClear">규칙 지우기</button>` : ""}</div>
       <div class="lr-auto"><span><b>자동 복기</b><small>새 채점이 ${L.step}건 쌓일 때마다(하루 한 번까지) 알아서 복기해요. 한 번에 수백 원쯤 들어요.</small></span>
@@ -1671,10 +1724,11 @@ pages.invest = {
   },
   async aiStat() {
     setTop("AI 추천 성적", { back: "#invest/ai", menu: "invest", sub: "aistat" });
-    const F = this.sf || (this.sf = { days: 30, mkt: "", model: "" });
+    const F = this.sf || (this.sf = { days: 30, mkt: "", model: "", h: (this.ap || {}).h || "day" });
+    if (!AI_H[F.h]) F.h = "day";
     view.innerHTML = `<div id="asRoot" class="as"><div class="empty loading">채점하는 중</div></div>`;
     const load = async (refresh) => {
-      const st = await GET(`/api/ai/stats?days=${F.days}&mkt=${F.mkt}&model=${encodeURIComponent(F.model)}${refresh ? "&refresh=1" : ""}`);
+      const st = await GET(`/api/ai/stats?h=${F.h}&days=${F.days}&mkt=${F.mkt}&model=${encodeURIComponent(F.model)}${refresh ? "&refresh=1" : ""}`);
       if (!$("#asRoot")) return;
       this.asDraw(st, F, load);
     };
@@ -1690,7 +1744,10 @@ pages.invest = {
       <div class="as-tw"><table class="as-t"><thead><tr><th></th><th>건수</th><th>익절률</th><th>이익률</th><th>평균</th><th>손익비</th></tr></thead>
       <tbody>${list.map((x) => row(x, lab(x.key))).join("")}</tbody></table></div></section>` : "";
     const maxH = Math.max(1, ...st.hist);
-    const hl = ["−3%↓", "−3~−2", "−2~−1", "−1~0", "0~1", "1~2", "2~3", "3%↑"];
+    const hl = st.hist_labels || ["−3%↓", "−3~−2", "−2~−1", "−1~0", "0~1", "1~2", "2~3", "3%↑"];
+    const sw = st.horizon !== "day", HL = AI_H[st.horizon].label, endName = sw ? "기간 만료" : "시간 정리";
+    const rname = (r) => (r === "시간 정리" && sw ? "기간 만료" : r || "진행 중");
+    const bestPath = sw && st.path && st.path.length ? st.path.slice().sort((x, y) => y.avg - x.avg)[0] : null;
     const insight = [];
     if (a.done >= 3) {
       if (a.pred != null && a.tp_rate != null) insight.push(a.tp_rate >= a.pred ? `AI가 말한 승률(${a.pred}%)보다 실제 익절률(${a.tp_rate}%)이 높아요. AI가 보수적으로 말하는 편이에요.` : `AI 예측 승률(${a.pred}%)보다 실제 익절률(${a.tp_rate}%)이 낮아요. 화면의 승률을 그만큼 낮춰 보세요.`);
@@ -1699,11 +1756,16 @@ pages.invest = {
       if (best && st.by_model.length > 1) insight.push(`엔진 중에선 ${mn(best.key)}가 1건당 평균 ${pct(best.avg, 2)}로 가장 좋아요.`);
       const sb = st.by_bought.find((x) => x.key === "샀음"), nb = st.by_bought.find((x) => x.key === "안 삼");
       if (sb && nb && sb.avg != null && nb.avg != null) insight.push(`직접 산 종목 평균 ${pct(sb.avg, 2)}, 안 산 종목 평균 ${pct(nb.avg, 2)} — ${sb.avg >= nb.avg ? "고르는 눈이 AI보다 나아요" : "안 산 쪽이 더 좋았어요"}.`);
+      if (sw && a.alpha != null) insight.push(`같은 기간 지수는 평균 ${pct(a.bench, 2)}, 추천 종목은 그보다 ${pct(a.alpha, 2)}p ${a.alpha >= 0 ? "더 벌었어요. 시장 덕이 아니라 종목 선택이 통한 거예요" : "덜 벌었어요. 지수를 사는 편이 나았어요"}.`);
+      if (bestPath && st.path.length > 1) insight.push(`목표·손절 없이 그냥 들고 있었다면 ${bestPath.k}거래일째가 평균 ${pct(bestPath.avg, 2)}로 가장 좋았어요.`);
+      const bc = sw ? (st.by_cat || []).filter((x) => x.done >= 2 && x.avg != null).sort((x, y) => y.avg - x.avg) : [];
+      if (bc.length > 1) insight.push(`재료 유형은 '${bc[0].key}'가 평균 ${pct(bc[0].avg, 2)}로 가장 좋고, '${bc[bc.length - 1].key}'가 ${pct(bc[bc.length - 1].avg, 2)}로 가장 나빠요.`);
     } else insight.push("채점이 3건 이상 쌓이면 엔진·시장별 비교와 해석을 보여 드려요.");
     const W = 320, H = 110, cv = st.curve, cmin = Math.min(0, ...cv.map((x) => x.v)), cmax = Math.max(0, ...cv.map((x) => x.v)), cr = cmax - cmin || 1;
     const X = (i) => (cv.length < 2 ? W / 2 : i / (cv.length - 1) * W), Y = (v) => 8 + (1 - (v - cmin) / cr) * (H - 16);
     const line = cv.map((p, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join("");
     $("#asRoot").innerHTML = `
+      <div class="as-hz" role="group" aria-label="추천 종류" data-f="h">${Object.entries(AI_H).map(([k, v]) => `<button type="button" data-v="${k}" aria-pressed="${k === F.h}"><b>${v.label} 추천</b><small>${v.sub}</small></button>`).join("")}</div>
       <div class="as-filters">
         ${chips("days", [[7, "7일"], [30, "30일"], [90, "90일"], [0, "전체"]], F.days)}
         ${chips("mkt", [["", "전체 시장"], ["kr", "국내"], ["us", "미국"]], F.mkt)}
@@ -1716,22 +1778,24 @@ pages.invest = {
           <div><span>익절 도달률</span><b>${a.tp_rate == null ? "-" : a.tp_rate + "%"}</b></div>
           <div><span>이익으로 끝남</span><b>${a.win_rate == null ? "-" : a.win_rate + "%"}</b></div>
           <div><span>AI 예측 승률</span><b>${a.pred == null ? "-" : a.pred + "%"}</b></div>
-          <div><span>최고 / 최저</span><b><em class="up">${a.best == null ? "-" : pct(a.best, 1)}</em> / <em class="down">${a.worst == null ? "-" : pct(a.worst, 1)}</em></b></div></div>
-        ${resultBar(a)}
-        <div class="tiny">추천 ${a.n}건 · 채점 끝 ${a.done} · 진행 중 ${a.live} · 미체결 ${a.unfilled} · AI 비용 ${won$(a.cost_usd)}</div>
+          <div><span>최고 / 최저</span><b><em class="up">${a.best == null ? "-" : pct(a.best, 1)}</em> / <em class="down">${a.worst == null ? "-" : pct(a.worst, 1)}</em></b></div>
+          ${sw ? `<div><span>지수보다(같은 기간)</span><b class="${tone(a.alpha)}">${a.alpha == null ? "-" : pct(a.alpha, 2) + "p"}</b></div>
+          <div><span>결과까지 평균</span><b>${a.hold == null ? "-" : a.hold + "거래일"}</b></div>` : ""}</div>
+        ${resultBar(a, endName)}
+        <div class="tiny">${HL} 추천 ${a.n}건 · 채점 끝 ${a.done} · 진행 중 ${a.live}${sw ? "" : ` · 미체결 ${a.unfilled}`} · AI 비용 ${won$(a.cost_usd)}</div>
         ${a.alt_n ? `<div class="notice">성적은 <b>추천을 보고 바로 샀을 때</b> 기준이에요. AI가 말한 지정가를 기다렸다면: ${a.alt_n}건 중 미체결 ${a.alt_unfilled}건${a.alt_avg == null ? "" : ` · 체결된 것 평균 <b class="${tone(a.alt_avg)}">${pct(a.alt_avg, 2)}</b>`}</div>` : ""}
       </section>
       <div class="sec-title" id="asList">추천 하나하나 · ${st.rows.length}건 <span class="tiny" style="margin-left:auto;font-weight:600">누르면 차트에 추천 시점·익절·손절 선</span></div>
-      <section class="card tight"><div class="list">${st.rows.length ? st.rows.map((r, ri) => `<a class="item as-r ${ri >= 8 ? "more" : ""}" href="#invest/stock?m=${r.mkt}&s=${encodeURIComponent(r.sym)}&pk=${r.pick_id}">
-        <span class="as-badge r-${esc(r.result || "진행 중")}">${esc(r.result || "진행 중")}</span>
-        <span class="main"><b>${esc(r.name || r.sym)} ${r.bought ? `<span class="tag g">샀음</span>` : ""}</b>
-          <span class="sub">${esc(r.ts.slice(5, 16).replace("T", " "))} · ${r.mkt === "us" ? "미국" : "국내"} · ${esc(mn(r.model))} · 예측 ${r.win_prob ?? "-"}% · +${r.target_pct}/−${r.stop_pct}${r.mfe != null ? ` · 최대 ${pct(r.mfe, 1)}/${pct(r.mae, 1)}` : ""}</span></span>
-        <span class="end"><b class="${tone(r.net_pct)}">${r.net_pct == null ? "-" : pct(r.net_pct, 2)}</b><span class="tiny">${r.alt_result ? `지정가였다면 <span class="${tone(r.alt_net)}">${esc(r.alt_result)}${r.alt_net == null ? "" : " " + pct(r.alt_net, 1)}</span>` : r.src ? esc(r.src) : ""}</span></span></a>`).join("") : `<div class="empty">아직 추천 기록이 없어요</div>`}</div>${st.rows.length > 8 ? `<button type="button" class="btn sm soft as-more" id="asMore">나머지 ${st.rows.length - 8}건 더 보기</button>` : ""}</section>
+      <section class="card tight"><div class="list">${st.rows.length ? st.rows.map((r, ri) => `<a class="item as-r ${ri >= 8 ? "more" : ""}" href="#invest/stock?m=${r.mkt}&s=${encodeURIComponent(r.sym)}&pk=${r.pick_id}${sw ? "&ph=" + st.horizon : ""}">
+        <span class="as-badge r-${esc(r.result || "진행 중")}">${esc(rname(r.result))}</span>
+        <span class="main"><b>${esc(r.name || r.sym)} ${r.bought ? `<span class="tag g">샀음</span>` : ""}${sw && r.cat ? ` <span class="tag c-${esc(r.cat)}">${esc(r.cat)}</span>` : ""}</b>
+          <span class="sub">${esc(r.ts.slice(5, 16).replace("T", " "))} · ${r.mkt === "us" ? "미국" : "국내"} · ${esc(mn(r.model))}${sw && r.theme ? ` · ${esc(r.theme)}` : ""} · 예측 ${r.win_prob ?? "-"}% · +${r.target_pct}/−${r.stop_pct}${r.mfe != null ? ` · 최대 ${pct(r.mfe, 1)}/${pct(r.mae, 1)}` : ""}</span></span>
+        <span class="end"><b class="${tone(r.net_pct)}">${r.net_pct == null ? "-" : pct(r.net_pct, 2)}</b><span class="tiny">${sw ? (r.days_held ? `${r.days_held}거래일째${r.bench != null ? ` · 지수 ${pct(r.bench, 1)}` : ""}` : esc(r.src || "")) : r.alt_result ? `지정가였다면 <span class="${tone(r.alt_net)}">${esc(r.alt_result)}${r.alt_net == null ? "" : " " + pct(r.alt_net, 1)}</span>` : r.src ? esc(r.src) : ""}</span></span></a>`).join("") : `<div class="empty">아직 ${HL} 추천 기록이 없어요. AI 탭에서 '${HL}'을 고르고 추천을 받아 두면, 사지 않아도 여기에 쌓여요.</div>`}</div>${st.rows.length > 8 ? `<button type="button" class="btn sm soft as-more" id="asMore">나머지 ${st.rows.length - 8}건 더 보기</button>` : ""}</section>
       <section class="card as-learn" id="asLearn"><div class="empty small loading">자체 학습 상태 불러오는 중</div></section>
       <section class="card as-ins"><h2>한눈에 해석</h2><ul>${insight.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></section>
       ${st.by_mkt.length ? `<div class="as-duo">${["kr", "us"].map((k) => { const x = st.by_mkt.find((y) => y.key === k); return `<section class="card as-m ${k}">
         <h2>${k === "kr" ? "국내" : "미국"}</h2>${x ? `<b class="${tone(x.avg)}">${x.avg == null ? "-" : pct(x.avg, 2)}</b><span>${x.n}건 · 익절 ${x.tp_rate ?? "-"}%</span>
-        <div class="as-mini">${resultBar(x)}</div>` : `<span>아직 없어요</span>`}</section>`; }).join("")}</div>` : ""}
+        <div class="as-mini">${resultBar(x, endName)}</div>` : `<span>아직 없어요</span>`}</section>`; }).join("")}</div>` : ""}
       ${st.by_model.length ? `<section class="card"><h2>엔진별</h2><div class="as-eng">${st.by_model.map((x) => `<div class="as-e">
         <div class="as-eh"><b>${esc(mn(x.key))}</b><span>${x.n}건 · 1건 비용 ${won$(x.cost_usd / Math.max(1, x.n))}</span></div>
         <div class="as-eb"><i class="${(x.avg || 0) >= 0 ? "pos" : "neg"}" style="width:${Math.min(100, Math.abs(x.avg || 0) * 25)}%"></i><b class="${tone(x.avg)}">${x.avg == null ? "-" : pct(x.avg, 2)}</b></div>
@@ -1740,19 +1804,40 @@ pages.invest = {
         <path class="ln" pathLength="1" d="${line}" fill="none" stroke="${cv[cv.length - 1].v >= 0 ? "var(--up)" : "var(--down)"}" stroke-width="2.2" stroke-linejoin="round"/></svg>
         <div class="as-axis"><span>${esc(cv[0].t.slice(5))}</span><span>${pct(cv[cv.length - 1].v, 2)}</span><span>${esc(cv[cv.length - 1].t.slice(5))}</span></div>` : `<div class="empty small">채점이 2건 이상 쌓이면 그려요</div>`}</section>
       <section class="card"><h2>수익률 분포</h2><div class="as-hist">${st.hist.map((n, i) => `<div><em>${n || ""}</em><i class="${i < 4 ? "neg" : "pos"}" style="height:${n / maxH * 100}%"></i><span>${hl[i]}</span></div>`).join("")}</div></section>
+      ${sw && st.path && st.path.length ? `<section class="card"><h2>그냥 들고 있었다면</h2>
+        <div class="tiny">목표·손절을 걸지 않고 추천가에 사서 들고만 있었을 때, 며칠째에 얼마였는지예요(비용 뺀 뒤).</div>
+        <div class="as-path">${st.path.map((x) => { const mx = Math.max(0.01, ...st.path.map((y) => Math.abs(y.avg))); return `<div class="${bestPath && x.k === bestPath.k ? "best" : ""}"><em class="${tone(x.avg)}">${pct(x.avg, 1)}</em><span class="bx"><i class="${x.avg >= 0 ? "pos" : "neg"}" style="height:${Math.abs(x.avg) / mx * 100}%"></i></span><b>${x.k}일째</b><small>${x.n}건 · 이익 ${x.win}%</small></div>`; }).join("")}</div></section>` : ""}
+      ${sw ? table("재료 유형별", st.by_cat || [], (k) => k, `<div class="tiny">어떤 종류의 재료가 ${HL} 안에 실제로 통했는지예요.</div>`) : ""}
+      ${sw ? table("테마별", st.by_theme || [], (k) => k) : ""}
+      ${sw ? table("종목을 어디서 찾았나", st.by_cand || [], (k) => k, `<div class="tiny">'순위 후보 안'은 지금 돈이 몰리는 종목, 'AI가 뉴스에서 찾음'은 순위에 없던 종목이에요.</div>`) : ""}
+      ${sw ? table("결과까지 걸린 기간별", st.by_hold || [], (k) => k) : ""}
       ${table("AI가 말한 승률 vs 실제", st.by_band, (k) => `예측 ${k}`, `<div class="tiny">예측이 높을수록 실제 익절률도 높아야 믿을 만한 승률이에요.</div>`)}
       ${table("추천 순위별", st.by_rank, (k) => k)}
       ${table("AI 태도별", st.by_stance, (k) => k)}
       ${table("추천 받은 시간대별", st.by_tod, (k) => k)}
+      ${table("추천 받은 요일별", st.by_dow || [], (k) => k + "요일")}
       ${table("직접 산 것 vs 안 산 것", st.by_bought, (k) => k)}
-      <div class="tiny" style="padding:0 3px 8px">채점 방법: 추천을 보고 그 순간 가격에 바로 샀다고 봐요(AI가 지정가를 말했어도 기다리지 않아요. 지정가를 기다렸을 때의 결과는 참고로 따로 보여 줘요). 추천 시각이 낀 5분봉은 추천 전 움직임이 섞여 있어 종가만 써요. 그 뒤 5분봉에서 손절가·익절가 중 먼저 닿은 쪽으로 판정해요. 한 봉 안에 둘 다 닿으면 봉 모양으로 순서를 짐작해요(음봉이면 익절, 양봉이면 손절). 둘 다 안 닿으면 정리 시각(국내 추천 정리 시각, 미국 정규장 마감) 가격으로 끝내요. 수익률은 왕복 비용(국내 0.2%, 미국 0.25%)을 뺀 값이에요.</div>`;
+      ${(st.by_lv || []).length > 1 ? table("자체 학습 규칙 판별", st.by_lv, (k) => k, `<div class="tiny">AI 복기 규칙을 고칠 때마다 판이 올라가요. 판이 올라갈수록 평균이 좋아지면 학습이 통하고 있는 거예요.</div>`) : ""}
+      ${(st.by_feat || []).length ? `<section class="card"><h2>추천 순간의 조건별</h2><div class="tiny">추천할 때 그 종목이 어떤 상태였는지로 나눈 성적이에요(3건 이상 모인 조건만). 차이가 큰 조건은 자체 학습이 다음 추천에 반영해요.</div>
+        ${st.by_feat.map((g) => `<details class="as-fg" ${g.items.length > 1 && Math.max(...g.items.map((x) => x.avg)) - Math.min(...g.items.map((x) => x.avg)) >= (sw ? 1.5 : 0.5) ? "open" : ""}><summary><b>${esc(g.group)}</b><span class="tiny">${g.items.map((x) => `${esc(x.key)} ${pct(x.avg, 1)}`).join(" · ")}</span></summary>
+          <div class="as-fr">${g.items.slice().sort((x, y) => y.avg - x.avg).map((x) => `<div><span>${esc(x.key)}</span><small>${x.n}건 · 익절 ${x.tp_rate}%</small><b class="${tone(x.avg)}">${pct(x.avg, 2)}</b></div>`).join("")}</div></details>`).join("")}</section>` : ""}
+      <div class="tiny" style="padding:0 3px 8px">${sw ? `채점 방법(${HL} 추천): 추천을 보고 그 순간 가격에 바로 샀다고 봐요. 추천 당일은 추천 뒤의 5분봉만, 그다음 날부터는 일봉으로 손절가·익절가 중 먼저 닿은 쪽을 가려요. 시가가 이미 손절가 아래(또는 익절가 위)에서 시작하면 그 시가에 팔린 것으로 쳐요(갭). 한 봉에 둘 다 닿으면 봉 모양으로 순서를 짐작해요. ${AI_H[st.horizon].days}거래일 동안 둘 다 안 닿으면 마지막 날 종가로 끝내요(기간 만료). 주말만 빼고 세므로 공휴일이 끼면 하루쯤 짧을 수 있어요. '지수보다'는 같은 기간 코스피·코스닥·S&P 500 수익률을 뺀 값이에요. 수익률은 왕복 비용(국내 0.2%, 미국 0.25%)을 뺀 값이에요.` : `채점 방법: 추천을 보고 그 순간 가격에 바로 샀다고 봐요(AI가 지정가를 말했어도 기다리지 않아요. 지정가를 기다렸을 때의 결과는 참고로 따로 보여 줘요). 추천 시각이 낀 5분봉은 추천 전 움직임이 섞여 있어 종가만 써요. 그 뒤 5분봉에서 손절가·익절가 중 먼저 닿은 쪽으로 판정해요. 한 봉 안에 둘 다 닿으면 봉 모양으로 순서를 짐작해요(음봉이면 익절, 양봉이면 손절). 둘 다 안 닿으면 정리 시각(국내 추천 정리 시각, 미국 정규장 마감) 가격으로 끝내요. 수익률은 왕복 비용(국내 0.2%, 미국 0.25%)을 뺀 값이에요.`}</div>`;
     this.asLearn();
     if (this.asOpen) $("#asRoot").classList.add("show-all");
     $("#asRoot").onclick = async (e) => {
       if (e.target.closest("#asMore")) { this.asOpen = true; $("#asRoot").classList.add("show-all"); return; }
-      if (e.target.closest("#lrRun")) { aiSheet("learn"); sheet.addEventListener("close", () => this.asLearn(), { once: true }); return; }
+      const hb = e.target.closest(".as-hz [data-v]");
+      if (hb) {
+        if (hb.dataset.v === F.h) return;
+        F.h = hb.dataset.v; F.days = F.h === "day" ? 30 : F.h === "swing" ? 90 : 0; this.asOpen = false;
+        if (this.ap) { this.ap.h = F.h; store.set("apH", F.h === "day" ? "" : F.h); }
+        $("#asRoot").innerHTML = `<div class="empty loading">채점하는 중</div>`;
+        try { await load(true); } catch (err) { $("#asRoot").innerHTML = `<div class="notice warn">${esc(err.message)}</div>`; }
+        return;
+      }
+      if (e.target.closest("#lrRun")) { aiSheet("learn", { horizon: F.h }); sheet.addEventListener("close", () => this.asLearn(), { once: true }); return; }
       if (e.target.closest("#lrAuto")) { const b = e.target.closest("#lrAuto"), on = b.getAttribute("aria-checked") !== "true"; await run(() => api("PUT", "/api/ai/learn", { auto: on }), on ? "자동 복기를 켰어요" : "자동 복기를 껐어요"); return this.asLearn(); }
-      if (e.target.closest("#lrClear")) { if (!confirmTap(e.target.closest("#lrClear"), "한 번 더 누르면 규칙을 지워요")) return; await run(() => api("PUT", "/api/ai/learn", { clear: true }), "규칙을 지웠어요"); return this.asLearn(); }
+      if (e.target.closest("#lrClear")) { if (!confirmTap(e.target.closest("#lrClear"), "한 번 더 누르면 규칙을 지워요")) return; await run(() => api("PUT", "/api/ai/learn", { clear: true, h: F.h }), "규칙을 지웠어요"); return this.asLearn(); }
       const pk = e.target.closest("[data-pick]");
       if (pk) { e.preventDefault(); return pickSheet(pk.dataset.pick); }
       const c = e.target.closest(".as-f [data-v]");
@@ -2490,8 +2575,8 @@ const mkt = {
   // ---------- 종목 상세 ----------
   async detail(h) {
     const m = h.params.get("m") === "us" ? "us" : "kr", sym = (h.params.get("s") || "").toUpperCase();
-    const pk = h.params.get("pk");
-    this.d = { m, sym, range: pk ? "m5" : this.lastRange || "1d", tab: "chart", q: null, chart: null, cd: null, pk };
+    const pk = h.params.get("pk"), ph = h.params.get("ph");
+    this.d = { m, sym, range: pk ? (ph && ph !== "day" ? "d" : "m5") : this.lastRange || "1d", tab: "chart", q: null, chart: null, cd: null, pk, markFell: !!(ph && ph !== "day") };
     if (pk) this.loadMark(this.d);
     setTop("시세", { back: navBack("#invest/home"), menu: "invest", sub: pk ? "aistat" : "stock", right: `<button type="button" class="star on-deep" id="mkBell" aria-label="가격 알림">${BELL}</button><button type="button" class="star on-deep" id="mkStar" aria-pressed="false" aria-label="관심종목">${STAR}</button>` });
     view.innerHTML = `<div class="mk-d" id="mkD"><div class="empty loading">불러오는 중</div></div>`;
@@ -2523,10 +2608,15 @@ const mkt = {
       const p = await GET(`/api/ai/picks/${D.pk}`);
       const x = p.picks.find((y) => String(y.sym).toUpperCase() === D.sym);
       if (!x || this.d !== D) return;
-      const o = x.outcome || {}, entry = o.entry || x.price;
-      D.mark = { ts: p.ts, end: o.end_ts && o.end_ts.length >= 16 ? o.end_ts : null, entry, tp: entry * (1 + x.target_pct / 100), sl: entry * (1 - x.stop_pct / 100),
+      const o = x.outcome || {}, entry = o.entry || x.price, sw = p.horizon && p.horizon !== "day";
+      D.mark = { ts: p.ts, end: sw && x.end_date ? x.end_date + "T00:00" : o.end_ts && o.end_ts.length >= 16 ? o.end_ts : null, entry, tp: entry * (1 + x.target_pct / 100), sl: entry * (1 - x.stop_pct / 100),
         tp_pct: x.target_pct, sl_pct: x.stop_pct };
       D.pick = { p, x, o };
+      if (sw && D.range !== "d") {  // 중기 추천은 일봉으로 본다
+        D.markFell = true; D.range = "d";
+        $$('[data-seg="기간"]').forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === "d")));
+        try { const cd = await GET(`/api/invest/candles/${D.m}/${encodeURIComponent(D.sym)}?tf=d`); if (this.d === D) D.cd = cd; } catch (e) { /* 다음 갱신 때 */ }
+      }
       if ($("#mkPick")) this.drawPick();
       if ($("#mkChart") && D.cd) this.drawChart();
     } catch (e) { /* 표시만 생략 */ }
@@ -2535,11 +2625,14 @@ const mkt = {
     const D = this.d, el = $("#mkPick");
     if (!el || !D.pick) return;
     const { p, x, o } = D.pick, cur = D.q.currency, M = (v) => this.money(v, cur), res = o.result || "진행 중";
+    const sw = p.horizon && p.horizon !== "day", path = (o.path && Object.keys(o.path).length) ? o.path : null;
     el.innerHTML = `<section class="card pk-info">
-      <div class="pk-h"><span class="as-badge r-${esc(res)}">${esc(res)}</span><b>AI 추천 추적</b><span class="${tone(o.net_pct)}" style="margin-left:auto;font-weight:900">${o.net_pct == null ? "" : pct(o.net_pct, 2)}</span></div>
+      <div class="pk-h"><span class="as-badge r-${esc(res)}">${esc(sw && res === "시간 정리" ? "기간 만료" : res)}</span><b>AI ${sw ? esc(p.label) + " " : ""}추천 추적</b><span class="${tone(o.net_pct)}" style="margin-left:auto;font-weight:900">${o.net_pct == null ? "" : pct(o.net_pct, 2)}</span></div>
       <div class="tiny">${esc(p.ts.slice(5, 16).replace("T", " "))} 추천 · ${esc(p.model.replace("claude-", ""))} · 예측 승률 ${x.win_prob}%${o.end_ts ? ` · 평가 마감 ${esc(String(o.end_ts).slice(5, 16).replace("T", " "))}` : ""}</div>
       <div class="pk-lv"><div class="en"><span>추천가</span><b>${M(D.mark.entry)}</b></div><div class="tp"><span>익절 +${x.target_pct}%</span><b>${M(D.mark.tp)}</b></div><div class="sl"><span>손절 −${x.stop_pct}%</span><b>${M(D.mark.sl)}</b></div>
         ${o.exit ? `<div><span>가상 청산</span><b>${M(o.exit)}</b></div>` : ""}</div>
+      ${sw ? `<div class="pk-sw">${x.catalyst ? `<div><span class="tag c-${esc(x.catalyst_type)}">${esc(x.catalyst_type)}</span><b>${esc(x.catalyst)}</b></div>` : ""}
+        ${path ? `<div class="pk-path">${Object.entries(path).map(([k, v]) => `<span><small>${k.slice(1)}일째</small><b class="${tone(v)}">${pct(v, 1)}</b></span>`).join("")}</div><div class="tiny">추천가에 사서 그냥 들고 있었다면(비용 빼기 전)${o.bench != null ? ` · 같은 기간 지수 ${pct(o.bench, 2)}` : ""}</div>` : ""}</div>` : ""}
       ${o.alt_result ? `<div class="tiny">추천 순간 가격에 바로 샀을 때 기준이에요. AI 지정가 ${M(x.entry_price)}를 기다렸다면 <b class="${tone(o.alt_net)}">${esc(o.alt_result)}${o.alt_net == null ? "" : " " + pct(o.alt_net, 2)}</b></div>` : ""}
       <div class="tiny">차트에 추천 시점(세로선)과 익절·손절·추천가 선을 함께 그렸어요. 색칠된 구간이 평가 기간이에요.</div>
       <button type="button" class="btn sm" id="pkOpen">추천 근거·전체 내용 보기</button></section>`;
@@ -3030,23 +3123,28 @@ async function pickSheet(id) {
   try { p = await GET(`/api/ai/picks/${id}`); } catch (e) { $("#sheetBody").innerHTML = `<div class="notice warn">${esc(e.message)}</div>`; return; }
   const us = p.mkt === "us", P = (v) => v == null ? "-" : us ? usd(v) : won(Math.round(v)) + "원";
   $("#sheetBody").innerHTML = `
-    <div class="pk-meta"><span class="tag">${esc(p.ts.slice(5, 16).replace("T", " "))}</span><span class="tag">${us ? "미국" : "국내"}</span><span class="tag y">${esc(p.stance || "-")}</span><span class="tag">${esc(p.model.replace("claude-", ""))}</span><span class="tag">$${Number(p.usd || 0).toFixed(3)}</span></div>
+    <div class="pk-meta"><span class="tag">${esc(p.ts.slice(5, 16).replace("T", " "))}</span><span class="tag v">${esc(p.label || "당일")} 추천</span><span class="tag">${us ? "미국" : "국내"}</span><span class="tag y">${esc(p.stance || "-")}</span>${p.theme ? `<span class="tag">테마: ${esc(p.theme)}</span>` : ""}<span class="tag">${esc(p.model.replace("claude-", ""))}</span><span class="tag">$${Number(p.usd || 0).toFixed(3)}</span></div>
     ${p.view ? `<div class="small" style="font-weight:700">${esc(p.view)}</div>` : ""}
     ${p.picks.length ? p.picks.map((x, i) => { const o = x.outcome || {}, res = o.result || "진행 중", since = x.now && x.price ? (x.now / x.price - 1) * 100 : null;
+      const sw = p.horizon && p.horizon !== "day", path = o.path && Object.keys(o.path).length ? o.path : null;
       return `<section class="pk-card">
-        <div class="pk-h"><span class="as-badge r-${esc(res)}">${esc(res)}</span><b>${i + 1}. ${esc(x.name)}</b><span class="${tone(o.net_pct)}" style="margin-left:auto;font-weight:900">${o.net_pct == null ? "" : pct(o.net_pct, 2)}</span></div>
+        <div class="pk-h"><span class="as-badge r-${esc(res)}">${esc(sw && res === "시간 정리" ? "기간 만료" : res)}</span><b>${i + 1}. ${esc(x.name)}</b><span class="${tone(o.net_pct)}" style="margin-left:auto;font-weight:900">${o.net_pct == null ? "" : pct(o.net_pct, 2)}</span></div>
         <dl class="dt-rows">
           <div><dt>추천 때 가격</dt><dd>${P(x.price)}</dd></div><div><dt>지금 가격</dt><dd class="${tone(since)}">${P(x.now)}${since == null ? "" : ` (${pct(since, 2)})`}</dd></div>
           <div><dt>익절 / 손절</dt><dd><span class="up">+${x.target_pct}%</span> / <span class="down">−${x.stop_pct}%</span></dd></div>
           <div><dt>AI 예측 승률</dt><dd>${x.win_prob}%</dd></div>
-          ${o.entry ? `<div><dt>바로 매수 → 청산</dt><dd>${P(o.entry)} → ${P(o.exit)}</dd></div>` : ""}
+          ${sw ? `<div><dt>재료</dt><dd><span class="tag c-${esc(x.catalyst_type)}">${esc(x.catalyst_type)}</span> ${esc(x.catalyst || "-")}${x.catalyst_date ? ` · ${esc(x.catalyst_date)}` : ""}</dd></div>
+          <div><dt>보유 계획</dt><dd>약 ${x.hold_days}거래일 · ${esc(x.end_date || "")}까지${x.in_cand ? "" : " · 뉴스에서 찾은 종목"}</dd></div>` : ""}
+          ${o.entry ? `<div><dt>바로 매수 → 청산</dt><dd>${P(o.entry)} → ${P(o.exit)}${sw && o.days_held ? ` · ${o.days_held}거래일째` : ""}</dd></div>` : ""}
+          ${sw && o.bench != null ? `<div><dt>같은 기간 지수</dt><dd>${pct(o.bench, 2)} <span class="${tone(o.net_pct - o.bench)}">(종목이 ${pct(o.net_pct - o.bench, 2)}p)</span></dd></div>` : ""}
+          ${path ? `<div><dt>그냥 들고 있었다면</dt><dd>${Object.entries(path).map(([k, v]) => `${k.slice(1)}일 <span class="${tone(v)}">${pct(v, 1)}</span>`).join(" · ")}</dd></div>` : ""}
           ${o.mfe != null ? `<div><dt>추천 뒤 최대 상승 / 하락</dt><dd><span class="up">${pct(o.mfe, 2)}</span> / <span class="down">${pct(o.mae, 2)}</span></dd></div>` : ""}
 ${o.alt_result ? `<div><dt>AI 지정가(${P(x.entry_price)})를 기다렸다면</dt><dd class="${tone(o.alt_net)}">${esc(o.alt_result)}${o.alt_net == null ? "" : " " + pct(o.alt_net, 2)}</dd></div>` : ""}
           <div><dt>평가 마감</dt><dd>${esc((o.end_ts || "").slice(5, 16).replace("T", " ") || "-")}${o.src ? ` · ${esc(o.src)}` : ""}</dd></div>
           <div><dt>직접 매수</dt><dd>${x.guard ? `했어요 · ${esc(x.guard.status === "watching" ? "감시 중" : x.guard.exit_reason || x.guard.status)}` : "안 했어요"}</dd></div>
         </dl>
         ${(x.reasons || []).length ? `<ul class="ap-why">${x.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}${(x.risks || []).map((r) => `<li class="risk">${esc(r)}</li>`).join("")}</ul>` : ""}
-        <a class="btn sm" href="${stockHref(x.sym, p.mkt)}&pk=${p.id}" data-close>차트에서 추천 시점·익절·손절 선 보기</a></section>`; }).join("") : `<div class="empty small">이 추천에는 종목이 없어요(관망)</div>`}
+        <a class="btn sm" href="${stockHref(x.sym, p.mkt)}&pk=${p.id}${sw ? "&ph=" + p.horizon : ""}" data-close>차트에서 추천 시점·익절·손절 선 보기</a></section>`; }).join("") : `<div class="empty small">이 추천에는 종목이 없어요(관망)</div>`}
     ${p.text ? `<details class="pk-text"><summary class="tiny">AI가 쓴 판단 전문</summary><div class="ai-ans">${mdLite(p.text)}</div></details>` : ""}
     <div class="dt-links"><a class="btn dark" href="#invest/aistat" data-close>전체 성적 보기</a></div>`;
   $("#sheetBody").onclick = (e) => { if (e.target.closest("[data-close]")) closeSheet(); };
@@ -3094,10 +3192,9 @@ function fillAiBtns(root = document) {
 new MutationObserver(() => { clearTimeout(fillAiBtns._t); fillAiBtns._t = setTimeout(() => fillAiBtns(), 120); }).observe(document.getElementById("view") || document.body, { childList: true, subtree: true });
 const AI_BTN = (kind, label, attrs = "") => `<button type="button" class="btn ai-btn wide" data-ai="${kind}" ${attrs}><span class="ai-spark" aria-hidden="true">✦</span>${esc(label)}</button>`;
 
-function resultBar(a) {
-  const t = Math.max(1, a.tp + a.sl + a.time);
-  return a.done ? `<div class="rbar" role="img" aria-label="익절 ${a.tp}, 시간 정리 ${a.time}, 손절 ${a.sl}"><i class="tp" style="flex:${a.tp}"></i><i class="tm" style="flex:${a.time}"></i><i class="sl" style="flex:${a.sl}"></i></div>
-    <div class="rleg"><span><i class="tp"></i>익절 ${a.tp}</span><span><i class="tm"></i>시간 정리 ${a.time}</span><span><i class="sl"></i>손절 ${a.sl}</span></div>` : "";
+function resultBar(a, mid = "시간 정리") {
+  return a.done ? `<div class="rbar" role="img" aria-label="익절 ${a.tp}, ${mid} ${a.time}, 손절 ${a.sl}"><i class="tp" style="flex:${a.tp}"></i><i class="tm" style="flex:${a.time}"></i><i class="sl" style="flex:${a.sl}"></i></div>
+    <div class="rleg"><span><i class="tp"></i>익절 ${a.tp}</span><span><i class="tm"></i>${mid} ${a.time}</span><span><i class="sl"></i>손절 ${a.sl}</span></div>` : "";
 }
 function winRing(v) {
   const r = 19, c = 2 * Math.PI * r, f = Math.max(0, Math.min(100, v)) / 100;
@@ -3234,7 +3331,7 @@ function orderSheet(o) {
       </div>
       <div class="o-sum" id="oSum"><div><span>예상 금액</span><b id="oAmt">-</b></div><div class="tiny" id="oSumT"></div></div>
       ${o.guard && buy ? `<label class="o-guard"><input type="checkbox" id="oGuard" ${S.guardOn ? "checked" : ""}>
-        <span><b>체결되면 자동 익절·손절</b><small>평균 단가 기준 +${o.guard.target_pct}% 익절 · −${o.guard.stop_pct}% 손절${o.guard.trail_pct ? ` · 추적 익절 ${o.guard.trail_pct}%` : ""} · ${o.guard.exit_by ? `${esc(o.guard.exit_by)}까지 안 닿으면 정리` : "정규장 마감 8분 전 정리"}. 정규장에만 시장가로 팔아요.</small></span></label>` : ""}
+        <span><b>체결되면 자동 익절·손절</b><small>평균 단가 기준 +${o.guard.target_pct}% 익절 · −${o.guard.stop_pct}% 손절${o.guard.trail_pct ? ` · 추적 익절 ${o.guard.trail_pct}%` : ""} · ${o.guard.horizon ? `${esc((o.guard.end_date || "").slice(5).replace("-", "/"))}(약 ${o.guard.hold_days}거래일)까지 들고 가다 그날 장 마감 직전에 정리` : o.guard.exit_by ? `${esc(o.guard.exit_by)}까지 안 닿으면 정리` : "정규장 마감 8분 전 정리"}. 정규장에만 시장가로 팔아요.${o.guard.horizon ? " 노트북의 moa가 켜져 있어야 하고, 밤사이 갭은 막지 못해요." : ""}</small></span></label>` : ""}
       <div class="o-mode ${realOrder ? "real" : ""}">${a ? (a.error ? `<b>주문할 수 없어요</b> ${esc(a.error)}`
         : usBlocked ? `<b>미국 주식은 키움 계좌로만</b> 이 계좌는 '앱 내 모의'라 미국 주문을 할 수 없어요. 설정 → 계좌 연결에서 주문 방식을 '키움으로 주문'으로 바꿔 주세요`
         : realOrder ? `<b>키움 실전 계좌</b> 실제 돈으로 주문이 나가요${US ? ". 달러(또는 원화주문 설정)로 결제돼요" : ""}`
@@ -3518,7 +3615,7 @@ pages.settings = {
         <div class="btns"><button class="btn" id="aiTest">연결 확인</button><button class="btn dark" id="aiSave">저장</button></div>
       </section>
       <section class="card tight"><div class="card-head" style="padding-top:8.5px"><h2>최근 사용</h2></div><div class="list">
-        ${st.recent.length ? st.recent.map((r) => `<div class="item"><span class="ico">${esc({ stock: "종목", portfolio: "점검", review: "복기", sweep: "훑기", chat: "질문", test: "확인", pick: "추천" }[r.kind] || r.kind)}</span>
+        ${st.recent.length ? st.recent.map((r) => `<div class="item"><span class="ico">${esc({ stock: "종목", portfolio: "점검", review: "복기", sweep: "훑기", chat: "질문", test: "확인", pick: "추천", pickw: "중기", learn: "복기" }[r.kind] || r.kind)}</span>
           <span class="main"><b>${esc(r.ts.slice(5, 16).replace("T", " "))}</b><span class="sub">${esc(r.model.replace("claude-", ""))} · 입력 ${won(r.in_tok)} · 출력 ${won(r.out_tok)}${r.searches ? ` · 검색 ${r.searches}` : ""}</span></span>
           <span class="end"><b>$${Number(r.usd).toFixed(4)}</b></span></button>`).join("") : `<div class="empty">아직 사용 기록이 없어요</div>`}</div></section>`;
     const body = () => ({ ai: { api_key: $("#aiKey").value.trim(), admin_key: $("#aiAdmin").value.trim(), model: $("#aiModel").value, budget_usd: Number($("#aiBudget").value) || 0, web_search: $("#aiWeb").checked } });

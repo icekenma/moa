@@ -1541,3 +1541,183 @@ def test_server_error_does_not_echo_details(rt):
         raise KeyError("secret-path-C:/Users/me/key.txt")
     r = app.test_client().get("/api/boom")
     assert r.status_code == 500 and "secret-path" not in r.get_json()["error"]
+
+
+# ---------- AI 중기(1주·1달) 추천 ----------
+def _dbar(t, o, h, l, c, v=1000):
+    return {"t": t, "o": o, "h": h, "l": l, "c": c, "v": v}
+
+
+def test_swing_daily_features_and_dates():
+    import moa.aipick as AP
+    from datetime import datetime as D, date
+    bars = [_dbar(f"2026-09-{i + 1:02d}", 100 + i, 101 + i, 99 + i, 100 + i, 1000) for i in range(25)]
+    bars += [_dbar(f"2026-10-{i + 1:02d}", 125 + i * 2, 127 + i * 2, 124 + i * 2, 126 + i * 2, 3000) for i in range(5)]
+    f = AP.daily_features(bars)
+    assert f["5일%"] == round((134 / 124 - 1) * 100, 2) and f["20일선대비%"] > 0 and f["5일거래량배수"] == 3.0
+    assert f["연속상승일"] >= 5 and f["60일고점대비%"] < 0 and f["하루변동폭%"] > 0
+    assert AP.daily_features(bars[:3]) is None
+    assert AP.phase_at("kr", D(2026, 11, 2, 8, 30)) == ("pre", date(2026, 11, 2))
+    assert AP.phase_at("kr", D(2026, 11, 2, 10, 0))[0] == "open" and AP.phase_at("kr", D(2026, 11, 2, 16, 0))[0] == "post"
+    assert AP.phase_at("us", D(2026, 11, 3, 0, 30)) == ("open", date(2026, 11, 2))      # 한국 00:30 = 뉴욕 전날 10:30
+    assert AP.phase_at("kr", D(2026, 11, 7, 10, 0)) == ("post", date(2026, 11, 7))      # 주말
+    assert AP.swing_end("kr", D(2026, 11, 2, 10, 0), 5) == (D(2026, 11, 9, 15, 40), date(2026, 11, 9))
+    assert AP.swing_end("kr", D(2026, 11, 2, 8, 0), 5)[1] == date(2026, 11, 6)          # 장 전이면 그날이 1일째
+    assert AP.swing_end("kr", D(2026, 11, 6, 16, 0), 20)[1] == date(2026, 12, 4)
+    assert "5거래일" in AP.system_prompt("swing") and "20거래일" in AP.system_prompt("month") and AP.system_prompt("x") == AP.PICK_SYSTEM
+    # 일봉 채점은 갭을 반영한다: 시가가 손절가 아래에서 시작하면 그 시가에 팔린 것으로
+    r = AP.judge([_dbar("a", 100, 101, 99, 100), _dbar("b", 90, 92, 89, 91)], 100, 10, 5, gap=True)
+    assert r[0] == "손절" and r[2] == 90 and r[6] == 2
+    r = AP.judge([_dbar("a", 113, 115, 112, 114)], 100, 10, 5, gap=True)
+    assert r[0] == "익절" and r[2] == 113
+
+
+def test_swing_parse_resolves_names_and_saves_horizon(rt, monkeypatch):
+    ap = rt.aipick
+    quotes = {"446840": {"price": 4640, "name": "지슨", "change_pct": 29.9}, "005930": {"price": 100000, "name": "삼성전자", "change_pct": 1.0}}
+    monkeypatch.setattr(ap, "quote", lambda m, s: quotes.get(s, {}))
+    monkeypatch.setattr(rt.market, "kr_search", lambda q: [{"sym": "446840", "name": "지슨", "exchange": "코스닥"}] if "지슨" in q else [])
+    monkeypatch.setattr(rt.invest, "candles", lambda m, s, tf: {"bars": [_dbar(f"2026-10-{i + 1:02d}", 100, 102, 99, 100 + i) for i in range(28)]})
+    text = "재료 요약\n```json\n" + json.dumps({"stance": "보통", "market_view": "정책 테마 순환", "picks": [
+        {"sym": "999999", "name": "지슨", "score": 70, "win_prob": 48, "entry_type": "limit", "entry_price": 4500, "target_pct": 90, "stop_pct": 40,
+         "hold_days": 9, "weight_pct": 10, "theme": "시험장 전파 탐지", "catalyst": "전파탐지기 예산 증액안", "catalyst_type": "정책",
+         "catalyst_date": "12월 예산 확정", "reasons": ["a"], "risks": ["정부 번복"]},
+        {"sym": "123456", "name": "없는회사", "target_pct": 10, "stop_pct": 5},
+        {"sym": "005930", "name": "삼성전자", "win_prob": 55, "target_pct": 8, "stop_pct": 4, "catalyst_type": "이상한값"}]}, ensure_ascii=False) + "\n```"
+    r = ap.parse(text, "kr", "claude-sonnet-5-5", 0.3, horizon="swing", theme="전파차단")
+    assert r["horizon"] == "swing" and r["label"] == "1주" and [p["sym"] for p in r["picks"]] == ["446840", "005930"]
+    p0 = r["picks"][0]
+    assert p0["name"] == "지슨" and p0["target_pct"] == 40 and p0["stop_pct"] == 15 and p0["hold_days"] == 5   # 범위 안으로
+    assert p0["catalyst_type"] == "정책" and p0["in_cand"] is False and p0["feat"]["cat"] == "정책" and p0["feat"]["r5"] is not None
+    assert r["picks"][1]["catalyst_type"] == "기술적"
+    row = rt.db.one("SELECT horizon, theme FROM ai_picks WHERE id=?", (r["id"],))
+    assert row["horizon"] == "swing" and row["theme"] == "전파차단"
+    assert ap.history()[0]["horizon"] == "swing"
+    # 종목을 못 받으면 일봉 지표로 1종목
+    ap._cands["kr:month"] = [{"sym": "005930", "name": "삼성전자", "현재가": 100000, "등락률%": 1.0,
+                              "일봉": {"5일%": 4, "20일선대비%": 3, "5일거래량배수": 1.8, "60일고점대비%": -3, "하루변동폭%": 2.5}}]
+    r2 = ap.parse("```json\n" + json.dumps({"stance": "관망", "picks": []}) + "\n```", "kr", "m", 0, horizon="month")
+    assert r2["picks"][0]["auto"] and r2["picks"][0]["horizon"] == "month" and r2["picks"][0]["target_pct"] > r2["picks"][0]["stop_pct"]
+
+
+def _swing_fixture(rt, monkeypatch, ts="2026-11-02T10:00:00"):
+    pk = lambda sym, name, **k: {"sym": sym, "name": name, "price": 100, "entry_type": "market", "entry_price": 100, "target_pct": 10,
+                                 "stop_pct": 5, "win_prob": 50, "hold_days": 5, "horizon": "swing", "idx0": 2000, "idx_sym": "^KS11",
+                                 "feat": {"ma20": 2, "cand": True, "open": True}, **k}
+    rt.db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text,horizon,theme,lv) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (ts, "kr", "claude-sonnet-5-5", 0.6, "보통", "", json.dumps([
+                pk("000001", "오름", theme="전파 탐지", catalyst_type="정책"),
+                pk("000002", "갭하락", theme="전파 탐지", catalyst_type="정책"),
+                pk("000003", "횡보", theme="반도체", catalyst_type="실적")]), "", "swing", "", 0))
+    days = ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-09", "2026-11-10"]
+    mk = lambda rows: [_dbar(d, *r) for d, r in zip(days, rows)]
+    daily = {
+        "000001": mk([(97, 103, 96, 101), (101, 104, 100, 103), (103, 106, 102, 105), (105, 111, 104, 110), (110, 112, 108, 111), (111, 113, 110, 112), (112, 114, 111, 113)]),
+        "000002": mk([(99, 102, 98, 100), (93, 95, 92, 94), (94, 96, 93, 95), (95, 97, 94, 96), (96, 97, 95, 96), (96, 98, 95, 97), (97, 99, 96, 98)]),
+        "000003": mk([(99, 101, 98, 100), (100, 102, 99, 101), (101, 103, 100, 102), (102, 103, 100, 101), (101, 103, 100, 102), (102, 104, 101, 103), (103, 104, 102, 104)]),
+        "^KS11": mk([(2000, 2010, 1990, 2000), (2000, 2020, 1995, 2010), (2010, 2030, 2005, 2020), (2020, 2030, 2010, 2020), (2020, 2045, 2015, 2040), (2040, 2065, 2035, 2060), (2060, 2070, 2050, 2065)]),
+    }
+    monkeypatch.setattr(rt.invest, "candles", lambda m, s, tf: {"bars": [] if tf == "m5" else daily[s]})
+    return daily
+
+
+def test_swing_outcomes_graded_on_daily_bars(rt, monkeypatch):
+    _swing_fixture(rt, monkeypatch)
+    rt.aipick.evaluate(force=True)
+    oc = {r["sym"]: r for r in rt.db.q("SELECT * FROM ai_outcomes WHERE COALESCE(horizon,'day')='swing'")}
+    a, b, c = oc["000001"], oc["000002"], oc["000003"]
+    # 추천 당일은 분봉이 없어 종가만 → 그 뒤 일봉으로 판정
+    assert a["result"] == "익절" and a["days_held"] == 4 and round(a["net_pct"], 1) == 9.8
+    assert a["bench"] == 1.0 and json.loads(a["path"])["d3"] == 10.0          # 지수 2000→2020, 3거래일 뒤 종가 110
+    assert b["result"] == "손절" and b["exit"] == 93 and round(b["net_pct"], 1) == -7.2   # 갭 하락: 시가 93에 손절
+    assert c["result"] == "시간 정리" and c["exit"] == 103 and c["days_held"] == 6       # 5거래일 뒤(11/9) 종가
+    assert json.loads(c["path"]) == {"d1": 1.0, "d3": 1.0, "d5": 3.0}
+    st = rt.aipick.stats(horizon="swing")
+    assert st["horizon"] == "swing" and st["all"]["n"] == 3 and st["all"]["tp"] == 1 and st["all"]["sl"] == 1 and st["all"]["time"] == 1
+    assert st["all"]["alpha"] is not None and st["all"]["hold"] is not None
+    assert {x["key"] for x in st["by_cat"]} == {"정책", "실적"} and st["by_theme"][0]["key"] == "전파 탐지" and st["by_theme"][0]["n"] == 2
+    assert [p["k"] for p in st["path"]] == [1, 3, 5] and st["path"][0]["n"] == 3
+    assert {x["key"] for x in st["by_hold"]} >= {"4~5일", "2~3일"} and st["by_dow"][0]["key"] == "월" and st["by_lv"][0]["key"] == "규칙 없음"
+    assert st["hist_labels"][0] == "−8%↓"
+    # 당일 추천 통계에는 섞이지 않는다
+    assert rt.aipick.stats()["all"]["n"] == 0 and rt.aipick.stats(horizon="month")["all"]["n"] == 0
+    # 추천가와 일봉 가격대가 딴판이면(액면분할 등) 엉뚱한 손익을 내지 않고 채점에서 뺀다
+    rt.db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text,horizon,theme,lv) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            ("2026-11-02T10:00:00", "kr", "m", 0, "보통", "", json.dumps([{"sym": "000001", "name": "분할", "price": 1000, "target_pct": 10, "stop_pct": 5, "horizon": "month"}]), "", "month", "", 0))
+    rt.aipick.evaluate(force=True)
+    assert rt.db.one("SELECT result FROM ai_outcomes WHERE COALESCE(horizon,'day')='month'")["result"] in ("자료 없음", None)
+    assert rt.aipick.stats(horizon="month")["all"]["done"] == 0
+    c2 = create_app(rt).test_client()
+    assert c2.get("/api/ai/stats?h=swing").get_json()["all"]["n"] == 3
+    d = c2.get(f"/api/ai/picks/{a['pick_id']}").get_json()
+    assert d["horizon"] == "swing" and d["picks"][0]["outcome"]["path"]["d1"] == 3.0
+
+
+def test_swing_learning_is_separate_and_tunes(rt):
+    import moa.aipick as AP
+    ap = rt.aipick
+    ap.stats()
+    for i in range(10):
+        good = i % 2 == 0   # 20일선 위는 통하고, 아래는 안 통함
+        rt.db.x("INSERT INTO ai_outcomes(pick_id,idx,ts,mkt,model,sym,name,stance,auto,win_prob,entry_type,rec_price,entry_price,target_pct,stop_pct,"
+                "end_ts,status,result,filled,net_pct,mfe,mae,feat,horizon,days_held,bench,path,lv,theme,cat) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (500 + i, 0, f"2026-10-{5 + i:02d}T10:00:00", "kr", "claude-sonnet-5-5", "005930", "삼성전자", "보통", 0, 55, "market", 100, 100, 12, 6,
+                 "x", "done", "익절" if good else "손절", 1, 11.8 if good else -6.2, 14 if good else 1.5, -2 if good else -7,
+                 json.dumps({"ma20": 4 if good else -3, "r5": 5, "cand": good, "cat": "정책" if good else "기술적", "open": True}),
+                 "swing", 3, 1.0, json.dumps({"d1": 2 if good else -2, "d3": 8 if good else -5, "d5": 6 if good else -6}), 0, "테마", "정책" if good else "기술적"))
+    assert ap.learn_view()["n"] == 0 and ap.learn_prompt("kr") is None            # 당일 학습과 섞이지 않는다
+    v = ap.learn_view("swing")
+    assert v["horizon"] == "swing" and v["n"] == 10 and v["stage"] == "통계 반영 중" and v["overall"]["alpha"] == round((11.8 - 1 - 6.2 - 1) / 2, 2)
+    assert any("20일선 위치" in x for x in v["insights"]) and any("재료 유형" in x for x in v["insights"])
+    tn = v["tune"]
+    assert tn["ready"] and tn["hold"] == 3 and tn["tp"] >= 4 and any("20일선 아래" in x for x in tn["avoid"]) and any("20일선 위" in x for x in tn["prefer"])
+    lp = ap.learn_prompt("kr", "swing")
+    assert lp["자동 조정값(실제 결과에서 계산)"]["피할 조건"] and "3일" in lp["자동 조정값(실제 결과에서 계산)"]["가장 성적이 좋았던 보유 거래일"]
+    # 과거에 통한 조건의 후보일수록 가산점이 높다
+    assert ap.learn_score({"ma20": 5, "cat": "정책", "cand": True}, "swing") > 0 > ap.learn_score({"ma20": -2, "cat": "기술적", "cand": False}, "swing")
+    assert ap.learn_score({"ma20": 5}, "month") is None
+    cal, n = ap.calibrate("kr", 55, "swing")
+    assert n == 10 and cal == round((5 + 8 * .55) / 18 * 100)
+    # 규칙은 종류별로 따로, 판 번호가 올라가고 이전 판을 남긴다
+    ap.save_lessons("총평\n## 규칙\n- 20일선 아래는 피한다", "m", 0.1, "swing")
+    assert ap.lessons("swing")["ver"] == 1 and not ap.lessons("day") and "20일선" in ap.learn_prompt("kr", "swing")["지난 복기에서 정한 규칙"]
+    ap.save_lessons("총평 2\n## 규칙\n- 재료가 정책이면 우선", "m", 0.1, "swing")
+    ls = ap.lessons("swing")
+    assert ls["ver"] == 2 and len(ls["hist"]) == 1 and ls["hist"][0]["ver"] == 1
+    t, ask, data = ap.learn_context("swing")
+    assert "1주" in t and data["추천별 기록(최근 80건)"][0]["들고 있었다면(거래일별 %)"] and data["자동 조정값"]["ready"]
+    with pytest.raises(ValueError):
+        ap.learn_context("month")
+    c = create_app(rt).test_client()
+    assert c.get("/api/ai/learn?h=swing").get_json()["lessons"]["ver"] == 2
+    r = c.put("/api/ai/learn", json={"h": "swing", "clear": True}).get_json()
+    assert not r["lessons"].get("text") and r["lessons"]["ver"] == 2 and c.get("/api/ai/learn").get_json()["horizon"] == "day"
+
+
+def test_swing_guard_holds_overnight_until_last_day(rt, monkeypatch):
+    import moa.aipick as AP
+    ap = rt.aipick
+    monkeypatch.setattr(AP, "kst_now", lambda: datetime(2026, 11, 2, 10, 0))
+    g = ap.add_guard({"mkt": "kr", "engine": "scalp", "sym": "005930", "name": "삼성전자", "qty": 3, "entry": 10000,
+                      "target_pct": 12, "stop_pct": 6, "horizon": "swing", "hold_days": 5, "exit_by": "15:10"})
+    assert g["horizon"] == "swing" and g["exit_date"] == "2026-11-09" and g["exit_by"] == ""
+    sold = []
+    monkeypatch.setattr(ap, "_position", lambda g: {"qty": 3, "avg_price": 10000})
+    monkeypatch.setattr(ap, "_sell", lambda g, q, why, p: sold.append((q, why, p)))
+    monkeypatch.setattr(ap, "quote", lambda m, s: {"price": 10100})
+    monkeypatch.setattr(AP, "session", lambda m: {"open": True, "left_min": 5})    # 장 마감 직전
+    monkeypatch.setattr(AP, "mkt_date", lambda m: "2026-11-04")
+    ap.check(force=True)
+    assert sold == []                                   # 당일 추천과 달리 날마다 정리하지 않는다
+    monkeypatch.setattr(ap, "quote", lambda m, s: {"price": 9350})
+    ap.check(force=True)
+    assert sold == [(3, "손절", 9350)]                   # 손절은 언제든
+    sold.clear()
+    monkeypatch.setattr(ap, "quote", lambda m, s: {"price": 10100})
+    monkeypatch.setattr(AP, "mkt_date", lambda m: "2026-11-09")
+    monkeypatch.setattr(AP, "session", lambda m: {"open": True, "left_min": 120})
+    ap.check(force=True)
+    assert sold == []
+    monkeypatch.setattr(AP, "session", lambda m: {"open": True, "left_min": 5})
+    ap.check(force=True)
+    assert sold == [(3, "기간 정리", 10100)]             # 보유 기간 마지막 날 장 마감 직전에만

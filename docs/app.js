@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2016";
+const UI_VERSION = "261117.2024";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1156,6 +1156,7 @@ pages.invest = {
           <div class="ih-sub"><span>평가손익 <b class="${tone(a.pnl)}">${signed(a.pnl)}</b> (${pct(a.pnl_pct, 2)})</span><span>주문 가능 <b>${won(a.orderable)}</b></span>${us ? `<span>달러 <b>${usd(a.us.usd)}</b></span>` : ""}</div>`
         : `<div class="ih-lbl">내 투자</div><div class="ih-empty">키움 계좌를 연결하면 총자산·오늘 손익·보유 종목이 여기 보여요 <a href="#settings/accounts">연결하기</a></div>`}
       </section>
+      <div class="ss-row">${sessionChip("kr")}${sessionChip("us")}<a href="#invest/market" class="tiny">장 시간 ›</a></div>
       ${idx.length ? `<div class="ih-idx">${idx.map((x) => `<div><span>${esc(x.name)}</span><b>${x.name.includes("환율") ? won(x.price) : Number(x.price).toLocaleString("en-US", { maximumFractionDigits: 2 })}</b><em class="${tone(x.change_pct)}">${pct(x.change_pct, 2)}</em></div>`).join("")}</div>` : ""}
       ${a && a.total != null ? `<section class="card tight">
         <div class="card-head ih-head"><h2>보유 종목 ${H.length}</h2>${seg("정렬", [["value", "평가금액"], ["pnl", "수익률"], ["day", "오늘"]], S.sort, "on-card ih-sort")}</div>
@@ -1183,6 +1184,7 @@ pages.invest = {
       box.innerHTML = `<div class="dv">
         ${seg("시장", [["kr", "국내"], ["us", "미국"]], S.m, "dv-mkt")}
         <div class="chips dv-kind" id="dvChips" role="group" aria-label="순위 종류">${[["value", "거래대금"], ["up", "급상승"], ["down", "급하락"], ["volume", "거래량"]].map(([k, v]) => `<button type="button" class="chip" data-kind="${k}" aria-pressed="${k === S.kind}">${v}</button>`).join("")}</div>
+        <div class="ss-row" id="dvSess"></div>
         <section class="card tight"><div class="dv-kwrap" id="dvKind"></div><div class="list" id="dvList"><div class="empty">불러오는 중</div></div></section>
         <div class="tiny" id="dvFoot" style="padding:0 3px"></div></div>`;
       $("#dvKind").append($("#dvChips"));
@@ -1198,6 +1200,7 @@ pages.invest = {
   },
   dvRender(r) {
     const us = r.mkt === "us";
+    if ($("#dvSess")) { const S = marketSession(r.mkt); $("#dvSess").innerHTML = `<span class="ss-chip ss-${S.phase}"><i></i><b>${us ? "미국" : "국내"}</b> ${esc(S.label)}</span><span class="tiny">${esc(S.sub)}</span>`; }
     $("#dvList").innerHTML = r.items.length ? r.items.map((x) => `<a class="item dv-row" href="#invest/stock?m=${r.mkt}&s=${encodeURIComponent(x.sym)}">
       <span class="dv-rank ${x.rank <= 3 ? "dv-top" : ""}">${x.rank}</span>
       <span class="main"><b>${esc(x.name)}</b><span class="sub">${esc(x.sym)}${x.value ? ` · 거래대금 ${bigNum(x.value * 1e6)}` : x.volume ? ` · 거래량 ${bigNum(x.volume)}` : ""}</span></span>
@@ -1665,6 +1668,87 @@ const STRAT_DESC = {
 // =====================================================================
 // 투자 → 시세: 국내·미국 관심종목, 지수, 검색, 종목 상세(차트)
 // =====================================================================
+// ---------- 장 운영 시간(국내 KRX·NXT, 미국 NYSE·나스닥) ----------
+const MK_HOLI = {
+  kr: { "2026-01-01": "신정", "2026-02-16": "설 연휴", "2026-02-17": "설날", "2026-02-18": "설 연휴", "2026-03-02": "삼일절 대체휴일",
+    "2026-05-01": "근로자의 날", "2026-05-05": "어린이날", "2026-05-25": "부처님오신날 대체휴일", "2026-06-03": "지방선거", "2026-08-17": "광복절 대체휴일",
+    "2026-09-24": "추석 연휴", "2026-09-25": "추석", "2026-10-05": "개천절 대체휴일", "2026-10-09": "한글날", "2026-12-25": "성탄절", "2026-12-31": "연말 휴장",
+    "2027-01-01": "신정", "2027-02-08": "설 연휴", "2027-02-09": "설 대체휴일", "2027-03-01": "삼일절", "2027-05-05": "어린이날", "2027-05-13": "부처님오신날",
+    "2027-08-16": "광복절 대체휴일", "2027-09-14": "추석 연휴", "2027-09-15": "추석", "2027-09-16": "추석 연휴", "2027-10-04": "개천절 대체휴일",
+    "2027-10-11": "한글날 대체휴일", "2027-12-27": "성탄절 대체휴일", "2027-12-31": "연말 휴장" },
+  us: { "2026-01-01": "새해", "2026-01-19": "마틴 루터 킹 데이", "2026-02-16": "대통령의 날", "2026-04-03": "성금요일", "2026-05-25": "메모리얼 데이",
+    "2026-06-19": "준틴스", "2026-07-03": "독립기념일 대체", "2026-09-07": "노동절", "2026-11-26": "추수감사절", "2026-12-25": "크리스마스",
+    "2027-01-01": "새해", "2027-01-18": "마틴 루터 킹 데이", "2027-02-15": "대통령의 날", "2027-03-26": "성금요일", "2027-05-31": "메모리얼 데이",
+    "2027-06-18": "준틴스 대체", "2027-07-05": "독립기념일 대체", "2027-09-06": "노동절", "2027-11-25": "추수감사절", "2027-12-24": "크리스마스 대체" },
+};
+const MK_HALF = { us: ["2026-11-27", "2026-12-24", "2027-11-26"] };  // 13시 조기 마감
+function tzParts(tz, d = new Date()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", weekday: "short", hourCycle: "h23" })
+    .formatToParts(d).map((x) => [x.type, x.value]));
+  return { ymd: `${p.year}-${p.month}-${p.day}`, min: Number(p.hour) * 60 + Number(p.minute) + Number(p.second) / 60, wd: p.weekday };
+}
+function mkSegs(m, ymd) {
+  if (m === "kr") return [[480, 510, "프리마켓", "pre", "NXT 08:00~08:50"], [510, 540, "장 시작 동시호가", "auction", "08:30~09:00 주문만 받고 9시에 한 번에 체결"],
+    [540, 920, "정규장", "open", "09:00~15:20"], [920, 930, "장 마감 동시호가", "auction", "15:20~15:30"], [930, 1200, "애프터마켓", "after", "NXT 15:30~20:00 · KRX 시간외 15:40~18:00"]];
+  const close = (MK_HALF.us || []).includes(ymd) ? 780 : 960;
+  return [[240, 570, "프리마켓", "pre", ""], [570, close, close < 960 ? "정규장(조기 마감)" : "정규장", "open", ""], [close, 1200, "애프터마켓", "after", ""]];
+}
+function mkDayKind(m, ymd, wd) {
+  if (wd === "Sat" || wd === "Sun") return "주말";
+  return MK_HOLI[m][ymd] || "";
+}
+function marketSession(m) {
+  const tz = m === "kr" ? "Asia/Seoul" : "America/New_York", now = new Date(), P = tzParts(tz, now);
+  const off = m === "us" ? Math.round((tzParts("Asia/Seoul", now).min - P.min + 1440 * 2) % 1440) : 0;  // 뉴욕→한국 시간 차(분)
+  const kst = (mm) => { const v = ((mm + off) % 1440 + 1440) % 1440; return `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(Math.round(v % 60)).padStart(2, "0")}`; };
+  const holi = mkDayKind(m, P.ymd, P.wd), segs = mkSegs(m, P.ymd);
+  let cur = null;
+  if (!holi) cur = segs.find(([a, b]) => P.min >= a && P.min < b) || null;
+  // 미국 주간거래(키움, 뉴욕 20:00~04:00 · 일~목 밤)
+  let day = false;
+  if (m === "us" && !cur) {
+    const wdN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(P.wd);
+    day = (P.min >= 1200 && wdN >= 0 && wdN <= 4) || (P.min < 240 && wdN >= 1 && wdN <= 5);
+  }
+  const left = (t) => { const x = Math.max(0, Math.round(t)); return x >= 60 ? `${Math.floor(x / 60)}시간${x % 60 ? ` ${x % 60}분` : ""}` : `${x}분`; };
+  // 다음 정규장 시작까지
+  const openAt = m === "kr" ? 540 : 570;
+  let next = "";
+  if (!cur || cur[3] !== "open") {
+    let mins = 0, d = new Date(now), dP = P, guard = 0;
+    if (!holi && P.min < openAt) mins = openAt - P.min;
+    else {
+      mins = 1440 - P.min;
+      while (guard++ < 15) { d = new Date(d.getTime() + 864e5); dP = tzParts(tz, d); if (!mkDayKind(m, dP.ymd, dP.wd)) break; mins += 1440; }
+      mins += openAt;
+    }
+    next = mins < 1440 ? `정규장 시작까지 ${left(mins)}` : `다음 정규장 ${dP.ymd.slice(5).replace("-", "/")}(${{ Mon: "월", Tue: "화", Wed: "수", Thu: "목", Fri: "금", Sat: "토", Sun: "일" }[dP.wd]}) ${kst(openAt)}`;
+  }
+  let phase, label, sub;
+  if (cur) { phase = cur[3]; label = cur[2]; const nx = segs[segs.indexOf(cur) + 1]; sub = cur[3] === "open" ? `마감까지 ${left(cur[1] - P.min)}` : nx ? `${nx[2]}까지 ${left(cur[1] - P.min)}` : `종료까지 ${left(cur[1] - P.min)}`; }
+  else if (day) { phase = "day"; label = "주간거래"; sub = `키움 주간거래 중 · ${next}`; }
+  else { phase = "closed"; label = holi ? `휴장 · ${holi}` : "장 마감"; sub = next; }
+  return { m, phase, label, sub, holi, segs, now: holi ? null : P.min, kst, off };
+}
+function sessionChip(m) {
+  const S = marketSession(m);
+  return `<span class="ss-chip ss-${S.phase}"><i></i><b>${m === "kr" ? "국내" : "미국"}</b> ${esc(S.label)}</span>`;
+}
+function sessionCard(m) {
+  const S = marketSession(m), a = S.segs[0][0], z = S.segs[S.segs.length - 1][1], W = z - a, X = (v) => ((v - a) / W * 100).toFixed(2);
+  const op = S.segs.find((x) => x[3] === "open"), marks = [op[0], op[1], z];
+  if ((op[0] - a) / W > 0.14) marks.unshift(a);
+  return `<section class="card ss-card">
+    <div class="ss-top"><span class="ss-chip ss-${S.phase}"><i></i>${esc(S.label)}</span><span class="ss-sub">${esc(S.sub)}</span></div>
+    <div class="ss-line">${S.segs.map(([x, y, n, k]) => `<span class="ss-seg k-${k}" style="left:${X(x)}%;width:${((y - x) / W * 100).toFixed(2)}%" title="${esc(n)}"></span>`).join("")}
+      ${S.now != null && S.now >= a && S.now <= z ? `<span class="ss-now" style="left:${X(S.now)}%"></span>` : ""}</div>
+    <div class="ss-marks">${marks.map((v) => `<span style="left:${X(v)}%">${S.kst(v)}</span>`).join("")}</div>
+    <div class="ss-legend">${S.segs.map(([x, y, n, k, note]) => `<span><i class="k-${k}"></i>${esc(n)} ${S.kst(x)}~${S.kst(y)}</span>`).join("")}${S.m === "us" ? `<span><i class="k-day"></i>주간거래(키움) ${S.kst(1200)}~${S.kst(240)}</span>` : ""}</div>
+    ${S.m === "us" ? `<div class="tiny">모두 한국 시간이에요. 미국 서머타임이 끝나면(11월~3월) 1시간씩 늦어져요. 시장가 주문은 정규장에만 돼요.</div>`
+      : `<div class="tiny">NXT(넥스트레이드) 시간은 키움에서 통합 주문(SOR)으로 거래할 때 적용돼요. 동시호가 때는 주문만 받고 끝날 때 한 번에 체결돼요.</div>`}
+  </section>`;
+}
+
 const mkt = {
   m: store.get("mkt") === "us" ? "us" : "kr",
   showAmt: store.get("mktAmt") === "1",
@@ -1699,6 +1783,7 @@ const mkt = {
           ${seg("시장", [["kr", "국내"], ["us", "미국"]], this.m, "mk-seg")}
           <button type="button" class="mk-find" id="mkFind" aria-label="종목 검색"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>종목 검색</button>
         </div>
+        <div id="mkSess"></div>
         <div id="mkNote"></div>
         <section class="card tight"><div class="mk-head"><span>관심종목</span><button type="button" class="link" id="mkToggle"></button></div><div class="list" id="mkList"><div class="empty">불러오는 중</div></div></section>
         <div class="tiny" id="mkFoot" style="padding:0 3px"></div>
@@ -1707,7 +1792,7 @@ const mkt = {
       bindSeg(box, "시장", (v) => {
         this.m = v; store.set("mkt", v === "us" ? "us" : ""); this.last = {};
         const c = this.snap[v] || memo.get("mk." + v);
-        if (c) this.renderBoard(c, v); else { $("#mkList").innerHTML = `<div class="empty">불러오는 중</div>`; $("#mkIdx").innerHTML = ""; }
+        if (c) this.renderBoard(c, v); else { $("#mkList").innerHTML = `<div class="empty">불러오는 중</div>`; $("#mkIdx").innerHTML = ""; $("#mkSess").innerHTML = sessionCard(v); }
         this.board(box);
       });
       $("#mkFind").onclick = () => this.search();
@@ -1728,6 +1813,7 @@ const mkt = {
   renderBoard(d, m) {
     if (!$("#mkList")) return;
     $("#mkToggle").textContent = this.showAmt ? "등락폭" : "등락률";
+    if ($("#mkSess")) $("#mkSess").innerHTML = sessionCard(m);
     $("#mkIdx").innerHTML = d.indices.map((x) => `<div class="mk-i"><span>${esc(x.name)}</span>
       <b>${x.price == null ? "-" : x.name.includes("환율") ? won(x.price) : Number(x.price).toLocaleString("en-US", { maximumFractionDigits: 2 })}</b>
       <em class="${tone(x.change_pct)}">${x.price == null ? "" : pct(x.change_pct, 2)}</em></div>`).join("");
@@ -1868,6 +1954,7 @@ const mkt = {
           <div class="mk-price" id="mkPrice"></div>
           <div class="mk-delta" id="mkDelta"></div>
           <div class="mk-mini" id="mkMini"></div>
+          <div class="ss-hero" id="mkSessH"></div>
         </section>
         <div class="dt-tabs">${seg("보기", [["chart", "차트"], ["book", "호가"], ["ticks", "체결"], ["info", "정보"]], D.tab)}</div>
         <section class="card mk-chart-card" id="dtChart" ${D.tab === "chart" ? "" : "hidden"}>
@@ -1902,6 +1989,7 @@ const mkt = {
     if (old && Number(old) !== q.price) { pEl.classList.remove("fl-up", "fl-dn"); void pEl.offsetWidth; pEl.classList.add(q.price > Number(old) ? "fl-up" : "fl-dn"); }
     $("#mkDelta").className = "mk-delta " + tone(q.change);
     $("#mkDelta").innerHTML = `${q.change > 0 ? "▲" : q.change < 0 ? "▼" : ""} ${this.money(Math.abs(q.change), cur)} (${pct(q.change_pct, 2)})${usd && q.fx ? `<span class="mk-krw">약 ${won(q.price * q.fx)}원</span>` : ""}`;
+    { const S = marketSession(m); $("#mkSessH").innerHTML = `<span class="ss-chip ss-${S.phase}"><i></i>${esc(S.label)}</span><span>${esc(S.sub)}</span>`; }
     $("#mkMini").innerHTML = `<span>시가 ${this.money(q.open, cur)}</span><span>고가 <b class="up">${this.money(q.high, cur)}</b></span><span>저가 <b class="down">${this.money(q.low, cur)}</b></span><span>거래량 ${q.volume != null ? bigNum(q.volume) : "-"}</span>`;
     $("#mkHold").innerHTML = hd ? `<section class="card"><div class="card-head"><h2>내 보유</h2><span class="tiny">키움 계좌</span></div>
       <div class="kv"><div>보유 수량<b>${won(hd.qty)}주</b></div><div>평균 단가<b>${m === "us" ? this.money(hd.avg_price, "USD") : won(hd.avg_price)}</b></div><div>평가 금액<b>${won(hd.value)}원</b></div></div>

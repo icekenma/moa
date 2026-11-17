@@ -346,3 +346,12 @@ dialog.upd[open]{animation:pop .18s ease-out}
 .xf-amt{color:var(--ink3);font-weight:600}
 .xf-amt::before{content:"⇄ ";font-weight:500}
 .xf-rules{margin:0;padding-left:18px;font-size:13px;line-height:1.7;color:var(--ink2)}
+
+/* 조건 훑기 */
+.sw-ps{display:flex;flex-wrap:wrap;gap:6px}
+.sw-p{font-size:12px;color:var(--ink3);background:var(--bg);border-radius:8px;padding:4px 8px}
+.sw-p b{color:var(--ink2);font-weight:600}
+.sw-p.diff{background:#FFF4CC;color:#6B5200}.sw-p.diff b{color:#3D2E00;font-weight:800}
+.sw-row{display:grid;grid-template-columns:64px 1fr;gap:8px;font-size:13px;align-items:baseline}
+.sw-row span{color:var(--ink3);font-weight:600}
+.sw-row b{font-weight:600}

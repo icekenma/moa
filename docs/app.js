@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1735";
+const UI_VERSION = "261117.1755";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -275,7 +275,7 @@ const MENU = {
   home: { title: "홈", subs: [["summary", "요약"], ["activity", "최근 활동"]] },
   ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["analysis", "분석"], ["budget", "예산"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
-  invest: { title: "투자", subs: [["market", "시세"], ["account", "내 계좌"], ["trade", "매매"], ["scalp", "단타"], ["dca", "적립"]], extra: { backtest: "scalp", rules: "scalp", stock: "market" } },
+  invest: { title: "투자", subs: [["market", "시세"], ["account", "내 계좌"], ["trade", "매매"], ["scalp", "단타"], ["dca", "적립"]], extra: { backtest: "scalp", rules: "scalp", sweep: "scalp", stock: "market" } },
   settings: { title: "설정", subs: [["connect", "서버"], ["accounts", "계좌 연결"], ["trading", "매매"], ["theme", "색상"], ["app", "앱 정보"]] },
 };
 const lastSub = {};
@@ -863,6 +863,7 @@ pages.invest = {
     const sub = h.sub || investState.tab;
     if (sub === "backtest") return this.backtest();
     if (sub === "rules") return this.rules();
+    if (sub === "sweep") return this.sweep();
     if (sub === "stock") return mkt.detail(h);
     investState.tab = ["market", "account", "trade", "scalp", "dca"].includes(sub) ? sub : "market";
     setTop("투자", { menu: "invest", sub: investState.tab });
@@ -872,6 +873,7 @@ pages.invest = {
   async refresh(h) {
     if (["backtest", "rules"].includes(h.sub)) return;
     if (h.sub === "stock") return mkt.refreshDetail();
+    if (h.sub === "sweep") return this.sweepPoll();
     if (investState.tab !== "dca") await this.fill();
   },
   async fill() {
@@ -1059,6 +1061,7 @@ pages.invest = {
         <span class="end"><b class="${tone(t.pnl)}">${signed(t.pnl)}</b></span></div>`).join("") : `<div class="empty">오늘 청산한 거래가 없어요</div>`}</div></section>
       <section class="card"><h2>날짜별 손익</h2>${pnlBars(d.history.map((x) => x.pnl), d.history.map((x) => x.session))}</section>
       <div class="btns"><a class="btn" href="#invest/backtest">백테스트</a><a class="btn" href="#invest/rules">매매 규칙</a></div>
+      <a class="btn wide" href="#invest/sweep">조건 대량 훑기</a>
       <details class="card"><summary>엔진 기록</summary>
         <div class="log">${d.log.length ? d.log.map((l) => `<div class="${l.level}"><time>${l.ts.slice(11, 16)}</time><span>${esc(l.msg)}</span></div>`).join("") : `<div class="tiny">아직 기록이 없어요</div>`}</div></details>`;
     if (this._logOpen) $("details", box).open = true;
@@ -1186,6 +1189,102 @@ pages.invest = {
         <span class="ico">${t.date.slice(5).replace("-", ".")}</span>
         <span class="main"><b>${esc(t.code)} <span class="tiny">${t.entry_t}~${t.exit_t}</span></b><span class="sub">${esc(t.reason)} · ${won(t.entry)} → ${won(t.exit)}</span></span>
         <span class="end"><b class="${tone(t.pnl)}">${signed(t.pnl)}</b></span></div>`).join("") : `<div class="empty">조건에 맞는 거래가 없었어요</div>`}</div></section>`;
+  },
+
+  // ---------- 조건 대량 훑기(vectorbt) ----------
+  async sweep() {
+    setTop("조건 훑기", { back: "#invest/scalp", menu: "invest", sub: "sweep" });
+    const [d, st] = await Promise.all([GET("/api/scalp"), GET("/api/sweep")]);
+    const cfg = d.config;
+    const F = this.sw || (this.sw = { strategy: cfg.strategy.name, source: "kiwoom", days: 40, codes: (cfg.watchlist || []).join(", ") });
+    const GRID_N = { orb_vwap: 1152, vwap_pullback: 288 };
+    view.innerHTML = `
+      <section class="card">
+        <div class="small muted">여러 조건을 한꺼번에 돌려 보고, 앞쪽 70% 날짜로 순위를 매긴 뒤 뒤쪽 30%로 맞는지 확인해요. 상위 5개는 실제 엔진 규칙으로 한 번 더 돌려요.</div>
+        <label class="field">전략<select id="swStrat">${Object.entries(d.strategies).map(([k, v]) => `<option value="${k}" ${k === F.strategy ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
+        ${seg("분봉", [["kiwoom", "키움 실제 분봉"], ["demo", "가상 데이터"]], F.source, "on-card")}
+        <div class="fields">
+          <label class="field">기간(영업일)<select id="swDays">${[20, 40, 60, 90].map((n) => `<option value="${n}" ${n == F.days ? "selected" : ""}>${n}일</option>`).join("")}</select></label>
+          <label class="field">조건 수<input id="swN" value="${GRID_N[F.strategy] || ""}개" disabled></label></div>
+        <label class="field">종목(6자리, 쉼표로 · 최대 12개)<input id="swCodes" value="${esc(F.codes)}" inputmode="numeric"></label>
+        <button class="btn dark wide" id="swGo">훑기 시작</button>
+        <div class="tiny">처음엔 vectorbt 설치와 분봉 받기로 몇 분 걸려요. 받은 분봉은 저장해 두고 다음부터 다시 써요.</div>
+      </section>
+      <div id="swOut" style="display:flex;flex-direction:column;gap:12px"></div>`;
+    const keep = () => { F.strategy = $("#swStrat").value; F.days = num($("#swDays").value); F.codes = $("#swCodes").value; };
+    $("#swStrat").onchange = () => { keep(); $("#swN").value = (GRID_N[F.strategy] || "") + "개"; };
+    bindSeg(view, "분봉", (v) => { keep(); F.source = v; });
+    $("#swGo").onclick = async () => {
+      keep();
+      const codes = F.codes.split(/[,\s]+/).map((x) => x.replace(/\D/g, "")).filter((x) => x.length === 6);
+      const r = await run(() => api("POST", "/api/sweep", { strategy: F.strategy, source: F.source, days: F.days, codes }));
+      this.swRender(r);
+    };
+    this.swRender(st);
+  },
+  async sweepPoll() {
+    if (!$("#swOut") || this.swLast?.status !== "running") return;
+    this.swRender(await GET("/api/sweep"));
+  },
+  swRender(st) {
+    this.swLast = st;
+    const box = $("#swOut");
+    if (!box) return;
+    if ($("#swGo")) $("#swGo").disabled = st.status === "running";
+    if (st.status === "running") {
+      box.innerHTML = `<section class="card"><div class="card-head"><h2>훑는 중</h2><b>${st.progress || 0}%</b></div>
+        <div class="bar"><div style="width:${st.progress || 0}%"></div></div>
+        <div class="small muted">${esc(st.msg || "")}</div>
+        <button class="btn soft wide" id="swStop">멈추기</button></section>`;
+      $("#swStop").onclick = async () => { await run(() => api("POST", "/api/sweep/stop"), "멈추라고 했어요"); };
+      return;
+    }
+    if (st.status === "error") { box.innerHTML = `<div class="notice warn">${esc(st.error || "실패했어요")}</div>`; return; }
+    if (st.status !== "done") { box.innerHTML = ""; return; }
+    const L = st.labels || {}, m = st.meta, cur = st.current;
+    const keys = Object.keys(st.grid || {});
+    const chk = Object.fromEntries((st.checked || []).map((c) => [c.id, c]));
+    const statLine = (x) => x && x.trades ? `${x.trades}건 · 승률 ${x.win_rate}% · 평균 ${x.avg > 0 ? "+" : ""}${x.avg}% · PF ${x.pf ?? "-"}` : "거래 없음";
+    const params = (p) => keys.map((k) => {
+      const diff = cur && cur.params[k] !== p[k];
+      return `<span class="sw-p ${diff ? "diff" : ""}">${esc(L[k] || k)} <b>${p[k]}</b></span>`;
+    }).join("");
+    const verdict = (r) => {
+      const c = chk[r.id];
+      const oosOk = r.oos.trades >= 5 && r.oos.avg > 0;
+      const exact = c ? (c.oos && c.oos.trades ? c.oos.net > 0 : null) : null;
+      if (oosOk && exact !== false) return `<span class="tag g">검증 구간도 플러스</span>`;
+      if (r.oos.trades < 5) return `<span class="tag">검증 거래 부족</span>`;
+      return `<span class="tag warn">검증에서 무너짐</span>`;
+    };
+    box.innerHTML = `
+      ${st.source === "demo" ? `<div class="notice warn">가상 데이터 결과예요. 무작위 가격이라 실제 수익성과 무관해요.</div>` : ""}
+      <section class="card">
+        <h2>${esc(st.strategy === "orb_vwap" ? "시가범위 돌파" : "VWAP 눌림 반등")} · 조건 ${m.combos}개 · ${(st.elapsed || 0)}초</h2>
+        <div class="kv"><div>학습 기간<b>${esc(m.first.slice(5))}~${esc(m.split_day.slice(5))}</b></div><div>검증 기간<b>~${esc(m.last.slice(5))}</b></div><div>종목<b>${m.codes.length}개</b></div></div>
+        <div class="small muted">거래 30건 이상인 조건 ${st.tested_ok}개 중 학습 기간에 평균 플러스는 ${st.positive_is}개예요. 수익은 거래당 % (수수료·세금·슬리피지 차감, 1주 기준)예요.</div>
+      </section>
+      ${cur ? `<section class="card"><h2>지금 내 설정</h2><div class="sw-ps">${params(cur.params)}</div>
+        <div class="sw-row"><span>학습</span><b class="${tone(cur.is.avg)}">${statLine(cur.is)}</b></div>
+        <div class="sw-row"><span>검증</span><b class="${tone(cur.oos.avg)}">${statLine(cur.oos)}</b></div></section>` : ""}
+      <div class="sec-title">학습 기간 상위 ${st.top.length}개 · 바뀐 값은 굵게</div>
+      ${st.top.length ? st.top.map((r, i) => {
+        const c = chk[r.id];
+        return `<section class="card sw-card">
+          <div class="card-head"><h2>${i + 1}위</h2>${verdict(r)}</div>
+          <div class="sw-ps">${params(r.params)}</div>
+          <div class="sw-row"><span>학습</span><b class="${tone(r.is.avg)}">${statLine(r.is)}</b></div>
+          <div class="sw-row"><span>검증</span><b class="${tone(r.oos.avg)}">${statLine(r.oos)}</b></div>
+          ${c ? `<div class="sw-row"><span>엔진 규칙</span><b class="${tone(c.full.net)}">전체 ${signed(c.full.net)}원 · PF ${c.full.profit_factor ?? "-"}${c.oos ? ` · 검증 ${signed(c.oos.net)}원` : ""}</b></div>` : ""}
+          <button class="btn wide" data-apply="${r.id}">이 조건을 매매 규칙에 적용</button></section>`;
+      }).join("") : `<div class="notice">거래 30건 이상이면서 학습 기간에 플러스인 조건이 없어요. 기간을 늘리거나 종목을 더 넣어 보세요. 플러스 조건이 없다는 것도 중요한 결과예요.</div>`}
+      <div class="tiny" style="padding:0 4px">앞 기간에서 고른 조건은 뒤 기간에서 대개 성적이 떨어져요. '검증 구간도 플러스'인 조건만 고려하고, 적용 뒤에도 앱 내 모의로 먼저 돌려 보세요.</div>`;
+    box.onclick = async (e) => {
+      const b = e.target.closest("[data-apply]");
+      if (!b) return;
+      if (!confirmTap(b, "한 번 더 누르면 매매 규칙을 바꿔요")) return;
+      await run(() => api("POST", "/api/sweep/apply", { id: Number(b.dataset.apply) }), "매매 규칙에 적용했어요");
+    };
   },
 
   // ---------- 매매 규칙 ----------

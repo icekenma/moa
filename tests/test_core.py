@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from datetime import date, datetime
@@ -833,3 +834,37 @@ def test_kiwoom_total_without_overseas_account(rt):
     rt.account.client().session = _FakeKiwoom()  # 미국 TR에 빈 응답 → 국내만
     s = rt.account.snapshot(force=True)
     assert s["total"] == 6166000 and "kr_total" not in s
+
+
+def test_sweep_screen_matches_engine_and_api(rt, tmp_path, monkeypatch):
+    import time as _t
+    from moa.trading import sweep as SW
+    monkeypatch.setattr(SW, "GRIDS", {"orb_vwap": {"range_min": [10, 15], "vol_mult": [1.5], "min_range_pct": [0.2, 0.4],
+                                                   "stop_atr": [1.5], "target_r": [2.0], "max_hold_min": [90]},
+                                      "vwap_pullback": SW.GRIDS["vwap_pullback"]})
+    cfg = {k: rt.settings.get(k) for k in ("strategy", "exit", "risk", "costs")}
+    data = BT.demo_dataset(["005930", "000660"], 20)
+    res, meta = SW.screen(data, "orb_vwap", cfg)
+    assert meta["combos"] == 4 and len(res) == 4
+    # 같은 조건을 엔진 백테스터로 돌린 거래 수와 크게 다르지 않아야 한다(본전 이동·계좌 한도 차이만)
+    p = res[0]["params"]
+    c2 = json.loads(json.dumps(cfg)); c2["strategy"]["orb_vwap"] = {k: v for k, v in p.items() if k != "max_hold_min"}
+    exact = BT.run(data, c2)["stats"]["trades"]
+    vec = res[0]["is"]["trades"] + res[0]["oos"]["trades"]
+    assert abs(exact - vec) <= max(2, exact * 0.2)
+    rt.sweep.data_dir = str(tmp_path)
+    rt.sweep.path = str(tmp_path / "sweep_last.json")
+    c = create_app(rt).test_client()
+    assert c.post("/api/sweep", json={"strategy": "orb_vwap", "source": "demo", "days": 10, "codes": ["005930"]}).status_code == 200
+    for _ in range(120):
+        st = c.get("/api/sweep").get_json()
+        if st["status"] != "running":
+            break
+        _t.sleep(0.5)
+    assert st["status"] == "done", st
+    assert st["meta"]["combos"] == 4 and "checked" in st
+    if st["top"]:
+        rid = st["top"][0]["id"]
+        assert c.post("/api/sweep/apply", json={"id": rid}).status_code == 200
+        assert rt.settings.get("strategy")["orb_vwap"]["range_min"] == st["top"][0]["params"]["range_min"]
+    assert c.post("/api/sweep/apply", json={"id": 9999}).status_code == 400

@@ -670,6 +670,40 @@ def create_app(rt, updater=None):
         res["trades"] = res["trades"][-300:]
         return jsonify(res)
 
+    # ---------- 단타 조건 대량 훑기(vectorbt) ----------
+    @app.get("/api/sweep")
+    def sweep_status():
+        return jsonify(rt.sweep.status())
+
+    @app.post("/api/sweep")
+    def sweep_start():
+        from .trading.sweep import SweepError
+        try:
+            return jsonify(rt.sweep.start(body()))
+        except SweepError as e:
+            raise ValueError(str(e))
+
+    @app.post("/api/sweep/stop")
+    def sweep_stop():
+        rt.sweep.stop()
+        return jsonify(ok=True)
+
+    @app.post("/api/sweep/apply")
+    def sweep_apply():
+        st = rt.sweep.status()
+        rid = body().get("id")
+        r = next((x for x in st.get("top") or [] if x["id"] == rid), None)
+        if not r:
+            raise ValueError("적용할 조건을 다시 골라 주세요")
+        name = st["strategy"]
+        p = dict(r["params"])
+        hold = p.pop("max_hold_min", None)
+        patch = {"strategy": {"name": name, name: p}}
+        if hold:
+            patch["exit"] = {"max_hold_min": hold}
+        rt.settings.update(patch)
+        return jsonify(ok=True, strategy=name, params=p, max_hold_min=hold)
+
     # ---------- 적립식 ----------
     @app.get("/api/dca")
     def dca():

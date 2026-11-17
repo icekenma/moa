@@ -29,6 +29,8 @@ def sub(path, pat, rep):
 
 sub(os.path.join(DOCS, "app.js"), r'const UI_VERSION = "[^"]*";', f'const UI_VERSION = "{build}";')
 sub(os.path.join(DOCS, "sw.js"), r'const CACHE = "[^"]*";', f'const CACHE = "moa-{build}";')
+sub(os.path.join(DOCS, "index.html"), r'app\.css\?v=[^"]*"', f'app.css?v={build}"')
+sub(os.path.join(DOCS, "index.html"), r'app\.js\?v=[^"]*"', f'app.js?v={build}"')
 with open(os.path.join(DOCS, "version.json"), "w", encoding="utf-8") as f:
     json.dump({"version": version, "build": build, "note": note}, f, ensure_ascii=False)
 print(f"v{version} ({build})")

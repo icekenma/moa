@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1025";
+const UI_VERSION = "261117.1028";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1185,39 +1185,48 @@ function updateCard(u) {
 }
 
 // ---------- 새 버전 알림 ----------
-// 앱을 켜 둔 동안 1분마다(그리고 다시 앱으로 돌아올 때) 화면과 노트북 서버의 새 버전을 확인한다.
-const upd = { server: null, shown: false };
+// 화면(GitHub Pages)과 노트북 서버가 둘 다 새 버전으로 바뀐 뒤에만 알린다.
+// 그래야 [지금 반영]을 누르는 즉시 새 버전이 완전히 보인다.
+const upd = { server: null, shown: false, pendingTimer: null };
 async function checkNewVersion() {
   if (upd.shown || document.hidden) return;
-  const found = [];
+  let v = null, p = null;
   try {
     const r = await fetch(`version.json?t=${Date.now()}`, { cache: "no-store" });
-    if (r.ok) {
-      const v = await r.json();
-      if (v.build && v.build !== UI_VERSION && UI_VERSION !== "0") found.push({ kind: "ui", text: v.note || "화면이 새 버전으로 바뀌었어요", v: v.version });
-    }
+    if (r.ok) v = await r.json();
   } catch (e) { /* 오프라인 */ }
-  try {
-    const p = await GET("/api/ping");
-    if (upd.server && p.build && p.build !== upd.server) found.push({ kind: "server", text: "노트북 서버가 새 버전으로 바뀌었어요", v: p.version, b: p.build });
-    if (!upd.server && p.build) upd.server = p.build;
-  } catch (e) { /* 연결 안 됨 */ }
-  if (found.length) showUpdateDialog(found);
+  try { p = await GET("/api/ping"); } catch (e) { /* 서버 연결 안 됨 */ }
+  if (p && !upd.server) upd.server = p.build;
+  const uiNew = v && v.build && v.build !== UI_VERSION && UI_VERSION !== "0";
+  const serverReady = !p || !v || p.version === v.version;  // 서버에 못 붙으면 화면만 기준
+  clearTimeout(upd.pendingTimer);
+  if (uiNew && !serverReady) {
+    // 화면은 올라왔지만 노트북이 아직 받는 중 → 30초 뒤 다시 확인
+    upd.pendingTimer = setTimeout(checkNewVersion, 30 * 1000);
+    return;
+  }
+  if (uiNew) return showUpdateDialog({ kind: "ui", from: p ? p.version : "", to: v.version, note: v.note });
+  if (p && upd.server && p.build && p.build !== upd.server) {
+    return showUpdateDialog({ kind: "server", from: "", to: p.version, note: "노트북 서버가 새 버전으로 바뀌었어요", build: p.build });
+  }
 }
-function showUpdateDialog(found) {
-  if (sheet.open) { setTimeout(() => checkNewVersion(), 5000); return; }
+function showUpdateDialog(u) {
+  if (sheet.open) { setTimeout(checkNewVersion, 5000); return; }
   upd.shown = true;
   const dlg = $("#updDlg");
-  $("#updBody").innerHTML = found.map((f) => `<div class="upd-row"><span class="tag ${f.kind === "ui" ? "y" : "g"}">${f.kind === "ui" ? "화면" : "서버"}</span><span>${esc(f.text)}<br><span class="tiny">v${esc(f.v)}</span></span></div>`).join("");
+  const cur = (document.querySelector(".top .ver") || {}).textContent || "";
+  $("#updBody").innerHTML = `<div class="upd-ver">${cur && cur !== "v" + u.to ? `<span>${esc(cur)}</span><b aria-hidden="true">→</b>` : ""}<strong>v${esc(u.to)}</strong></div>
+    ${u.note ? `<div class="upd-row"><span>${esc(u.note)}</span></div>` : ""}`;
   dlg.showModal();
+  $("#updOk").disabled = false; $("#updOk").textContent = "확인";
   $("#updOk").onclick = async () => {
     $("#updOk").disabled = true; $("#updOk").textContent = "반영하는 중";
-    if (found.some((f) => f.kind === "ui")) {
+    if (u.kind === "ui") {
       try { const reg = await navigator.serviceWorker?.getRegistration(); await reg?.update(); } catch (e) { /* 무시 */ }
       location.reload();
     } else {
-      upd.server = found.find((f) => f.kind === "server").b;
-      dlg.close(); upd.shown = false; route(); toast("새 버전을 반영했어요");
+      upd.server = u.build;
+      dlg.close(); upd.shown = false; route();
     }
   };
   $("#updLater").onclick = () => { dlg.close(); setTimeout(() => (upd.shown = false), 10 * 60 * 1000); };

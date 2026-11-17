@@ -1,6 +1,6 @@
 /* 화면 파일만 저장해 두고(오프라인에서도 앱이 열리게), 데이터 요청은 항상 서버로 보낸다. */
-const CACHE = "moa-261117.1025";
-const SHELL = ["./", "index.html", "app.css", "app.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
+const CACHE = "moa-261117.1028";
+const SHELL = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener("activate", (e) => {
   e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))));

@@ -1273,3 +1273,25 @@ def test_aipick_us_session_dst():
     f = AP.bar_features([{"t": "11/17 09:00", "o": 100, "h": 102, "l": 99, "c": 101, "v": 10}] +
                         [{"t": f"11/17 09:{5 * i:02d}", "o": 101, "h": 103, "l": 100, "c": 102, "v": 20} for i in range(1, 8)])
     assert f["시가대비%"] == 2.0 and f["5분봉_개수"] == 8
+
+
+def test_us_exchange_probes_when_blank_rejected():
+    from moa.broker.kiwoom import KiwoomClient, KiwoomError
+    KiwoomClient._US_EX_CACHE.clear()
+    cl = KiwoomClient.__new__(KiwoomClient)
+    calls = []
+
+    def fake(key, body):
+        calls.append(body["stex_tp"])
+        if body["stex_tp"] in ("", None):
+            raise KiwoomError("usa10100 실패: 거래소 구분값이 없습니다")
+        if body["stex_tp"] == "ND":
+            return {"stk_cd": "AXTI", "stk_nm": "AXT Inc", "stex_tp": "ND"}
+        raise KiwoomError("없음")
+    cl.call = fake
+    assert cl.us_exchange("AXTI", "NMS") == ("ND", "AXT Inc") and calls == ["ND"]
+    calls.clear()
+    KiwoomClient._US_EX_CACHE.clear()
+    cl.call = lambda k, b: (calls.append(b["stex_tp"]) or {"stk_cd": "KO", "stk_nm": "코카콜라", "stex_tp": "NY"}) if b["stex_tp"] == "NY" else (_ for _ in ()).throw(KiwoomError("x"))
+    assert cl.us_exchange("KO")[0] == "NY" and calls == ["NY"]
+    assert cl.us_exchange("KO")[0] == "NY"  # 기억해 둔 값

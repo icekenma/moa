@@ -369,7 +369,7 @@ def create_app(rt, updater=None):
         side = d.get("side")
         if side not in ("buy", "sell"):
             raise OrderError("매수인지 매도인지 골라 주세요")
-        exch = d.get("exch") if d.get("exch") in ("ND", "NY", "NA") else None
+        exch = d.get("exch") or d.get("exchange") or None  # ND/NY/NA 또는 공개 시세의 거래소 이름(NMS 등)을 힌트로
         with rt._lock:
             try:
                 no, exch = cl.us_order(side, sym, qty, price, exch)

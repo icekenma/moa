@@ -111,6 +111,10 @@ def num(v):
         return 0.0
 
 
+US_HINT = {"NMS": "ND", "NGM": "ND", "NCM": "ND", "NASDAQ": "ND", "NASDAQGS": "ND", "NASDAQGM": "ND", "NASDAQCM": "ND", "나스닥": "ND",
+           "NYQ": "NY", "NYSE": "NY", "뉴욕": "NY", "ASE": "NA", "AMEX": "NA", "PCX": "NA", "NYSEARCA": "NA", "BATS": "NA", "아멕스": "NA"}
+
+
 class KiwoomClient:
     def __init__(self, appkey, secretkey, mock=True, timeout=8, read_only=False):
         if not appkey or not secretkey:
@@ -215,20 +219,36 @@ class KiwoomClient:
     # ---- 미국주식 ----
     US_EXCH = {"NASDAQ": "ND", "NYSE": "NY", "AMEX": "NA", "ARCA": "NA", "NYSEARCA": "NA", "BATS": "NA"}
 
-    def us_exchange(self, sym):
-        """종목의 거래소 구분(ND 나스닥, NY 뉴욕, NA 아멕스). usa10100으로 확인하고 하루 저장."""
-        d = self.call("us_info", {"stex_tp": "", "stk_cd": sym})
-        ex = str(d.get("stex_tp") or "").strip().upper()
-        if ex in ("ND", "NY", "NA"):
-            return ex, d.get("stk_nm") or d.get("stk_enm") or sym
-        mk = str(d.get("mkgb") or "").upper().replace(" ", "")
-        for k, v in self.US_EXCH.items():
-            if k in mk:
-                return v, d.get("stk_nm") or sym
-        raise KiwoomError(f"{sym} 종목을 키움에서 찾지 못했어요")
+    _US_EX_CACHE = {}  # 종목 → (거래소, 이름), 프로그램이 켜져 있는 동안 기억
 
-    def us_quote(self, sym, exch=None):
-        exch = exch or self.us_exchange(sym)[0]
+    def us_exchange(self, sym, hint=None):
+        """종목의 거래소 구분(ND 나스닥, NY 뉴욕, NA 아멕스).
+        키움이 빈 거래소 구분을 받지 않아서, 힌트(공개 시세의 거래소)부터 ND→NY→NA 순으로 usa10100에 물어본다."""
+        sym = str(sym).upper()
+        if sym in self._US_EX_CACHE:
+            return self._US_EX_CACHE[sym]
+        h = US_HINT.get(str(hint or "").upper().replace(" ", ""), hint if hint in ("ND", "NY", "NA") else None)
+        order = [h] + [x for x in ("ND", "NY", "NA") if x != h] if h else ["ND", "NY", "NA"]
+        last = None
+        for ex in order:
+            try:
+                d = self.call("us_info", {"stex_tp": ex, "stk_cd": sym})
+            except KiwoomError as e:
+                last = e
+                continue
+            got = str(d.get("stex_tp") or "").strip().upper()
+            name = d.get("stk_nm") or d.get("stk_enm")
+            if not name and not str(d.get("stk_cd") or "").strip():
+                continue
+            if got not in ("ND", "NY", "NA"):
+                mk = str(d.get("mkgb") or "").upper().replace(" ", "")
+                got = next((v for k, v in self.US_EXCH.items() if k in mk), ex)
+            self._US_EX_CACHE[sym] = (got, name or sym)
+            return self._US_EX_CACHE[sym]
+        raise KiwoomError(f"{sym} 종목을 키움에서 찾지 못했어요" + (f" ({last})" if last else ""))
+
+    def us_quote(self, sym, exch=None, hint=None):
+        exch = exch if exch in ("ND", "NY", "NA") else self.us_exchange(sym, hint or exch)[0]
         d = self.call("us_quote", {"stex_tp": exch, "stk_cd": sym})
         price = num(d.get("cur_prc"))
         if not price:
@@ -248,7 +268,7 @@ class KiwoomClient:
         """미국주식 주문(ust20000 매수, ust20001 매도). price 없으면 시장가(정규장에서만)."""
         if self.read_only:
             raise KiwoomError("조회 전용 연결이라 주문할 수 없어요")
-        exch = exch or self.us_exchange(sym)[0]
+        exch = exch if exch in ("ND", "NY", "NA") else self.us_exchange(sym, exch)[0]
         body = {"stex_tp": exch, "stk_cd": sym, "ord_qty": str(int(qty)),
                 "ord_uv": "" if price is None else f"{float(price):.2f}", "trde_tp": "03" if price is None else "00"}
         if side == "sell":
@@ -259,7 +279,7 @@ class KiwoomClient:
     def us_cancel(self, ord_no, sym, exch=None):
         if self.read_only:
             raise KiwoomError("조회 전용 연결이라 주문을 취소할 수 없어요")
-        exch = exch or self.us_exchange(sym)[0]
+        exch = exch if exch in ("ND", "NY", "NA") else self.us_exchange(sym, exch)[0]
         d = self.call("us_cancel", {"orig_ord_no": str(ord_no), "stex_tp": exch, "stk_cd": sym})
         return d.get("ord_no", "")
 

@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2120";
+const UI_VERSION = "261117.2144";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2582,7 +2582,7 @@ function orderSheet(o) {
         if (realOrder && !confirmTap(btn, `한 번 더 누르면 실제로 ${buy ? "매수" : "매도"}해요`)) return;
         const price = S.type === "limit" ? (US ? Number(String(S.price).replace(/,/g, "")) : num(S.price)) : null;
         const body = { engine: S.engine, side: S.side, code: US ? S.code.toUpperCase() : S.code, qty: num(S.qty), price, market: S.market,
-          exch: S.q?.exch || S.exch || undefined, name: S.q?.name || S.name || undefined };
+          exch: S.q?.exch || S.exch || undefined, exchange: S.q?.exchange || undefined, name: S.q?.name || S.name || undefined };
         btn.disabled = true; btn.textContent = "주문 넣는 중";
         try {
           const r = await api("POST", "/api/order", body);

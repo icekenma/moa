@@ -258,11 +258,20 @@ def test_remote_access_requires_token(rt):
     assert c.get("/api/ping", headers={**fwd, "Authorization": "Bearer wrong"}).status_code == 401
     r = c.get("/api/ping", headers={**fwd, "Authorization": f"Bearer {tok}", "Origin": "https://icekenma.github.io"})
     assert r.status_code == 200 and r.headers["Access-Control-Allow-Origin"] == "https://icekenma.github.io"
-    assert c.get("/api/connect-info", headers={**fwd, "Authorization": f"Bearer {tok}"}).status_code == 403
+    # 토큰만으로는 데이터에 못 들어간다: 비밀번호를 만들고 열어야 한다
+    auth_h = {**fwd, "Authorization": f"Bearer {tok}"}
+    r = c.get("/api/home", headers=auth_h)
+    assert r.status_code == 401 and r.get_json()["code"] == "setup"
+    sid = c.post("/api/auth/setup", json={"password": "moa-pass-1"}, headers=auth_h).get_json()["session"]
+    assert c.get("/api/home", headers=auth_h).get_json()["code"] == "locked"
+    auth_h["X-Moa-Session"] = sid
+    assert c.get("/api/home", headers=auth_h).status_code == 200
+    assert c.get("/api/connect-info", headers=auth_h).status_code == 403
     pre = c.options("/api/home", headers={"Origin": "https://icekenma.github.io",
                                           "Access-Control-Request-Method": "GET",
                                           "Access-Control-Request-Headers": "authorization"})
     assert pre.status_code == 204 and "Authorization" in pre.headers["Access-Control-Allow-Headers"]
+    assert "X-Moa-Session" in pre.headers["Access-Control-Allow-Headers"]
     evil = c.options("/api/home", headers={"Origin": "https://evil.example"})
     assert "Access-Control-Allow-Origin" not in evil.headers
     assert c.get("/api/connect-info").get_json()["token"] == tok
@@ -1419,3 +1428,116 @@ def test_ai_outcome_ignores_pre_recommendation_bar_range(rt, monkeypatch):
     db.x("UPDATE ai_outcomes SET result='손절', net_pct=-1.75, gv=NULL WHERE pick_id=?", (mkt_["pick_id"],))
     rt.aipick.evaluate(force=True)
     assert db.one("SELECT result FROM ai_outcomes WHERE pick_id=?", (mkt_["pick_id"],))["result"] == "익절"
+
+
+# ---------- 보안: 앱 비밀번호·잠금 ----------
+def _remote(rt):
+    from moa.app import access_token
+    c = create_app(rt).test_client()
+    return c, {"X-Forwarded-For": "100.64.0.2", "Authorization": f"Bearer {access_token(rt.db)}"}
+
+
+def test_password_lock_flow(rt):
+    c, h = _remote(rt)
+    st = c.get("/api/auth/state", headers=h).get_json()
+    assert st["set"] is False and st["unlocked"] is False and st["required"] is True
+    assert c.post("/api/auth/setup", json={"password": "12"}, headers=h).status_code == 403      # 너무 짧음
+    assert c.post("/api/auth/setup", json={"password": "1111"}, headers=h).status_code == 403    # 너무 쉬움
+    sid = c.post("/api/auth/setup", json={"password": "gagyebu!7"}, headers=h).get_json()["session"]
+    assert c.post("/api/auth/setup", json={"password": "another-1"}, headers=h).status_code == 403  # 두 번은 못 만든다
+    hs = {**h, "X-Moa-Session": sid}
+    assert c.get("/api/settings", headers=hs).status_code == 200
+    assert c.get("/api/settings", headers={**h, "X-Moa-Session": "guess"}).status_code == 401
+    # 비밀번호 원문은 어디에도 저장하지 않는다
+    raw = json.dumps(rt.db.get_setting("auth"))
+    assert "gagyebu!7" not in raw and sid not in raw
+    assert rt.db.one("SELECT COUNT(*) n FROM auth_sessions WHERE hash=?", (sid,))["n"] == 0
+    assert "gagyebu" not in json.dumps(c.get("/api/settings", headers=hs).get_json())
+    # 잠그면 같은 세션으로 못 들어온다
+    assert c.post("/api/auth/lock", json={}, headers=hs).status_code == 200
+    assert c.get("/api/settings", headers=hs).get_json()["code"] == "locked"
+    sid2 = c.post("/api/auth/unlock", json={"password": "gagyebu!7"}, headers=h).get_json()["session"]
+    hs = {**h, "X-Moa-Session": sid2}
+    # 바꾸기: 지금 비밀번호가 맞아야 하고, 바꾸면 다른 기기는 잠긴다
+    other = c.post("/api/auth/unlock", json={"password": "gagyebu!7"}, headers=h).get_json()["session"]
+    assert c.post("/api/auth/change", json={"current": "wrong", "new": "new-pass-9"}, headers=hs).status_code == 403
+    assert c.post("/api/auth/change", json={"current": "gagyebu!7", "new": "new-pass-9"}, headers=hs).status_code == 200
+    assert c.get("/api/settings", headers=hs).status_code == 200
+    assert c.get("/api/settings", headers={**h, "X-Moa-Session": other}).status_code == 401
+    assert c.post("/api/auth/unlock", json={"password": "gagyebu!7"}, headers=h).status_code == 403
+    # 초기화는 노트북에서만
+    assert c.post("/api/auth/reset", headers=hs).status_code == 403
+    assert c.post("/api/auth/reset").status_code == 200
+    assert c.get("/api/auth/state", headers=h).get_json()["set"] is False
+
+
+def test_password_wrong_tries_are_blocked(rt):
+    c, h = _remote(rt)
+    c.post("/api/auth/setup", json={"password": "gagyebu!7"}, headers=h)
+    for _ in range(4):
+        r = c.post("/api/auth/unlock", json={"password": "nope"}, headers=h)
+        assert r.status_code == 403 and r.get_json()["wait"] == 0
+    r = c.post("/api/auth/unlock", json={"password": "nope"}, headers=h)
+    assert r.get_json()["wait"] == 30
+    # 막힌 동안에는 맞는 비밀번호도 받지 않는다
+    r = c.post("/api/auth/unlock", json={"password": "gagyebu!7"}, headers=h)
+    assert r.status_code == 403 and r.get_json()["wait"] > 0
+    conf = rt.db.get_setting("auth"); conf["blocked_until"] = 0; rt.db.set_setting("auth", conf)
+    assert c.post("/api/auth/unlock", json={"password": "gagyebu!7"}, headers=h).status_code == 200
+    assert rt.db.get_setting("auth")["fails"] == 0
+
+
+def test_session_expires_when_idle(rt):
+    import time as _t
+    c, h = _remote(rt)
+    sid = c.post("/api/auth/setup", json={"password": "gagyebu!7"}, headers=h).get_json()["session"]
+    hs = {**h, "X-Moa-Session": sid}
+    assert c.put("/api/auth/options", json={"lock_after": 5}, headers=hs).get_json()["lock_after"] == 5
+    assert c.put("/api/auth/options", json={"lock_after": 7}, headers=hs).status_code == 403
+    rt.db.x("UPDATE auth_sessions SET last_seen=?", (_t.time() - 6 * 60,))
+    assert c.get("/api/settings", headers=hs).get_json()["code"] == "locked"
+
+
+def test_inbox_post_needs_only_token(rt):
+    """아이폰 단축어(문자 자동 기록)는 비밀번호 없이 넣기만 할 수 있다. 읽기는 안 된다."""
+    c, h = _remote(rt)
+    c.post("/api/auth/setup", json={"password": "gagyebu!7"}, headers=h)
+    assert c.post("/api/inbox", json={"text": "[Web발신] 신한카드 승인 12,000원 스타벅스"}, headers=h).status_code == 200
+    assert c.get("/api/inbox", headers=h).status_code == 401
+    assert c.post("/api/inbox", json={"text": "x"}, headers={"X-Forwarded-For": "100.64.0.2"}).status_code == 401
+
+
+def test_local_direct_rejects_foreign_site_requests(rt):
+    """이 PC 브라우저를 거친 다른 사이트의 요청(CSRF·DNS 리바인딩)은 이 PC 요청으로 믿지 않는다."""
+    c = create_app(rt).test_client()
+    assert c.get("/api/settings").status_code == 200
+    assert c.get("/api/settings", headers={"Origin": "http://127.0.0.1:8780"}).status_code == 200
+    assert c.get("/api/settings", headers={"Host": "evil.example:8780"}).status_code == 401          # DNS 리바인딩
+    assert c.post("/api/connect-info/rotate", headers={"Origin": "https://evil.example"}).status_code == 401  # CSRF
+    assert c.get("/api/settings", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 401
+    assert c.get("/api/settings", headers={"Origin": "null"}).status_code == 401
+
+
+def test_wrong_token_is_throttled_and_headers_are_set(rt):
+    c = create_app(rt).test_client()
+    bad = {"X-Forwarded-For": "100.64.0.9", "Authorization": "Bearer wrong"}
+    for _ in range(8):
+        assert c.get("/api/ping", headers=bad).status_code == 401
+    r = c.get("/api/ping", headers=bad)
+    assert r.status_code == 429 and r.get_json()["wait"] > 0
+    # 다른 기기는 영향 없다
+    from moa.app import access_token
+    ok = c.get("/api/ping", headers={"X-Forwarded-For": "100.64.0.2", "Authorization": f"Bearer {access_token(rt.db)}"})
+    assert ok.status_code == 200
+    assert ok.headers["X-Content-Type-Options"] == "nosniff" and ok.headers["X-Frame-Options"] == "DENY"
+    assert ok.headers["Referrer-Policy"] == "no-referrer"
+
+
+def test_server_error_does_not_echo_details(rt):
+    app = create_app(rt)
+
+    @app.get("/api/boom")
+    def boom():
+        raise KeyError("secret-path-C:/Users/me/key.txt")
+    r = app.test_client().get("/api/boom")
+    assert r.status_code == 500 and "secret-path" not in r.get_json()["error"]

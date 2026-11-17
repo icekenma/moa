@@ -3,7 +3,7 @@ import hmac
 import json
 import os
 import secrets
-from datetime import date
+from datetime import date, datetime
 
 from flask import Flask, jsonify, make_response, request, send_from_directory
 
@@ -29,11 +29,33 @@ def access_token(db):
     return tok
 
 
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "[::1]", "::1")
+
+
 def is_local_direct():
-    """이 PC 브라우저에서 바로 연 요청인지(터널·프록시를 거치지 않음)."""
+    """이 PC 브라우저에서 바로 연 요청인지(터널·프록시를 거치지 않음).
+
+    주소만 보면 안 된다. 다른 사이트가 이 PC 브라우저를 시켜 보낸 요청(CSRF)이나,
+    남의 도메인을 127.0.0.1로 돌려 붙이는 수법(DNS 리바인딩)은 이 PC 요청처럼 보이기 때문이다.
+    그래서 접속 주소(Host)가 이 PC이고, 다른 사이트에서 온 요청이 아닐 때만 믿는다.
+    """
     if request.remote_addr not in ("127.0.0.1", "::1"):
         return False
-    return not any(request.headers.get(h) for h in FORWARD_HEADERS)
+    if any(request.headers.get(h) for h in FORWARD_HEADERS):
+        return False
+    host = (request.host or "").lower()
+    host = host if host.startswith("[") and host.endswith("]") else host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    if host not in LOCAL_HOSTS and not host.startswith("[::1]"):
+        return False
+    if request.headers.get("Sec-Fetch-Site") in ("cross-site", "same-site"):
+        return False
+    origin = request.headers.get("Origin")
+    if origin:
+        oh = origin.split("://", 1)[-1].lower()
+        oh = oh.rsplit(":", 1)[0] if oh.count(":") == 1 else oh
+        if oh not in LOCAL_HOSTS and not oh.startswith("[::1]"):
+            return False
+    return True
 
 
 def create_app(rt, updater=None):
@@ -49,7 +71,13 @@ def create_app(rt, updater=None):
         if isinstance(e, known):
             return jsonify(error=str(e)), 400
         app.logger.exception(e)
-        return jsonify(error=f"처리하지 못했어요: {e}"), 500
+        # 내부 오류 문구에는 경로·키 같은 것이 섞일 수 있어 화면에는 종류만 보내고, 자세한 내용은 로그에 남긴다
+        try:
+            rt.db.log("system", "error", f"{request.method} {request.path} 처리 실패: {type(e).__name__}: {str(e)[:300]}",
+                      datetime.now().isoformat(timespec="seconds"))
+        except Exception:
+            pass
+        return jsonify(error=f"처리하지 못했어요 ({type(e).__name__}). 자세한 내용은 로그에 남겼어요"), 500
 
     def body():
         return request.get_json(silent=True) or {}
@@ -62,6 +90,16 @@ def create_app(rt, updater=None):
             return origin
         return None
 
+    from .auth import Auth, AuthError, Throttle
+    auth = Auth(rt.db, rt.notify)
+    rt.auth = auth
+    throttle = Throttle()
+    OPEN_PATHS = {"/api/ping", "/api/auth/state", "/api/auth/setup", "/api/auth/unlock"}  # 토큰만 있으면 되는 곳
+
+    def client_id():
+        xff = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        return xff or request.headers.get("Tailscale-User-Login") or request.remote_addr or "?"
+
     @app.before_request
     def guard():
         if not request.path.startswith("/api/"):
@@ -72,18 +110,36 @@ def create_app(rt, updater=None):
             if origin:
                 resp.headers["Access-Control-Allow-Origin"] = origin
                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-                resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, ngrok-skip-browser-warning"
-                resp.headers["Access-Control-Allow-Private-Network"] = "true"
+                resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-Moa-Session, ngrok-skip-browser-warning"
                 resp.headers["Access-Control-Max-Age"] = "600"
                 resp.headers["Vary"] = "Origin"
             return resp
         if is_local_direct():
             return None
+        who = client_id()
+        w = throttle.wait(who)
+        if w:
+            return jsonify(error=f"접속 시도가 너무 많아요. {w}초 뒤에 다시 해 주세요", code="throttle", wait=w), 429
         got = request.headers.get("Authorization", "")
         got = got[7:] if got.startswith("Bearer ") else ""
-        if not got or not hmac.compare_digest(got, token):
+        if not got or not hmac.compare_digest(got.encode(), token.encode()):
+            if throttle.fail(who):
+                rt.db.log("system", "error", f"틀린 접속 토큰이 반복돼 {who}의 접속을 10분 막았어요", datetime.now().isoformat(timespec="seconds"))
+                rt.notify("[moa 보안] 틀린 접속 토큰으로 여러 번 접속을 시도했어요")
             return jsonify(error="접속 토큰이 맞지 않아요. 설정에서 토큰을 다시 넣어 주세요", code="auth"), 401
+        throttle.ok(who)
+        # 접속 토큰은 맞음 → 이제 앱 비밀번호(잠금) 확인. 문자 자동 기록(단축어)은 넣기만 하므로 토큰만으로 받는다.
+        if request.path in OPEN_PATHS or (request.path == "/api/inbox" and request.method == "POST"):
+            return None
+        if not auth.is_set():
+            return jsonify(error="앱 비밀번호를 먼저 만들어 주세요", code="setup"), 401
+        if not auth.valid(request.headers.get("X-Moa-Session")):
+            return jsonify(error="잠겨 있어요. 비밀번호를 넣어 주세요", code="locked"), 401
         return None
+
+    @app.errorhandler(AuthError)
+    def on_auth_error(e):
+        return jsonify(error=str(e), code="password", wait=e.wait), 403
 
     @app.after_request
     def add_cors(resp):
@@ -93,7 +149,56 @@ def create_app(rt, updater=None):
             resp.headers["Vary"] = "Origin"
         if request.path.startswith("/api/"):
             resp.headers["Cache-Control"] = "no-store"
+        # 공통 보안 머리말
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        resp.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+        resp.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
         return resp
+
+    # ---------- 앱 비밀번호·잠금 ----------
+    def sess():
+        return request.headers.get("X-Moa-Session")
+
+    def ua_label():
+        return (request.headers.get("User-Agent") or "")[:80]
+
+    @app.get("/api/auth/state")
+    def auth_state():
+        local = is_local_direct()
+        return jsonify({**auth.state(sess()), "local": local, "required": not local})
+
+    @app.post("/api/auth/setup")
+    def auth_setup():
+        return jsonify(session=auth.setup(body().get("password"), ua_label()), **auth.state())
+
+    @app.post("/api/auth/unlock")
+    def auth_unlock():
+        return jsonify(session=auth.unlock(body().get("password"), ua_label()), lock_after=auth.lock_after())
+
+    @app.post("/api/auth/lock")
+    def auth_lock():
+        auth.lock(sess(), everywhere=bool(body().get("everywhere")))
+        return jsonify(ok=True)
+
+    @app.post("/api/auth/change")
+    def auth_change():
+        d = body()
+        auth.change(d.get("current"), d.get("new"), sess())
+        return jsonify(ok=True)
+
+    @app.put("/api/auth/options")
+    def auth_options():
+        auth.set_lock_after(int(body().get("lock_after") or 0))
+        return jsonify(auth.state(sess()))
+
+    @app.post("/api/auth/reset")
+    def auth_reset():
+        if not is_local_direct():
+            return jsonify(error="비밀번호 초기화는 서버 PC(노트북)에서만 할 수 있어요"), 403
+        auth.reset()
+        return jsonify(ok=True)
 
     # ---------- 화면(GitHub Pages와 같은 파일을 이 서버도 그대로 준다) ----------
     @app.get("/")
@@ -158,6 +263,7 @@ def create_app(rt, updater=None):
             return jsonify(error="토큰은 서버 PC에서만 바꿀 수 있어요"), 403
         token = secrets.token_urlsafe(24)
         rt.db.set_setting("access_token", token)
+        auth.lock(everywhere=True)  # 토큰을 바꾸면 열려 있던 기기도 모두 잠근다
         return jsonify(token=token)
 
     # ---------- 홈 ----------

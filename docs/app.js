@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.0745";
+const UI_VERSION = "261118.0803";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -27,12 +27,36 @@ const ON_PAGES = location.hostname.endsWith("github.io") || location.protocol ==
 class NeedConnect extends Error {}
 const apiBase = () => (ON_PAGES ? store.get("server").replace(/\/+$/, "") : "");
 
+// ---------- 잠금(앱 비밀번호) ----------
+// 접속 토큰은 '이 기기가 서버에 붙을 열쇠', 비밀번호는 '지금 쓰는 사람이 나라는 확인'.
+// 비밀번호를 맞히면 서버가 열림 값(세션)을 주고, 그 값이 있어야 데이터를 볼 수 있다.
+class Locked extends Error {}
+const sess = {
+  get() { try { return sessionStorage.getItem("moa.sess") || localStorage.getItem("moa.sess") || ""; } catch (e) { return ""; } },
+  set(v, keep) {
+    try {
+      sessionStorage.removeItem("moa.sess"); localStorage.removeItem("moa.sess");
+      if (v) (keep ? localStorage : sessionStorage).setItem("moa.sess", v);
+    } catch (e) { /* 저장 불가 */ }
+  },
+};
+function authHeaders(h = {}) {
+  const tok = store.get("token"), sid = sess.get();
+  if (tok) h.Authorization = "Bearer " + tok;
+  if (sid) h["X-Moa-Session"] = sid;
+  if (apiBase().includes("ngrok")) h["ngrok-skip-browser-warning"] = "1";
+  return h;
+}
+// 잠기면 기기에 남겨 둔 화면 자료(잔액·내역 사본)를 지운다
+function purgeCache() {
+  try { Object.keys(localStorage).forEach((k) => { if (k.startsWith("moa.m.") || k === "moa.kwLast") localStorage.removeItem(k); }); } catch (e) { /* 무시 */ }
+}
+const OPEN_API = (u) => u.startsWith("/api/auth/") || u === "/api/ping";
+
 async function api(method, url, body, isForm) {
   if (ON_PAGES && !store.get("server")) throw new NeedConnect("서버 주소를 먼저 넣어 주세요");
-  const opt = { method, headers: {} };
-  const tok = store.get("token");
-  if (tok) opt.headers.Authorization = "Bearer " + tok;
-  if (apiBase().includes("ngrok")) opt.headers["ngrok-skip-browser-warning"] = "1";
+  if (lock.on && !OPEN_API(url)) throw new Locked("잠겨 있어요");
+  const opt = { method, headers: authHeaders() };
   if (body !== undefined) {
     if (isForm) opt.body = body;
     else { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
@@ -41,13 +65,148 @@ async function api(method, url, body, isForm) {
   try { res = await fetch(apiBase() + url, opt); }
   catch (e) { throw new Error(ON_PAGES ? "서버에 연결하지 못했어요. 노트북의 moa와 연결 앱(Tailscale 등)이 켜져 있는지 확인해 주세요" : "서버에 연결하지 못했어요. moa 실행 창이 켜져 있는지 확인해 주세요"); }
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401) throw new NeedConnect(data.error || "접속 토큰이 맞지 않아요");
-  if (!res.ok) throw new Error(data.error || `요청이 실패했어요 (${res.status})`);
+  if (res.status === 401) {
+    if (data.code === "locked" || data.code === "setup") { lock.show(data.code === "setup" ? "setup" : "unlock"); throw new Locked(data.error || "잠겨 있어요"); }
+    throw new NeedConnect(data.error || "접속 토큰이 맞지 않아요");
+  }
+  if (!res.ok) { const err = new Error(data.error || `요청이 실패했어요 (${res.status})`); err.wait = data.wait || 0; err.code = data.code || ""; throw err; }
   return data;
 }
 const GET = (u) => api("GET", u);
 
+const LOCK_LABEL = { 5: "5분", 30: "30분", 240: "4시간", 1440: "하루", 10080: "일주일" };
+const lock = {
+  on: false, mode: "", dlg: null, after: 30, required: false, hiddenAt: 0, waitT: null,
+  el() {
+    if (this.dlg) return this.dlg;
+    const d = document.createElement("dialog");
+    d.className = "lock"; d.id = "lockDlg"; d.setAttribute("aria-labelledby", "lockTitle");
+    d.addEventListener("cancel", (e) => e.preventDefault());                      // Esc로 못 닫게
+    d.addEventListener("close", () => { if (this.on) try { d.showModal(); } catch (e) { /* 이미 열림 */ } });
+    document.body.appendChild(d);
+    return (this.dlg = d);
+  },
+  show(mode, msg = "", wait = 0) {
+    if (this.on && this.mode === mode && mode !== "offline") return;              // 여러 요청이 한꺼번에 잠김을 알려도 입력 중인 칸을 지우지 않는다
+    const d = this.el();
+    if (!this.on) { clearInterval(timer); closeSheet(); $(".fab")?.remove(); view.innerHTML = ""; }
+    this.on = true; this.mode = mode;
+    if (mode === "unlock" || mode === "setup") { sess.set(""); purgeCache(); }
+    if (mode === "check") purgeCache();
+    const eye = `<button type="button" class="lk-eye" id="lkEye" aria-label="비밀번호 보기" aria-pressed="false"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>`;
+    const user = `<input class="lk-user" type="text" name="username" autocomplete="username" value="가계부S" readonly tabindex="-1" aria-hidden="true">`;
+    const body = {
+      check: `<p class="lk-sub" id="lkMsg">잠금 상태를 확인하는 중</p><div class="lk-spin" aria-hidden="true"></div>`,
+      offline: `<p class="lk-sub">${esc(msg || "서버에 연결하지 못했어요")}</p>
+        <button type="button" class="lk-go" id="lkRetry">다시 연결</button>
+        <a class="lk-link" href="#connect" id="lkConn">서버 연결 설정 열기</a>`,
+      unlock: `<p class="lk-sub">비밀번호를 넣으면 열려요</p>${user}
+        <label class="lk-field"><span class="lk-lab">비밀번호</span><span class="lk-box"><input id="lkPw" name="password" type="password" autocomplete="current-password" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="128" required>${eye}</span></label>
+        <div class="lk-err" id="lkErr" role="alert"></div>
+        <button type="submit" class="lk-go" id="lkGo" data-label="열기">열기</button>
+        <label class="lk-keep"><input type="checkbox" id="lkKeep"${store.get("keep") ? " checked" : ""}><span>이 기기에서는 자동 잠금 시간(${LOCK_LABEL[this.after] || "30분"})까지 다시 묻지 않기</span></label>
+        <details class="lk-help"><summary>비밀번호를 잊었어요</summary><div>노트북에서 가계부S를 열고 설정 → 보안 → 비밀번호 초기화를 누르면 새로 만들 수 있어요. 데이터는 그대로 남아요.</div></details>`,
+      setup: `<p class="lk-sub">앱을 열 때 물어볼 비밀번호를 만들어요.<br>노트북 서버에만, 원문이 아닌 암호화한 값으로 저장해요.</p>${user}
+        <label class="lk-field"><span class="lk-lab">새 비밀번호</span><span class="lk-box"><input id="lkPw" name="new-password" type="password" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="128" required>${eye}</span></label>
+        <label class="lk-field"><span class="lk-lab">한 번 더</span><span class="lk-box"><input id="lkPw2" type="password" autocomplete="new-password" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="128" required></span></label>
+        <div class="lk-hint">4자 이상. 숫자와 글자를 섞어 6자 이상이면 더 안전해요</div>
+        <div class="lk-err" id="lkErr" role="alert"></div>
+        <button type="submit" class="lk-go" id="lkGo" data-label="비밀번호 만들고 시작하기">비밀번호 만들고 시작하기</button>`,
+    }[mode];
+    d.innerHTML = `<form class="lock-in" id="lkForm" novalidate>
+      <span class="lk-mark"><img src="icon-192.png?v=s1" alt="" width="68" height="68"><i aria-hidden="true"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2.2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></i></span>
+      <h2 id="lockTitle">${mode === "setup" ? "비밀번호 만들기" : "가계부S"}</h2>${body}</form>`;
+    if (!d.open) d.showModal();
+    clearInterval(this.waitT);
+    const form = $("#lkForm", d);
+    form.onsubmit = (e) => { e.preventDefault(); if (mode === "unlock") this.unlock(); else if (mode === "setup") this.setup(); };
+    if ($("#lkEye", d)) $("#lkEye", d).onclick = (e) => {
+      const b = e.currentTarget, showing = b.getAttribute("aria-pressed") === "true";
+      b.setAttribute("aria-pressed", String(!showing));
+      $$("#lkPw,#lkPw2", d).forEach((x) => (x.type = showing ? "password" : "text"));
+    };
+    if ($("#lkRetry", d)) $("#lkRetry", d).onclick = () => { this.show("check"); this.verify(); };
+    if ($("#lkConn", d)) $("#lkConn", d).onclick = () => { this.close(); };
+    if (wait > 0) this.wait(wait);
+    setTimeout(() => $("#lkPw", d)?.focus({ preventScroll: true }), 60);
+  },
+  close() { this.on = false; this.mode = ""; clearInterval(this.waitT); if (this.dlg) { if (this.dlg.open) this.dlg.close(); this.dlg.innerHTML = ""; } },
+  hide() { this.close(); route(); },
+  fail(e) {
+    if (e instanceof NeedConnect) { this.close(); if (location.hash.startsWith("#connect")) route(); else location.hash = "#connect"; return; }
+    const d = this.el(), err = $("#lkErr", d), pw = $("#lkPw", d);
+    if (err) err.textContent = e.message;
+    const box = pw && pw.closest(".lk-box");
+    if (box) { box.classList.remove("shake"); void box.offsetWidth; box.classList.add("shake"); }
+    if (this.mode === "unlock" && pw) { pw.value = ""; pw.focus({ preventScroll: true }); }
+    if (e.wait > 0) this.wait(e.wait); else { const b = $("#lkGo", d); if (b) { b.disabled = false; b.textContent = b.dataset.label; } }
+  },
+  wait(sec) {
+    const b = $("#lkGo", this.el()); if (!b) return;
+    let left = Math.ceil(sec);
+    const tick = () => {
+      if (!b.isConnected) return clearInterval(this.waitT);
+      if (left <= 0) { clearInterval(this.waitT); b.disabled = false; b.textContent = b.dataset.label; return; }
+      b.disabled = true; b.textContent = left >= 60 ? `${Math.ceil(left / 60)}분 뒤에 다시 넣을 수 있어요` : `${left}초 뒤에 다시 넣을 수 있어요`; left--;
+    };
+    clearInterval(this.waitT); tick(); this.waitT = setInterval(tick, 1000);
+  },
+  busy() { const b = $("#lkGo", this.el()); if (b) { b.disabled = true; b.textContent = "확인하는 중"; } const e = $("#lkErr", this.el()); if (e) e.textContent = ""; },
+  async unlock() {
+    const d = this.el(), pw = $("#lkPw", d).value, keep = $("#lkKeep", d).checked;
+    if (!pw) return;
+    this.busy();
+    try {
+      const r = await api("POST", "/api/auth/unlock", { password: pw });
+      sess.set(r.session, keep); store.set("keep", keep ? "1" : "");
+      this.after = r.lock_after || this.after; this.required = true; this.hiddenAt = 0;
+      this.hide();
+    } catch (e) { this.fail(e); }
+  },
+  async setup() {
+    const d = this.el(), pw = $("#lkPw", d).value, pw2 = $("#lkPw2", d).value;
+    if (pw !== pw2) return this.fail(new Error("두 칸의 비밀번호가 서로 달라요"));
+    this.busy();
+    try {
+      const r = await api("POST", "/api/auth/setup", { password: pw });
+      sess.set(r.session, false); store.set("keep", "");
+      this.after = r.lock_after || this.after; this.required = true;
+      this.hide(); toast("비밀번호를 만들었어요. 다음부터 앱을 열 때 물어봐요");
+    } catch (e) { this.fail(e); }
+  },
+  // 서버에 지금 상태를 묻고: 열려 있으면 화면을, 아니면 잠금 화면을 보여 준다
+  async verify() {
+    let st;
+    try { st = await api("GET", "/api/auth/state"); }
+    catch (e) {
+      if (e instanceof NeedConnect) { this.close(); if (location.hash.startsWith("#connect")) route(); else location.hash = "#connect"; return; }
+      return this.show("offline", e.message);
+    }
+    this.after = st.lock_after; this.required = !!st.required;
+    if (!st.required || st.unlocked) { this.hide(); return; }
+    this.show(st.set ? "unlock" : "setup", "", st.wait);
+  },
+  // 지금 잠그기(everywhere: 다른 기기까지)
+  now(everywhere) {
+    api("POST", "/api/auth/lock", { everywhere: !!everywhere }).catch(() => {});
+    this.show("unlock");
+  },
+  // 앱으로 돌아왔을 때: 오래 자리를 비웠으면 바로 잠그고, 아니면 서버에 아직 열려 있는지 확인
+  async back() {
+    if (this.on) { if (this.mode === "offline") { this.show("check"); this.verify(); } return; }
+    if (!this.required) return;
+    const away = this.hiddenAt ? Date.now() - this.hiddenAt : 0;
+    this.hiddenAt = 0;
+    if (away > this.after * 60000) return this.now();
+    if (away < 20000) return;
+    try { const st = await api("GET", "/api/auth/state"); this.after = st.lock_after; if (st.required && !st.unlocked) this.show(st.set ? "unlock" : "setup", "", st.wait); }
+    catch (e) { /* 연결이 안 되면 다음 요청에서 다시 확인 */ }
+  },
+};
+document.addEventListener("visibilitychange", () => { if (document.hidden) lock.hiddenAt = Date.now(); else lock.back(); });
+
 // ---------- 도구 ----------
+const safeUrl = (u) => (/^https?:\/\//i.test(String(u || "")) ? esc(u) : "#");  // javascript: 같은 주소는 링크로 만들지 않는다
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const won = (n) => (n == null || isNaN(n) ? "-" : Math.round(n).toLocaleString("ko-KR"));
 const shortWon = (n) => { const a = Math.abs(n); return a >= 10000 ? (a / 10000).toFixed(a >= 100000 ? 0 : 1).replace(/\.0$/, "") + "만" : won(a); };
@@ -63,7 +222,7 @@ const STATE = { running: "가동 중", paused: "새 매수 멈춤", stopped: "�
 
 function toast(msg, err) {
   // 열린 시트(모달) 위에서도 보이게 알림 상자를 맨 위 창 안으로 옮긴다
-  const box = $("#toast"), host = [$("#updDlg"), sheet].find((d) => d && d.open) || document.body;
+  const box = $("#toast"), host = [$("#lockDlg"), $("#updDlg"), sheet].find((d) => d && d.open) || document.body;
   if (box.parentNode !== host) host.appendChild(box);
   const el = document.createElement("div");
   if (err) el.className = "err";
@@ -74,6 +233,7 @@ function toast(msg, err) {
 async function run(fn, okMsg) {
   try { const r = await fn(); if (okMsg) toast(okMsg); return r; }
   catch (e) {
+    if (e instanceof Locked) { closeSheet(); throw e; }
     if (e instanceof NeedConnect) { closeSheet(); location.hash = "#connect"; }
     toast(e.message, true); throw e;
   }
@@ -302,7 +462,7 @@ const MENU = {
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
   invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["dca", "적립"]], extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
   // 설정: 자주 바꾸는 것부터. 한 번만 맞추면 되는 서버 연결은 뒤로.
-  settings: { title: "설정", subs: [["all", "전체"], ["theme", "화면"], ["ai", "AI"], ["accounts", "계좌"], ["trading", "주문·알림"], ["connect", "서버"], ["app", "앱 정보"]] },
+  settings: { title: "설정", subs: [["all", "전체"], ["theme", "화면"], ["ai", "AI"], ["accounts", "계좌"], ["trading", "주문·알림"], ["security", "보안"], ["connect", "서버"], ["app", "앱 정보"]] },
 };
 const lastSub = {};
 function resolveSub(h) {
@@ -389,8 +549,9 @@ async function route() {
     restoreScroll();
   }
   catch (e) {
+    if (e instanceof Locked) { view.innerHTML = ""; return; }
     if (e instanceof NeedConnect && h.name !== "connect") { location.hash = "#connect"; return; }
-    view.innerHTML = `<div class="notice warn">${esc(e.message)}</div><button class="btn wide" onclick="route()">다시 시도</button>`;
+    view.innerHTML = `<div class="notice warn">${esc(e.message)}</div><button class="btn wide" data-act="retry">다시 시도</button>`;
   }
   if (page.refresh) timer = setInterval(() => { if (current === page && !document.hidden && !sheet.open) page.refresh(h).catch(() => {}); }, page.every || 3000);
   window.scrollTo(0, 0);
@@ -411,6 +572,7 @@ function restoreScroll() {
     [0, 250, 700].forEach((t) => setTimeout(() => window.scrollTo(0, y), t));
   } else nav.restore = "";
 }
+view.addEventListener("click", (e) => { if (e.target.closest('[data-act="retry"]')) route(); });
 // 가계부 월 이동(어느 2뎁스 화면이든 공통)
 view.addEventListener("click", (e) => {
   const b = e.target.closest("[data-mon]");
@@ -1390,7 +1552,7 @@ pages.invest = {
       ${R && R.stance === "관망" && R.picks.length && !R.note ? `<div class="notice">AI는 지금 관망을 권해요. 그래도 가장 나은 종목을 비중을 줄여 골라 뒀어요. 들어간다면 작게, 짧게.</div>` : ""}
       ${body ? `<div class="ai-ans ap-text">${mdLite(body)}</div>` : ""}
       ${A.err ? `<div class="notice warn">${esc(A.err)}</div>` : ""}
-      ${A.src.length ? `<details class="ap-src"><summary class="tiny">찾아본 뉴스·자료 ${A.src.length}건</summary>${A.src.map((x) => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>`).join("")}</details>` : ""}
+      ${A.src.length ? `<details class="ap-src"><summary class="tiny">찾아본 뉴스·자료 ${A.src.length}건</summary>${A.src.map((x) => `<a href="${safeUrl(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>`).join("")}</details>` : ""}
       ${A.used ? meterHTML(A.meter || { fx: A.used.fx, credit: A.used.credit }, A.used) : ""}
     </section>
     ${R ? (R.picks.length ? R.picks.map((p, i) => {
@@ -2694,13 +2856,16 @@ const STAR = `<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"
 // =====================================================================
 async function aiStream(payload, onEvent, signal) {
   if (ON_PAGES && !store.get("server")) throw new NeedConnect("서버 주소를 먼저 넣어 주세요");
-  const headers = { "Content-Type": "application/json" };
-  const tok = store.get("token");
-  if (tok) headers.Authorization = "Bearer " + tok;
+  if (lock.on) throw new Locked("잠겨 있어요");
+  const headers = authHeaders({ "Content-Type": "application/json" });
   let res;
   try { res = await fetch(apiBase() + "/api/ai/ask", { method: "POST", headers, body: JSON.stringify(payload), signal }); }
   catch (e) { if (e.name === "AbortError") return; throw new Error("서버에 연결하지 못했어요"); }
-  if (res.status === 401) throw new NeedConnect("접속 토큰이 맞지 않아요");
+  if (res.status === 401) {
+    const d = await res.json().catch(() => ({}));
+    if (d.code === "locked" || d.code === "setup") { lock.show(d.code === "setup" ? "setup" : "unlock"); throw new Locked(d.error || "잠겨 있어요"); }
+    throw new NeedConnect("접속 토큰이 맞지 않아요");
+  }
   if (!res.ok || !res.body) throw new Error(`AI 요청이 실패했어요 (${res.status})`);
   const reader = res.body.getReader(), dec = new TextDecoder();
   let buf = "";
@@ -2784,10 +2949,10 @@ function aiSheet(kind, payload = {}) {
           else if (ev.t === "text") { text += ev.text; $(".ai-status", turn).hidden = true; if (!raf) raf = requestAnimationFrame(paint); }
           else if (ev.t === "source") {
             sources.push(ev);
-            src.innerHTML = `<div class="tiny">찾아본 자료 ${sources.length}건</div>` + sources.map((x) => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}${x.age ? ` <span>${esc(x.age)}</span>` : ""}</a>`).join("");
+            src.innerHTML = `<div class="tiny">찾아본 자료 ${sources.length}건</div>` + sources.map((x) => `<a href="${safeUrl(x.url)}" target="_blank" rel="noopener">${esc(x.title)}${x.age ? ` <span>${esc(x.age)}</span>` : ""}</a>`).join("");
           } else if (ev.t === "error") {
             $(".ai-status", turn).hidden = true;
-            ans.innerHTML += `<div class="notice warn">${esc(ev.msg)}${/키를 넣어/.test(ev.msg) ? ` <a href="#settings/ai" onclick="closeSheet()">AI 설정 열기</a>` : ""}</div>`;
+            ans.innerHTML += `<div class="notice warn">${esc(ev.msg)}${/키를 넣어/.test(ev.msg) ? ` <a href="#settings/ai">AI 설정 열기</a>` : ""}</div>`;
           } else if (ev.t === "done") {
             paint();
             cost.innerHTML = meterHTML(M || { fx: ev.fx, credit: ev.credit }, ev);
@@ -3225,7 +3390,7 @@ pages.settings = {
     const row = (id, ico, cls, title, state, tag = "") => `<a class="item st-row" href="#settings/${id}"><span class="ico ${cls}">${I(ico)}</span>
       <span class="main"><b>${title}</b><span class="sub">${state}</span></span>${tag}</a>`;
     const th = THEMES[store.get("theme") || "neon"] || THEMES.neon, fs = (FONT_SIZES.find((x) => x[0] === (store.get("fontSize") || "s")) || FONT_SIZES[0])[1];
-    const draw = (s, st, ping, up) => {
+    const draw = (s, st, ping, up, au) => {
       const tm = s ? s.trade_mode : null, kw = s ? s.kiwoom : null;
       const acct = (k) => !tm ? "" : tm[k] === "kiwoom" ? (kw[k].mock ? "키움 모의투자" : "키움 실전") : "앱 내 모의";
       const cr = st && st.credit;
@@ -3236,6 +3401,9 @@ pages.settings = {
           ${row("ai", '<path d="M12 3l1.9 5.3L19 10l-5.1 1.7L12 17l-1.9-5.3L5 10l5.1-1.7z"/><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>', "h-violet", "AI",
             !st ? "상태를 못 받았어요" : !st.configured ? "Claude API 키를 넣으면 쓸 수 있어요" : `${cr && cr.set ? `잔액 $${Number(cr.left).toFixed(2)} · ` : ""}이번 달 $${Number(st.month_usd || 0).toFixed(2)} 사용`,
             st && !st.configured ? `<span class="tag warn">키 필요</span>` : cr && cr.set && cr.left_pct < 15 ? `<span class="tag warn">잔액 적음</span>` : "")}
+          ${row("security", '<path d="M12 3l7.5 3v5.6c0 4.6-3.1 7.9-7.5 9.4-4.4-1.5-7.5-4.8-7.5-9.4V6z"/><path d="M8.8 12.2l2.3 2.3 4.2-4.4"/>', "h-sky", "보안",
+            !au ? "잠금 상태를 확인하는 중" : !au.set ? "비밀번호를 만들면 앱을 열 때 물어요" : `비밀번호 잠금 켜짐 · ${LOCK_LABEL[au.lock_after]} 뒤 자동 잠금`,
+            au && !au.set ? `<span class="tag warn">설정 필요</span>` : au && au.fails ? `<span class="tag warn">틀린 시도 ${au.fails}번</span>` : "")}
         </div></section>
         <div class="sec-title">계좌와 주문</div>
         <section class="card tight"><div class="list">
@@ -3249,9 +3417,85 @@ pages.settings = {
         </div></section>
         <div class="tiny" style="padding:0 3px">아래 메뉴는 자주 쓰는 순서예요. 서버 연결은 처음 한 번만 맞추면 돼서 뒤에 뒀어요.</div>`;
     };
-    draw(null, null, null, null);
-    const [s, st, ping, up] = await Promise.all([GET("/api/settings").catch(() => null), GET("/api/ai/status").catch(() => null), GET("/api/ping").catch(() => null), GET("/api/update").catch(() => null)]);
-    if (location.hash.replace(/^#/, "").startsWith("settings/all") || location.hash === "#settings") draw(s, st, ping, up);
+    draw(null, null, null, null, null);
+    const [s, st, ping, up, au] = await Promise.all([GET("/api/settings").catch(() => null), GET("/api/ai/status").catch(() => null), GET("/api/ping").catch(() => null), GET("/api/update").catch(() => null), GET("/api/auth/state").catch(() => null)]);
+    if (location.hash.replace(/^#/, "").startsWith("settings/all") || location.hash === "#settings") draw(s, st, ping, up, au);
+  },
+  // 보안: 잠금 상태, 자동 잠금 시간, 비밀번호 바꾸기, 점검표
+  async security() {
+    const [st, s, ping] = await Promise.all([GET("/api/auth/state"), GET("/api/settings").catch(() => null), GET("/api/ping").catch(() => null)]);
+    lock.after = st.lock_after;
+    const I = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+    const act = (id, ico, cls, title, sub) => `<button type="button" class="item st-row sc-act" data-sc="${id}"><span class="ico ${cls}">${I(ico)}</span><span class="main"><b>${title}</b><span class="sub">${sub}</span></span></button>`;
+    const base = apiBase() || location.origin, https = /^https:/i.test(base) || /^(http:\/\/)?(127\.0\.0\.1|localhost)/i.test(base.replace(/^https?:\/\//, "http://"));
+    const chk = (ok, title, sub) => `<li class="${ok === true ? "ok" : ok === false ? "bad" : "todo"}"><i aria-hidden="true">${ok === true ? I('<path d="M5 12.5l4.5 4.5L19 7.5"/>') : ok === false ? I('<path d="M12 8v5M12 16.5h.01"/>') : I('<circle cx="12" cy="12" r="3.2"/>')}</i><span><b>${title}</b><em>${sub}</em></span></li>`;
+    const failTxt = st.fails ? `비밀번호를 ${st.fails}번 틀린 기록이 있어요${st.last_fail ? ` (${esc(st.last_fail.slice(5, 16).replace("T", " "))})` : ""}. 본인이 아니면 접속 토큰을 새로 만드세요` : "틀린 비밀번호 시도가 없어요";
+    view.innerHTML = `
+      <section class="card sc-hero ${st.set ? "on" : "off"}">
+        <span class="sc-shield">${I(st.set ? '<path d="M12 3l7.5 3v5.6c0 4.6-3.1 7.9-7.5 9.4-4.4-1.5-7.5-4.8-7.5-9.4V6z"/><path d="M8.8 12.2l2.3 2.3 4.2-4.4"/>' : '<path d="M12 3l7.5 3v5.6c0 4.6-3.1 7.9-7.5 9.4-4.4-1.5-7.5-4.8-7.5-9.4V6z"/><path d="M12 8.5v4M12 15.5h.01"/>')}</span>
+        <div><b>${st.set ? "비밀번호 잠금을 쓰고 있어요" : "아직 비밀번호가 없어요"}</b>
+          <span>${st.local ? (st.set ? "이 노트북에서는 묻지 않고, 휴대폰처럼 바깥에서 열 때 물어요" : "비밀번호를 만들면 휴대폰에서 열 때마다 물어요") : `열려 있는 기기 ${st.sessions}대 · ${LOCK_LABEL[st.lock_after]} 동안 안 쓰면 잠겨요`}</span></div>
+      </section>
+      ${st.set ? `<section class="card">
+        <h2>자동 잠금</h2>
+        <div class="small muted" style="margin:-2px 0 9px">이 시간 동안 앱을 쓰지 않으면 다시 비밀번호를 물어요. 앱을 완전히 닫았다 열 때는 항상 물어요.</div>
+        ${seg("lockAfter", st.choices.map((m) => [String(m), LOCK_LABEL[m]]), String(st.lock_after), "on-card")}
+      </section>` : ""}
+      <section class="card tight"><div class="list">
+        ${st.set ? act("change", '<path d="M15 7a4 4 0 1 1-3.9 5H8v2.5H5.5V17H3v-2.6l5.2-5.2A4 4 0 0 1 15 7z"/><path d="M16 9.5h.01"/>', "h-indigo", "비밀번호 바꾸기", "바꾸면 다른 기기는 모두 잠겨요")
+          : act("make", '<path d="M15 7a4 4 0 1 1-3.9 5H8v2.5H5.5V17H3v-2.6l5.2-5.2A4 4 0 0 1 15 7z"/><path d="M16 9.5h.01"/>', "h-indigo", "비밀번호 만들기", "휴대폰에서 열 때 물어볼 비밀번호")}
+        ${st.set && !st.local ? act("lock", '<rect x="5" y="11" width="14" height="9" rx="2.2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>', "h-pink", "지금 잠그기", "이 기기를 바로 잠가요") : ""}
+        ${st.set ? act("all", '<rect x="3" y="5" width="12" height="9" rx="1.6"/><path d="M7 18h4M9 14v4"/><rect x="17" y="9" width="4.5" height="9" rx="1.2"/>', "h-amber", "모든 기기에서 잠그기", `열려 있는 ${st.sessions}대를 모두 닫아요. 휴대폰을 잃어버렸을 때`) : ""}
+        ${st.set && st.local ? act("reset", '<path d="M4 12a8 8 0 1 0 2.6-5.9"/><path d="M4 4v4.5h4.5"/>', "h-rose", "비밀번호 초기화", "잊었을 때. 이 노트북에서만 할 수 있어요") : ""}
+      </div></section>
+      <section class="card">
+        <h2>보안 점검</h2>
+        <ul class="sc-list">
+          ${chk(!!st.set, "앱 비밀번호", st.set ? "토큰이 새어도 비밀번호 없이는 데이터를 볼 수 없어요" : "비밀번호를 만들어 주세요")}
+          ${chk(https, "암호화된 주소(https)", https ? "휴대폰과 노트북 사이 내용이 암호화돼요" : "지금 주소는 http라 내용이 그대로 보여요. Tailscale의 https 주소로 바꾸세요")}
+          ${chk(!st.fails, "틀린 접속 시도", failTxt)}
+          ${s ? chk(!!s.ntfy_topic, "보안 알림", s.ntfy_topic ? "비밀번호·토큰을 여러 번 틀리면 휴대폰 알림을 보내요" : "주문·알림 설정에서 휴대폰 알림을 켜면 틀린 접속 시도를 바로 알려 줘요") : ""}
+          ${s ? chk(null, "실제 주문", s.real_orders_allowed ? "실제 주문이 켜져 있어요. 잠금을 풀어야만 주문할 수 있어요" : "실제 주문이 꺼져 있어요") : ""}
+          ${chk(null, "GitHub 2단계 인증", "앱은 GitHub에 올린 코드를 받아 노트북에서 실행해요. GitHub 계정에 2단계 인증을 꼭 켜 두세요")}
+          ${chk(null, "접속 토큰", "토큰이 새었다고 느끼면 노트북 화면의 설정 → 서버에서 새로 만드세요. 열려 있던 기기도 함께 잠겨요")}
+        </ul>
+      </section>
+      <div class="tiny" style="padding:0 3px">비밀번호는 노트북 서버에만 암호화한 값으로 저장하고, 휴대폰에는 남기지 않아요. 잠기면 휴대폰에 남겨 둔 화면 자료도 지워요.${ping && ping.version ? ` · v${esc(ping.version)}` : ""}</div>`;
+    bindSeg(view, "lockAfter", async (v) => { const r = await run(() => api("PUT", "/api/auth/options", { lock_after: Number(v) }), `${LOCK_LABEL[v]} 동안 안 쓰면 잠겨요`).catch(() => null); if (r) lock.after = r.lock_after; });
+    view.onclick = null;
+    $$("[data-sc]", view).forEach((b) => (b.onclick = async () => {
+      const k = b.dataset.sc;
+      if (k === "lock") return lock.now(false);
+      if (k === "all") {
+        if (!confirm(`열려 있는 기기 ${st.sessions}대를 모두 잠글까요? 이 기기도 비밀번호를 다시 넣어야 해요.`)) return;
+        if (st.local) { await run(() => api("POST", "/api/auth/lock", { everywhere: true }), "모든 기기를 잠갔어요"); return route(); }
+        return lock.now(true);
+      }
+      if (k === "reset") {
+        if (!confirm("비밀번호를 지울까요? 데이터는 그대로 두고, 휴대폰에서 다음에 열 때 새 비밀번호를 만들게 돼요.")) return;
+        await run(() => api("POST", "/api/auth/reset"), "비밀번호를 지웠어요"); return route();
+      }
+      const make = k === "make";
+      openSheet(make ? "비밀번호 만들기" : "비밀번호 바꾸기", `<form id="pwForm" class="sc-form" novalidate>
+        <input class="lk-user" type="text" name="username" autocomplete="username" value="가계부S" readonly tabindex="-1" aria-hidden="true">
+        ${make ? "" : `<label class="field">지금 비밀번호<input id="pwCur" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false" maxlength="128"></label>`}
+        <label class="field">새 비밀번호<input id="pwNew" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" maxlength="128">
+          <span class="hint">4자 이상. 6자 이상에 숫자와 글자를 섞으면 더 안전해요</span></label>
+        <label class="field">새 비밀번호 한 번 더<input id="pwNew2" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" maxlength="128"></label>
+        <button type="submit" class="btn dark wide" id="pwGo">${make ? "만들기" : "바꾸기"}</button></form>`, (box) => {
+        $("#pwForm", box).onsubmit = async (e) => {
+          e.preventDefault();
+          const a = $("#pwNew", box).value, b2 = $("#pwNew2", box).value;
+          if (a !== b2) return toast("새 비밀번호 두 칸이 서로 달라요", true);
+          try {
+            if (make) { const r = await run(() => api("POST", "/api/auth/setup", { password: a }), "비밀번호를 만들었어요"); if (!st.local) sess.set(r.session, false); }
+            else await run(() => api("POST", "/api/auth/change", { current: $("#pwCur", box).value, new: a }), "비밀번호를 바꿨어요");
+          } catch (err) { return; }  // 안내는 run이 이미 띄웠다
+          closeSheet(); route();
+        };
+        setTimeout(() => $(make ? "#pwNew" : "#pwCur", box)?.focus(), 80);
+      });
+    }));
   },
   async ai() {
     const st = await GET("/api/ai/status");
@@ -3342,6 +3586,7 @@ pages.settings = {
     if (h.sub === "all") return this.hub();
     if (h.sub === "theme") return this.theme();  // 색상은 서버 연결 없이도 바꿀 수 있게
     if (h.sub === "ai") return this.ai();
+    if (h.sub === "security") return this.security();
     if (h.sub === "kiwoom") h.sub = "accounts";
     const sub = h.sub;
     let s;
@@ -3624,7 +3869,12 @@ if ("serviceWorker" in navigator && location.protocol === "https:") {
   navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((reg) => reg.update()).catch(() => {});
 }
 if (ON_PAGES && !store.get("server") && !location.hash.startsWith("#connect")) location.hash = "#connect";
-route();
+// 서버 연결 화면이 아니면, 먼저 잠금 상태부터 확인하고 화면을 그린다(잠겨 있으면 저장해 둔 자료도 보여 주지 않는다)
+if ((ON_PAGES && !store.get("server")) || location.hash.startsWith("#connect")) route();
+else {
+  if (sess.get()) view.innerHTML = `<div class="empty loading">불러오는 중</div>`; else lock.show("check");
+  lock.verify();
+}
 window.__moaReady = true;
 try { sessionStorage.removeItem("moa.retry"); } catch (e) { /* 무시 */ }
 if (/[?&]u=\d+/.test(location.search)) history.replaceState(null, "", location.pathname + location.hash);  // 주소의 임시 꼬리표 지우기

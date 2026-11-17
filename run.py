@@ -30,6 +30,8 @@ def main():
     url = f"http://127.0.0.1:{a.port}"
     print(f"moa 실행 중: {url}  (끄려면 이 창을 닫으세요)")
     print(f"휴대폰 접속 토큰: {access_token(db)}")
+    if a.host not in ("127.0.0.1", "localhost", "::1"):
+        print("[주의] --host를 바꾸면 같은 와이파이의 다른 기기에도 암호화 없이(http) 열려요. 휴대폰은 tailscale serve 연결을 권해요")
     if updater.available:
         ver = open(os.path.join(BASE, "VERSION"), encoding="utf-8").read().strip() if os.path.exists(os.path.join(BASE, "VERSION")) else "?"
         print(f"버전 v{ver} · GitHub 자동 업데이트 {'켜짐' if rt.settings.get('auto_update') else '꺼짐'}")
@@ -40,6 +42,11 @@ def main():
         print(f"휴대폰 연결 주소: https://icekenma.github.io/moa/#connect?server={quote(pub, safe='')}&token={access_token(db)}")
     if not a.no_browser:
         webbrowser.open(url)
+    try:  # 응답에 서버 종류·버전을 드러내지 않는다
+        from werkzeug.serving import WSGIRequestHandler
+        WSGIRequestHandler.server_version, WSGIRequestHandler.sys_version = "moa", ""
+    except Exception:
+        pass
     app.run(host=a.host, port=a.port, debug=False, use_reloader=False, threaded=True)
 
 

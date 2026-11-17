@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.2035";
+const UI_VERSION = "261117.2040";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -327,6 +327,8 @@ async function route() {
   if (MENU[h.name]) lastSub[h.name] = (MENU[h.name].extra && MENU[h.name].extra[h.sub]) ? lastSub[h.name] || h.sub : h.sub;
   const page = pages[h.name];
   const tabName = h.name;
+  document.documentElement.dataset.sec = h.name;
+  document.documentElement.dataset.sub = h.sub || "";
   $$(".tab").forEach((a) => {
     const on = a.dataset.tab === tabName;
     a.classList.toggle("on", on);
@@ -438,7 +440,7 @@ pages.home = {
     const near = L.categories.filter((c) => c.budget > 0).map((c) => ({ ...c, p: c.used / c.budget })).sort((a, b) => b.p - a.p).slice(0, 3);
     view.innerHTML = `
       ${d.feed_error ? `<div class="notice warn">${esc(d.feed_error)}</div>` : ""}
-      <section class="card">
+      <section class="card dom dom-ledger">
         <h1 class="hero">${hero}</h1>
         ${L.budget ? `<div class="bar thick ${L.remaining < 0 ? "over" : ""}" role="img" aria-label="예산 ${Math.round(used)}% 사용"><div style="width:${used}%"></div></div>
           <div class="kv"><div>예산<b>${won(L.budget)}</b></div><div>쓴 돈<b>${won(L.expense)}</b></div><div>남은 예산<b>${won(Math.max(0, L.remaining))}</b></div></div>` : ""}
@@ -446,19 +448,19 @@ pages.home = {
         ${dayBars(L)}
       </section>
       <div class="btns"><button class="btn dark" data-add="out">지출 기록</button><button class="btn" data-add="in">수입 기록</button></div>
-      ${d.account && d.account.configured ? `<a class="card" href="#invest/account" style="text-decoration:none;color:inherit">
+      ${d.account && d.account.configured ? `<a class="card dom dom-invest" href="#invest/account" style="text-decoration:none;color:inherit">
         <div class="card-head"><h2>내 키움 계좌</h2><span class="tiny live-dot ${d.account.ok ? "on" : ""}">${d.account.ok ? "실시간" : "연결 확인 필요"}</span></div>
         ${d.account.total != null ? `<div class="big">${won(d.account.total)}원</div>
           <div class="small muted"><b class="${tone(d.account.pnl)}">평가손익 ${signed(d.account.pnl)}원 (${pct(d.account.pnl_pct, 2)})</b> · 예수금 ${won(d.account.cash)}원</div>`
           : `<div class="small muted">${esc(d.account.error || "")}</div>`}</a>` : ""}
-      <a class="card" href="#assets/overview" style="text-decoration:none;color:inherit">
+      <a class="card dom dom-assets" href="#assets/overview" style="text-decoration:none;color:inherit">
         <div class="card-head"><h2>순자산</h2><span class="tiny">자세히</span></div>
         ${A.groups.length ? `<div class="big">${won(A.net)}원</div>
           ${A.change != null ? `<div class="small ${tone(A.change)}" style="font-weight:700">지난달보다 ${won(Math.abs(A.change))}원 ${A.change >= 0 ? "늘었어요" : "줄었어요"}</div>` : ""}
           ${A.history.length >= 2 ? lineChart([{ values: A.history.map((h) => h.net) }], { h: 72, label: "월별 순자산 추이" }) : ""}`
         : `<div class="small muted">계좌를 등록하면 순자산을 매달 기록해요</div>`}
       </a>
-      <a class="card dark" href="#invest/scalp" style="text-decoration:none">
+      <a class="card dark dom-night" href="#invest/scalp" style="text-decoration:none">
         <div class="card-head"><h2>오늘의 투자</h2><span class="tiny" style="color:#C5CCD6">${esc(S.mode_label || "")}</span></div>
         <div class="grid2">
           <div><div class="small muted">단타 실현손익</div><div class="mid">${signed(S.today.realized)}원</div><div class="tiny" style="color:#C5CCD6">${STATE[S.state]} · ${S.today.closed}건</div></div>
@@ -487,10 +489,22 @@ function budgetBar(c) {
     <div style="display:flex;justify-content:space-between;font-size:11px"><b>${esc(c.name)}</b><span class="muted">${won(c.used)} / ${won(c.budget)}</span></div>
     <div class="bar ${c.used > c.budget * 0.9 ? "over" : ""}"><div style="width:${p}%"></div></div></div>`;
 }
+// 분류·기관 이름마다 고정 색(같은 이름은 늘 같은 색)
+const HUE_FIX = { 식비: "coral", 외식: "coral", 식사: "coral", 카페: "amber", 간식: "amber", 교통: "sky", 주유: "sky", 차량: "sky",
+  쇼핑: "pink", 의류: "pink", 미용: "pink", 생활: "teal", 생필: "teal", 마트: "teal", 주거: "indigo", 통신: "indigo", 공과: "indigo",
+  취미: "violet", 문화: "violet", 여가: "violet", 여행: "violet", 의료: "lime", 건강: "lime", 운동: "lime", 교육: "sky", 경조: "rose",
+  선물: "rose", 보험: "slate", 세금: "slate", 기타: "slate", 월급: "lime", 급여: "lime", 이자: "lime", 저축: "teal", 구독: "violet", 반복: "slate" };
+const HUES = ["coral", "amber", "teal", "indigo", "violet", "sky", "pink", "lime"];
+function hue(label) {
+  const t = String(label || "").trim();
+  for (const k in HUE_FIX) if (t.startsWith(k)) return "h-" + HUE_FIX[k];
+  let h = 0; for (const ch of t) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return "h-" + HUES[h % HUES.length];
+}
 function txItem(t, btn = true) {
   const tag = btn ? "button" : "div";
   return `<${tag} ${btn ? `type="button" data-edit="${t.id}"` : ""} class="item">
-    <span class="ico ${t.transfer ? "xf" : t.kind === "in" ? "y" : ""}">${t.transfer ? "이체" : esc((t.category || "기타").slice(0, 2))}</span>
+    <span class="ico ${t.transfer ? "xf" : t.kind === "in" ? "h-in" : hue(t.category || "기타")}">${t.transfer ? "이체" : esc((t.category || "기타").slice(0, 2))}</span>
     <span class="main"><b>${esc(t.memo || t.category || "-")}</b><span class="sub">${btn ? "" : t.date.slice(5).replace("-", ".") + " · "}${t.transfer ? `내 계좌 ${t.kind === "in" ? "입금" : "출금"} · 합계 제외` : esc(t.category || "분류 없음")}${t.method && !t.transfer ? " · " + esc(t.method) : ""}</span></span>
     <span class="end"><b class="${t.transfer ? "xf-amt" : t.kind === "in" ? "inc" : ""}">${t.transfer ? "" : t.kind === "in" ? "+" : "-"}${won(t.amount)}</b></span></${tag}>`;
 }
@@ -783,7 +797,7 @@ pages.ledger = {
       </section>
       ${d.suggest.length ? `<div class="sec-title">반복 결제를 찾았어요 · 눌러서 등록</div>
         <section class="card tight"><div class="list">${d.suggest.map((x, i) => `<div class="item fx-sug">
-          <span class="ico ${x.confidence === "high" ? "y" : ""}">${x.subscription ? "구독" : "반복"}</span>
+          <span class="ico ${x.subscription ? "h-violet" : "h-slate"}">${x.subscription ? "구독" : "반복"}</span>
           <span class="main"><b>${esc(x.name)}</b><span class="sub">매월 ${x.day}일쯤 · ${x.months >= 2 ? `${x.months}달 연속` : "구독으로 보여요"}${x.variable ? " · 금액 조금씩 달라요" : ""}</span></span>
           <span class="end"><b>${won(x.amount)}</b><span class="fx-btns"><button class="btn sm" data-sadd="${i}">등록</button><button class="btn sm soft" data-sno="${i}">아니에요</button></span></span></div>`).join("")}</div></section>` : ""}
       <div class="sec-title">다가오는 결제</div>
@@ -796,7 +810,7 @@ pages.ledger = {
         : `<div class="empty">한 달 안에 예정된 결제가 없어요</div>`}</div></section>
       <div class="sec-title">등록한 고정비</div>
       <section class="card tight"><div class="list">${d.items.length ? d.items.map((r) => `<button type="button" class="item ${r.active ? "" : "off"}" data-rid="${r.id}">
-        <span class="ico">${esc((r.category || r.name).slice(0, 2))}</span>
+        <span class="ico ${hue(r.category || r.name)}">${esc((r.category || r.name).slice(0, 2))}</span>
         <span class="main"><b>${esc(r.name)}</b><span class="sub">${esc(r.when)}${r.card ? " · " + esc(r.card) : r.method ? " · " + esc(r.method) : ""}${r.auto_record ? " · 자동 기록" : ""}${r.notify_days >= 0 ? " · 알림" : ""}${r.active ? "" : " · 멈춤"}</span></span>
         <span class="end"><b class="${r.kind === "in" ? "inc" : ""}">${r.variable ? "약 " : ""}${won(r.amount)}</b></span></button>`).join("")
         : `<div class="empty">월세·통신비·구독처럼 매달 나가는 돈을 등록하면, 그날 자동으로 기록하고 미리 알려 드려요</div>`}</div></section>
@@ -906,7 +920,7 @@ pages.ledger = {
     const label = { spend: "카드 결제", cancel: "결제 취소", income: "입금", outflow: "출금" };
     const st = { added: ["기록됨", "g"], pending: ["확인 필요", "warn"], ignored: ["무시함", ""] };
     const item = (x) => `<button type="button" class="item" data-inbox="${x.id}">
-      <span class="ico ${x.status === "pending" ? "warn" : x.kind === "card" ? "" : "y"}">${esc((x.issuer || (x.kind === "card" ? "카드" : "은행")).slice(0, 2))}</span>
+      <span class="ico ${x.status === "pending" ? "warn" : hue(x.issuer || x.kind)}">${esc((x.issuer || (x.kind === "card" ? "카드" : "은행")).slice(0, 2))}</span>
       <span class="main"><b>${esc(x.merchant || label[x.action])}</b><span class="sub">${x.transfer ? "내 계좌 이체" : esc(label[x.action])} · ${esc(x.date.slice(5).replace("-", "."))} ${esc(x.time || "")}${x.note ? " · " + esc(x.note) : ""}</span></span>
       <span class="end"><b class="${x.transfer ? "xf-amt" : x.action === "income" || x.action === "cancel" ? "inc" : ""}">${x.transfer ? "" : x.action === "income" || x.action === "cancel" ? "+" : "-"}${won(x.amount)}</b><span class="tag ${x.transfer ? "" : st[x.status][1]}">${x.transfer ? "이체" : st[x.status][0]}</span></span></button>`;
     const pend = d.items.filter((x) => x.status === "pending"), rest = d.items.filter((x) => x.status !== "pending");
@@ -1048,7 +1062,7 @@ pages.assets = {
     const groupsHtml = `
       ${d.groups.map((g) => `<div class="sec-title">${esc(g.label)} · ${g.type === "debt" ? "-" : ""}${won(g.total)}원</div>
         <section class="card tight"><div class="list">${g.items.map((a) => `<button type="button" class="item" data-edit="${a.id}">
-          <span class="ico ${a.linked ? "y" : ""}">${esc(g.label.slice(0, 2))}</span>
+          <span class="ico ${hue(g.label)}">${esc(g.label.slice(0, 2))}</span>
           <span class="main"><b>${esc(a.name)}</b><span class="sub">${a.linked ? ({ scalp: "단타 계좌와 연결", dca: "장기 계좌와 연결", kiwoom: "내 키움 계좌와 연결" }[a.linked]) : esc(a.note || "직접 입력")}${a.sync_error ? " · 연결 실패" : ""}</span></span>
           <span class="end"><b>${g.type === "debt" ? "-" : ""}${won(a.balance)}</b></span></button>`).join("")}</div></section>`).join("")
         || `<section class="card"><div class="empty">통장, 예적금, 연금, 대출을 등록하면<br>순자산을 계산해요</div></section>`}`;
@@ -1056,7 +1070,7 @@ pages.assets = {
     else if (h.sub === "goal") view.innerHTML = goalCard + `<section class="card"><h2>지금 순자산</h2><div class="big" style="font-size:21px">${won(d.net)}원</div>
         ${d.history.length >= 2 ? lineChart([{ values: d.history.map((x) => x.net) }], { h: 90, label: "월별 순자산" }) + `<div class="axis"><span>${esc(d.history[0].month)}</span><span>${esc(d.history[d.history.length - 1].month)}</span></div>` : `<div class="tiny">매달 순자산을 기록해 추이를 그려요</div>`}</section>`;
     else view.innerHTML = summaryCard + `<div class="sec-title">종류별</div><section class="card tight"><div class="list">${d.groups.map((g) => `<a class="item" href="#assets/accounts" style="text-decoration:none">
-        <span class="ico">${esc(g.label.slice(0, 2))}</span><span class="main"><b>${esc(g.label)}</b><span class="sub">${g.items.length}개 계좌</span></span>
+        <span class="ico ${hue(g.label)}">${esc(g.label.slice(0, 2))}</span><span class="main"><b>${esc(g.label)}</b><span class="sub">${g.items.length}개 계좌</span></span>
         <span class="end"><b>${g.type === "debt" ? "-" : ""}${won(g.total)}</b></span></a>`).join("") || `<div class="empty">계좌 탭에서 통장·예적금·대출을 등록해 보세요</div>`}</div></section>` + goalCard;
     view.onclick = (e) => {
       const b = e.target.closest("[data-edit],[data-act]");
@@ -1425,7 +1439,7 @@ pages.invest = {
       ${AI_BTN("portfolio", "AI 포트폴리오 점검(쏠림·위험·적립 계획)")}
       <div class="sec-title">보유 종목 ${H.length}개</div>
       <section class="card tight"><div class="list">${H.length ? H.map((h) => `<div class="item">
-        <span class="ico">${esc(h.name.slice(0, 2))}</span>
+        <span class="ico ${hue(h.name)}">${esc(h.name.slice(0, 2))}</span>
         <span class="main"><b>${esc(h.name)} <span class="tiny">${esc(h.code)}</span></b>
           <span class="sub">${h.market === "us" ? "미국 · " : ""}${won(h.qty)}주 · 평균 ${h.market === "us" ? usd(h.avg_price) : won(h.avg_price)} · 현재 ${h.market === "us" ? usd(h.price) : won(h.price)}</span></span>
         <span class="end"><b>${won(h.value)}</b><span class="small ${tone(h.pnl)}" style="font-weight:700">${signed(h.pnl)} (${pct(h.pnl_pct, 2)})</span></span></div>`).join("")
@@ -2742,7 +2756,7 @@ pages.settings = {
             <span class="main"><b>키움증권</b><span class="sub">조회 전용 · ${kw.configured ? `${esc(kw.server || "")} · ${kw.updated_at ? esc(kw.updated_at.slice(11, 16)) + " 갱신" : ""}` : "아래에서 앱키를 넣어 연결"}</span></span>
             <span class="end">${kw.total != null ? `<b>${won(kw.total)}</b>` : ""}<span class="tag ${kwState[1]}">${kwState[0]}</span></span></a>
           ${con.banks.map((b) => `<button type="button" class="item" data-bk="${b.id}">
-            <span class="ico">${esc(bankLabel(b.bank).slice(0, 2))}</span>
+            <span class="ico ${hue(b.bank)}">${esc(bankLabel(b.bank).slice(0, 2))}</span>
             <span class="main"><b>${esc(b.name)}</b><span class="sub">${esc(bankLabel(b.bank))} ${esc(maskAcct(b.acct_no))} · ${b.last_alert ? `${esc(b.last_alert.received_at.slice(5, 16).replace("T", " "))} ${b.last_alert.action === "income" ? "입금" : "출금"} 알림` : "알림 기다리는 중"}</span></span>
             <span class="end"><b>${won(b.balance)}</b><span class="tag ${b.last_alert ? "g" : ""}">${b.last_alert ? "알림 연결" : "대기"}</span></span></button>`).join("")}
         </div>

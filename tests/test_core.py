@@ -868,3 +868,15 @@ def test_sweep_screen_matches_engine_and_api(rt, tmp_path, monkeypatch):
         assert c.post("/api/sweep/apply", json={"id": rid}).status_code == 200
         assert rt.settings.get("strategy")["orb_vwap"]["range_min"] == st["top"][0]["params"]["range_min"]
     assert c.post("/api/sweep/apply", json={"id": 9999}).status_code == 400
+
+
+def test_server_starts_without_numpy():
+    """훑기용 numpy·vectorbt가 없는 PC에서도 서버는 떠야 한다(v2.4 사고 재발 방지)."""
+    import subprocess
+    code = ("import sys; sys.modules['numpy'] = None; sys.modules['vectorbt'] = None\n"
+            "from moa.db import DB; from moa.runtime import Runtime; from moa.app import create_app\n"
+            "rt = Runtime(DB(':memory:'), start_thread=False); c = create_app(rt).test_client()\n"
+            "assert c.get('/api/sweep').status_code == 200; print('ok')")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                       cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))), timeout=120)
+    assert r.returncode == 0 and "ok" in r.stdout, r.stderr[-800:]

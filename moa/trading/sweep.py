@@ -19,8 +19,6 @@ import threading
 import time
 from datetime import datetime
 
-import numpy as np
-
 from . import backtest as BT
 from .costs import tick_size
 from .risk import hm
@@ -55,10 +53,22 @@ class SweepError(RuntimeError):
     pass
 
 
+np = None  # numpy는 훑기를 처음 쓸 때 불러온다(설치 전에도 서버는 떠야 하므로)
+
+
+def _load_np():
+    global np
+    if np is None:
+        np = importlib.import_module("numpy")
+    return np
+
+
 def ensure_vectorbt(progress=None):
     """vectorbt가 없으면 처음 한 번 설치(몇 분). 설치 실패 시 이유를 알려 준다."""
     try:
-        return importlib.import_module("vectorbt")
+        vbt = importlib.import_module("vectorbt")
+        _load_np()
+        return vbt
     except ImportError:
         pass
     if progress:
@@ -68,7 +78,9 @@ def ensure_vectorbt(progress=None):
     if r.returncode != 0:
         raise SweepError("vectorbt 설치에 실패했어요: " + (r.stderr or r.stdout)[-300:])
     importlib.invalidate_caches()
-    return importlib.import_module("vectorbt")
+    vbt = importlib.import_module("vectorbt")
+    _load_np()
+    return vbt
 
 
 # ---------- 분봉 받기·저장 ----------

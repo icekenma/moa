@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261117.1138";
+const UI_VERSION = "261117.1148";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -51,10 +51,13 @@ const korDate = (iso, wd = true) => { const [y, m, d] = iso.split("-").map(Numbe
 const STATE = { running: "가동 중", paused: "새 매수 멈춤", stopped: "멈춤" };
 
 function toast(msg, err) {
+  // 열린 시트(모달) 위에서도 보이게 알림 상자를 맨 위 창 안으로 옮긴다
+  const box = $("#toast"), host = [$("#updDlg"), sheet].find((d) => d && d.open) || document.body;
+  if (box.parentNode !== host) host.appendChild(box);
   const el = document.createElement("div");
   if (err) el.className = "err";
   el.textContent = msg;
-  $("#toast").appendChild(el);
+  box.appendChild(el);
   setTimeout(() => el.remove(), err ? 5000 : 2600);
 }
 async function run(fn, okMsg) {
@@ -223,6 +226,7 @@ function openSheet(title, html, mount) {
 }
 function closeSheet() { if (sheet.open) sheet.close(); }
 $("#sheetClose").onclick = closeSheet;
+[sheet, $("#updDlg")].forEach((d) => d && d.addEventListener("close", () => document.body.appendChild($("#toast"))));
 sheet.addEventListener("click", (e) => { if (e.target === sheet) closeSheet(); });
 
 // ---------- 차트 ----------
@@ -1361,40 +1365,73 @@ const STAR = `<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"
 
 // ---------- 주문 시트 ----------
 function orderSheet(o) {
-  const S = { engine: o.engine || "scalp", side: o.side || "buy", type: "market", code: o.code || "", qty: o.qty || 1, q: null };
+  const S = { engine: o.engine || "scalp", side: o.side || "buy", type: "market", code: o.code || "", qty: o.qty || 1, q: null, real: null, ctx: null, err: "" };
+  const acc = () => (S.ctx ? S.ctx.accounts.find((a) => a.engine === S.engine) : null);
   const draw = () => {
-    const buy = S.side === "buy";
+    const buy = S.side === "buy", a = acc(), demo = S.ctx && S.ctx.data_source === "demo";
+    const mode = a ? a.mode_label : null, realOrder = mode === "키움 실전";
+    const gap = demo && S.q && S.real && Math.abs(S.real.price - S.q.price) / S.real.price > 0.005;
     openSheet("직접 주문", `
       ${seg("계좌", [["scalp", "단타 계좌"], ["dca", "장기투자 계좌"]], S.engine, "on-card")}
+      <div class="o-mode ${realOrder ? "real" : ""}">${a ? (a.error ? `<b>주문할 수 없어요</b> ${esc(a.error)}`
+        : realOrder ? `<b>키움 실전 계좌</b> 실제 돈으로 주문이 나가요`
+        : mode === "키움 모의투자" ? `<b>키움 모의투자</b> 키움 모의 서버로 주문해요. 실제 돈이 아니에요`
+        : `<b>앱 내 모의</b> 앱 안에서만 체결을 흉내 내요. 실제 주문이 아니에요`) : "계좌 확인 중"}</div>
+      ${demo ? `<div class="notice warn">지금 시세 출처가 <b>가상 시세</b>예요. 주문 가격이 실제 시세와 달라요${S.real ? `(실제 ${esc(S.real.name)} ${won(S.real.price)}원)` : ""}.
+        <button type="button" class="btn sm dark" id="oLive" style="margin-top:8px">키움 시세로 바꾸기</button></div>` : ""}
       ${seg("매수 또는 매도", [["buy", "매수"], ["sell", "매도"]], S.side, "on-card " + (buy ? "buy" : "sell"))}
       <div class="fields" style="grid-template-columns:1fr auto;align-items:end">
         <label class="field">종목코드<input id="oCode" inputmode="numeric" maxlength="6" placeholder="005930" value="${esc(S.code)}"></label>
         <button class="btn" id="oQ" style="height:50px">현재가</button></div>
-      <div class="small muted">${S.q ? `${esc(S.q.name)} 현재가 <b style="color:var(--ink)">${won(S.q.price)}원</b>` : "종목코드를 넣고 현재가를 확인하세요"}</div>
+      <div class="small muted">${S.q ? `${esc(S.q.name)} 주문 기준가 <b style="color:${gap ? "var(--up)" : "var(--ink)"}">${won(S.q.price)}원</b>${gap ? " (가상 시세)" : ""}` : "종목코드를 넣고 현재가를 확인하세요"}</div>
       ${seg("주문 방식", [["market", "시장가"], ["limit", "지정가"]], S.type, "on-card")}
       <div class="fields">
         <label class="field">수량<input id="oQty" class="r" inputmode="numeric" value="${esc(S.qty)}"></label>
         <label class="field" ${S.type === "market" ? "hidden" : ""}>가격<input id="oPrice" class="r" inputmode="numeric" value="${S.q ? won(S.q.price) : ""}"></label></div>
       <div style="display:flex;justify-content:space-between;font-size:15px"><span class="muted">예상 금액</span><b id="oAmt">-</b></div>
-      <button class="btn ${buy ? "red" : "blue"} wide" id="oSend">${buy ? "매수 주문" : "매도 주문"}</button>`, (box) => {
+      <div id="oErr">${S.err ? `<div class="notice warn">${esc(S.err)}</div>` : ""}</div>
+      <button class="btn ${buy ? "red" : "blue"} wide" id="oSend" ${a && a.error ? "disabled" : ""}>${realOrder ? "실제 " : ""}${buy ? "매수 주문" : "매도 주문"}</button>`, (box) => {
       const keep = () => { S.code = $("#oCode").value; S.qty = $("#oQty").value; };
-      bindSeg(box, "계좌", (v) => { keep(); S.engine = v; });
+      bindSeg(box, "계좌", (v) => { keep(); S.engine = v; S.err = ""; draw(); });
       bindSeg(box, "매수 또는 매도", (v) => { keep(); S.side = v; draw(); });
       bindSeg(box, "주문 방식", (v) => { keep(); S.type = v; draw(); });
       const calc = () => { const p = S.type === "limit" ? num($("#oPrice").value) : S.q?.price; $("#oAmt").textContent = p ? won(p * num($("#oQty").value)) + "원" : "-"; };
       $("#oQty").oninput = calc; $("#oPrice").oninput = calc; calc();
-      $("#oQ").onclick = async () => { keep(); S.q = await run(() => GET(`/api/quote/${encodeURIComponent(S.code)}`)); draw(); };
-      $("#oSend").onclick = async () => {
+      $("#oQ").onclick = async () => { keep(); S.err = ""; await loadQuote(); };
+      if ($("#oLive")) $("#oLive").onclick = async () => {
         keep();
+        await run(() => api("PUT", "/api/settings", { data_source: "kiwoom" }), "시세 출처를 키움 시세로 바꿨어요");
+        await loadCtx(); await loadQuote();
+      };
+      $("#oSend").onclick = async (ev) => {
+        keep();
+        const btn = ev.currentTarget;
+        if (realOrder && !confirmTap(btn, `한 번 더 누르면 실제로 ${buy ? "매수" : "매도"}해요`)) return;
         const body = { engine: S.engine, side: S.side, code: S.code, qty: num(S.qty), price: S.type === "limit" ? num($("#oPrice").value) : null };
-        const r = await run(() => api("POST", "/api/order", body));
-        toast(r.status === "filled" ? `${r.name} ${body.qty}주 ${buy ? "매수" : "매도"} 체결 ${won(r.fill_price)}원` : `${r.name} 주문을 넣었어요`);
-        closeSheet(); pages.invest.fill();
+        btn.disabled = true; btn.textContent = "주문 넣는 중";
+        try {
+          const r = await api("POST", "/api/order", body);
+          toast(r.status === "filled" ? `${r.name} ${body.qty}주 ${buy ? "매수" : "매도"} 체결 ${won(r.fill_price)}원` : `${r.name} 주문을 넣었어요`);
+          closeSheet(); pages.invest.fill?.();
+        } catch (e) {
+          if (e instanceof NeedConnect) { closeSheet(); location.hash = "#connect"; return; }
+          S.err = e.message; draw();
+          $("#oErr")?.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
       };
     });
   };
+  const loadQuote = async () => {
+    const code = String(S.code || "").replace(/\D/g, "");
+    if (code.length !== 6) { S.err = "종목코드 6자리를 넣어 주세요"; return draw(); }
+    const [q, real] = await Promise.all([GET(`/api/quote/${code}`).catch((e) => { S.err = e.message; return null; }),
+      GET(`/api/market/quote/kr/${code}`).catch(() => null)]);
+    S.q = q; S.real = real; if (sheet.open) draw();
+  };
+  const loadCtx = async () => { S.ctx = await GET("/api/stocks").catch(() => null); if (sheet.open) draw(); };
   draw();
-  if (S.code) GET(`/api/quote/${S.code}`).then((q) => { S.q = q; if (sheet.open) draw(); }).catch(() => {});
+  loadCtx();
+  if (S.code) loadQuote();
 }
 
 // ---------- 적립 플랜 시트 ----------

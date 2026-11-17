@@ -51,16 +51,17 @@ class Runtime:
         with self._lock:
             s = self.settings.all()
             self.errors = {}
-            key = (s["data_source"], s["demo_speed"])
+            key = (s["data_source"], s["demo_speed"], repr(s["kiwoom"]), repr(s["kiwoom_view"]))
             if key != self._feed_key or self.feed is None:
                 feed = None
                 if s["data_source"] == "kiwoom":
-                    for eng in ("scalp", "dca"):
-                        try:
+                    for eng in ("scalp", "dca"):  # 주문 계좌 키 → 없으면 내 계좌(조회 전용) 키로 시세만 받는다
+                        k = s["kiwoom"][eng]
+                        if k.get("appkey") and k.get("secretkey"):
                             feed = KiwoomFeed(self._client(eng))
                             break
-                        except Exception:
-                            continue
+                    if feed is None and self.account.configured():
+                        feed = KiwoomFeed(self.account.client())
                     if feed is None:
                         self.errors["feed"] = "키움 시세를 쓰려면 설정에서 키움 키를 넣어 주세요. 지금은 가상 시세로 돌아요"
                 if feed is None:

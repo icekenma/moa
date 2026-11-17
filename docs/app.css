@@ -333,3 +333,9 @@ dialog.upd[open]{animation:pop .18s ease-out}
 .kw-foot>span:last-child{display:flex;gap:6px}
 .kw-btn{min-height:36px;padding:0 12px;border:0;border-radius:10px;background:var(--sub-bg);color:var(--on-deep-strong);font-size:13px;font-weight:700;text-decoration:none;display:inline-flex;align-items:center}
 .kw-btn:disabled{opacity:.5}
+
+/* 주문 시트: 어느 계좌로 나가는지 */
+.o-mode{font-size:13px;line-height:1.5;padding:10px 12px;border-radius:12px;background:var(--bg);color:var(--ink2)}
+.o-mode b{display:block;font-size:14px;color:var(--ink)}
+.o-mode.real{background:#FDE7E4;color:#8C1D13}.o-mode.real b{color:#8C1D13}
+.sheet #toast{bottom:calc(24px + var(--safe-b))}

@@ -592,3 +592,15 @@ def test_switching_kiwoom_account_drops_old_snapshot(rt):
     rt.account.client().session = type("Down", (), {"post": lambda *a, **k: (_ for _ in ()).throw(OSError("down"))})()
     s = rt.account.snapshot(force=True)
     assert s.get("total") is None and not s["ok"]  # 예전 계좌 금액을 보여 주지 않음
+
+
+def test_kiwoom_feed_falls_back_to_view_keys(rt):
+    from moa.broker.kiwoom import KiwoomFeed
+    rt.settings.update({"data_source": "kiwoom", "kiwoom_view": {"appkey": "k", "secretkey": "s", "mock": False}})
+    rt.rebuild()
+    assert isinstance(rt.feed, KiwoomFeed) and rt.feed.client is rt.account.client() and not rt.errors.get("feed")
+    rt.feed.client.session = _FakeMarketKiwoom()
+    assert rt.feed.quote("005930")["price"] == 70100
+    c = create_app(rt).test_client()
+    r = c.post("/api/order", json={"engine": "scalp", "side": "buy", "code": "005930", "qty": 1})
+    assert r.status_code == 200 and r.get_json()["fill_price"] >= 70100  # 앱 내 모의가 실제 시세로 체결

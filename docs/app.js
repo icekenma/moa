@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.1605";
+const UI_VERSION = "261118.1621";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -69,7 +69,7 @@ async function api(method, url, body, isForm) {
     if (data.code === "locked" || data.code === "setup") { lock.show(data.code === "setup" ? "setup" : "unlock"); throw new Locked(data.error || "잠겨 있어요"); }
     throw new NeedConnect(data.error || "접속 토큰이 맞지 않아요");
   }
-  if (res.status === 404 && data.error === "없는 주소예요") {
+  if ((res.status === 404 && data.error === "없는 주소예요") || (res.status === 405 && method === "GET")) {   // 405: 예전 서버에는 이 주소의 조회가 없다
     // 화면은 새 버전인데 노트북 서버가 아직 예전 버전일 때: 서버가 이 기능의 주소를 모른다
     const err = new Error("노트북 서버가 아직 새 버전을 받지 못했어요"); err.code = "old_server"; throw err;
   }
@@ -2275,7 +2275,7 @@ pages.invest = {
         const v = Number(String($("#dvGoalV", box).value).replace(/[^\d.]/g, "")) || 0;
         try { await run(() => api("PUT", "/api/div/goal", { goal: v * 1e4 }), v ? `목표를 월 ${won(v)}만원으로 정했어요` : "목표를 지웠어요"); } catch (err) { return; }
         if (this.dv.uni) this.dv.uni.goal = v * 1e4;
-        closeSheet(); this.dvTab();
+        closeSheet(); this.dvTab(); if ($("#dcaDiv")) this.dcaOutlook();
       };
       setTimeout(() => $("#dvGoalV", box)?.focus(), 80);
     });
@@ -2307,8 +2307,10 @@ pages.invest = {
       <div class="tiny">최근 1년 실제 지급 기준이에요. 배당락일 전날까지 사야 그 배당을 받아요.</div>
       <div class="dv-foot"><a class="btn" href="${stockHref(sym, mkt)}" data-close>종목 화면</a>
         <button type="button" class="btn dark" id="dvAddSim" ${inSim ? "disabled" : ""}>${inSim ? "구성에 들어 있어요" : "시뮬레이션에 담기"}</button></div>
+      ${mkt === "kr" ? `<button type="button" class="btn wide" id="dvDca">매달 적립하기</button>` : `<div class="tiny">미국 종목은 자동 적립이 안 돼요. 같은 지수의 국내 상장 ETF는 적립할 수 있어요.</div>`}
       ${i.custom ? `<button type="button" class="btn sm soft wide" id="dvDrop">후보 목록에서 빼기</button>` : ""}</div>`, (box) => {
       $("#dvAddSim", box).onclick = () => { this.dvAdd(i); closeSheet(); toast(`${this.dvT(i)}: 시뮬레이션 구성에 담았어요`); if (D.tab === "sim") this.dvTab(); };
+      if ($("#dvDca", box)) $("#dvDca", box).onclick = () => dcaOne(sym, i.name);
       if ($("#dvDrop", box)) $("#dvDrop", box).onclick = async () => {
         try { await run(() => api("DELETE", `/api/div/custom/${mkt}/${encodeURIComponent(sym)}`), "후보 목록에서 뺐어요"); } catch (e) { return; }
         D.uni = null; closeSheet(); this.dvTab();
@@ -2325,12 +2327,13 @@ pages.invest = {
   dvPreset(id) {
     const D = this.dv, U = D.uni || {};
     let src = null;
-    if (id === "mine") src = ((D.mine || {}).rows || []).filter((r) => r.value > 0).slice(0, 12).map((r) => ({ mkt: r.mkt, sym: r.sym, weight: r.value }));
+    if (id === "mine") src = ((D.mine || {}).rows || []).filter((r) => r.value > 0).slice(0, 12).map((r) => ({ mkt: r.mkt, sym: r.sym, weight: r.value, name: r.name }));
+    else if (id === "dca") { const by = {}, nm = {}; ((D.dca || {}).plans || []).filter((x) => x.enabled).forEach((x) => { by[x.code] = (by[x.code] || 0) + x.amount; nm[x.code] = x.name; }); src = Object.entries(by).map(([sym, weight]) => ({ mkt: "kr", sym, weight, name: nm[sym] })); }
     else if (String(id).startsWith("ai:")) src = ((D.plans || []).find((p) => "ai:" + p.id === id) || {}).assets;
     else src = ((U.presets || []).find((p) => p.id === id) || {}).assets;
     if (!src || !src.length) return false;
     const tw = src.reduce((s, a) => s + (a.weight || 0), 0) || 1;
-    D.assets = src.map((a) => ({ mkt: a.mkt, sym: a.sym, weight: Math.round(a.weight / tw * 1000) / 10 }));
+    D.assets = src.map((a) => Object.assign({ mkt: a.mkt, sym: a.sym, weight: Math.round(a.weight / tw * 1000) / 10 }, a.name && !this.dvFind(a.mkt, a.sym) ? { name: a.name } : {}));
     D.preset = id; this.dvSave();
     return true;
   },
@@ -2342,10 +2345,12 @@ pages.invest = {
     if (!el || D.tab !== "sim") return;
     if (!D.plans) { try { D.plans = await GET("/api/div/plans"); } catch (e) { D.plans = []; } }
     if (!D.mine) { try { D.mine = await GET("/api/div/mine"); } catch (e) { D.mine = { rows: [] }; } }
+    if (!D.dca) { try { D.dca = await GET("/api/dca/plans"); } catch (e) { D.dca = { plans: [], monthly: 0 }; } }
     if (!D.assets || !D.assets.length) this.dvPreset(D.preset && D.preset !== "custom" ? D.preset : "growth") || this.dvPreset("growth");
     if (!$("#dvBody") || D.tab !== "sim") return;
     const A = (v) => Math.round(v / 1e4), amtChips = [[5e7, "5천만"], [1e8, "1억"], [3e8, "3억"], [5e8, "5억"], [1e9, "10억"]];
     const sets = [...(U.presets || []).map((p) => [p.id, p.name]), ...(D.mine.rows || []).some((r) => r.value > 0) ? [["mine", "내 보유 종목"]] : [],
+      ...(D.dca.plans || []).some((x) => x.enabled) || D.preset === "dca" ? [["dca", "내 적립 플랜"]] : [],
       ...(D.plans || []).slice(0, 3).map((p) => ["ai:" + p.id, "AI · " + p.title])];
     el.innerHTML = `
       <section class="card dv-in">
@@ -2388,7 +2393,12 @@ pages.invest = {
       if ((b = q("[data-dvgo]"))) { D.tab = b.dataset.dvgo; this.dvSave(); return route(); }
       if ((b = q("[data-amt]"))) { D.amount = +b.dataset.amt; $("#dvAmt").value = A(D.amount); $("#dvAmtT").textContent = bigNum(D.amount) + "원"; $$(".dv-amt .chip", el).forEach((c) => c.setAttribute("aria-pressed", String(c === b))); this.dvSave(); return this.dvSim(); }
       if (q("#dvRe")) { D.reinvest = !D.reinvest; $("#dvRe").setAttribute("aria-checked", String(D.reinvest)); this.dvSave(); return this.dvSim(); }
-      if ((b = q("[data-set]"))) { if (this.dvPreset(b.dataset.set)) { $$("[data-set]", el).forEach((c) => c.setAttribute("aria-pressed", String(c === b))); this.dvAssetsDraw(); this.dvSim(); } else toast("이 구성을 불러오지 못했어요", true); return; }
+      if ((b = q("[data-set]"))) {
+        if (!this.dvPreset(b.dataset.set)) return toast("이 구성을 불러오지 못했어요", true);
+        if (b.dataset.set === "dca" && D.dca.monthly && D.add !== D.dca.monthly) { D.add = D.dca.monthly; $("#dvAdd").value = A(D.add); this.dvSave(); toast(`매달 더 넣는 돈을 적립 금액 ${won(D.add)}원으로 맞췄어요`); }
+        $$("[data-set]", el).forEach((c) => c.setAttribute("aria-pressed", String(c === b))); this.dvAssetsDraw(); return this.dvSim();
+      }
+      if (q("#dvToDca")) return dcaDraftSheet({ total: D.add || 0, assets: ((D.sim || {}).assets || D.assets).map((a) => ({ mkt: a.mkt, sym: a.sym, name: a.name || (this.dvFind(a.mkt, a.sym) || {}).name || "", weight: a.weight })) });
       if ((b = q("[data-rm]"))) { D.assets.splice(+b.dataset.rm, 1); D.preset = "custom"; this.dvSave(); this.dvAssetsDraw(); return this.dvSim(); }
       if (q("#dvNorm")) { const tw = D.assets.reduce((s, a) => s + (a.weight || 0), 0) || 1; D.assets.forEach((a) => (a.weight = Math.round(a.weight / tw * 1000) / 10)); this.dvSave(); this.dvAssetsDraw(); return this.dvSim(); }
       if (q("#dvPick")) return this.dvPicker();
@@ -2408,12 +2418,16 @@ pages.invest = {
     const D = this.dv, box = $("#dvAssets"), HU = this.DV_HUES;
     if (!box) return;
     const set = ((D.uni || {}).presets || []).find((p) => p.id === D.preset), plan = (D.plans || []).find((p) => "ai:" + p.id === D.preset);
-    $("#dvSetDesc").textContent = set ? `${set.desc} · 위험 ${set.risk}` : plan ? plan.summary : D.preset === "mine" ? "지금 보유한 종목을 평가액 비중 그대로 넣었어요." : "직접 고친 구성이에요.";
+    $("#dvSetDesc").textContent = set ? `${set.desc} · 위험 ${set.risk}` : plan ? plan.summary : D.preset === "mine" ? "지금 보유한 종목을 평가액 비중 그대로 넣었어요."
+      : D.preset === "dca" ? "적립 플랜의 매달 금액 비율 그대로예요. 처음 넣는 돈은 지금 보유분, 매달 더 넣는 돈은 적립 금액으로 보면 돼요." : "직접 고친 구성이에요.";
+    const simA = (D.sim || {}).assets || [], dn = {}; ((D.dca || {}).plans || []).forEach((x) => (dn[x.code] = x.name));
+    this._dvWait = false;
     $$("[data-set]").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.set === D.preset)));
-    box.innerHTML = D.assets.map((a, i) => { const f = this.dvFind(a.mkt, a.sym) || {};
+    box.innerHTML = D.assets.map((a, i) => { const u = this.dvFind(a.mkt, a.sym), f = u || simA.find((x) => x.mkt === a.mkt && x.sym === a.sym) || {}, wait = !f.sym;
+      if (wait) this._dvWait = true;
       return `<div class="dv-as"><span class="dv-sw h-${HU[i % HU.length]}"></span>
-        <button type="button" class="dv-as-n" data-asd="${i}"><b>${esc(f.sym ? this.dvT(f) : a.sym)}</b><small>${f.error || f.yield == null ? "배당 자료 없음 · 배당률을 직접 넣어 주세요" : `${esc(this.dvS(f))}${esc(f.freq_name)} · ${f.yield}% · 성장 ${f.growth}%`}</small></button>
-        ${f.error || f.yield == null ? `<label class="dv-num y"><input data-y="${i}" inputmode="decimal" aria-label="${esc(a.sym)} 가정 배당률" value="${a.yield ?? ""}" placeholder="배당률"><i>%</i></label>` : ""}
+        <button type="button" class="dv-as-n" data-asd="${i}"><b>${esc(u ? this.dvT(u) : a.name || (a.mkt === "kr" && dn[a.sym]) || (f.sym ? this.dvT(f) : a.sym))}</b><small>${wait ? "배당 자료를 확인하는 중" : f.error || f.yield == null ? "배당 자료 없음 · 배당률을 직접 넣어 주세요" : `${esc(this.dvS(f))}${esc(f.freq_name)} · ${f.yield}% · 성장 ${f.growth}%`}</small></button>
+        ${!wait && (f.error || f.yield == null) ? `<label class="dv-num y"><input data-y="${i}" inputmode="decimal" aria-label="${esc(a.sym)} 가정 배당률" value="${a.yield ?? ""}" placeholder="배당률"><i>%</i></label>` : ""}
         <label class="dv-num"><input data-w="${i}" inputmode="decimal" aria-label="${esc(f.name || a.sym)} 비중" value="${a.weight}"><i>%</i></label>
         <button type="button" class="dv-x" data-rm="${i}" aria-label="${esc(f.name || a.sym)} 빼기">×</button></div>`; }).join("") || `<div class="empty">종목을 추가해 주세요</div>`;
     this.dvSumDraw();
@@ -2443,9 +2457,11 @@ pages.invest = {
     if (!D.sim) out.innerHTML = `<div class="empty loading">계산하는 중</div>`; else out.classList.add("busy");
     try {
       const R = await api("POST", "/api/div/simulate", { amount: D.amount, monthly_add: D.add, years: D.years, reinvest: D.reinvest, price_growth: D.pg, growth_scale: D.gs, fx_change: D.fxc,
-        assets: D.assets.map((a) => ({ mkt: a.mkt, sym: a.sym, weight: a.weight, yield: a.yield })) });
+        assets: D.assets.map((a) => ({ mkt: a.mkt, sym: a.sym, weight: a.weight, yield: a.yield, name: a.name })) });
       if (seq !== this._dvSeq) return;
       D.sim = R; D.simErr = "";
+      // 후보 목록에 없는 종목(보유·적립 종목)은 계산 결과에 실려 온 자료로 구성 줄을 채운다(입력 중이면 건드리지 않는다)
+      if (this._dvWait && $("#dvAssets") && !$("#dvAssets").contains(document.activeElement)) this.dvAssetsDraw();
     } catch (e) {
       if (e instanceof Locked || e instanceof NeedConnect) throw e;
       if (seq !== this._dvSeq) return;
@@ -2472,7 +2488,7 @@ pages.invest = {
       ${S.missing.length ? `<div class="notice warn">배당 자료가 없는 종목이 있어요(${S.missing.map((s) => esc(nm[s] || s)).join(", ")}). 위 구성에서 배당률을 직접 넣으면 계산에 들어가요.</div>` : ""}
       <section class="card dv-res">
         <div class="dv-big"><span>첫해에 한 달 평균(세후)</span><b data-count="${S.first_monthly}">${won(S.first_monthly)}원</b>
-          <small>세전 배당률 ${S.yield}% · 세후 ${S.yield_net}% · ${bigNum(S.amount)}원 기준</small></div>
+          <small>세전 배당률 ${S.yield}%${S.yield_net == null ? "" : ` · 세후 ${S.yield_net}%`} · ${S.amount ? `${bigNum(S.amount)}원 기준` : `매달 ${bigNum(S.monthly_add)}원 적립 기준`}</small></div>
         <div class="sc-kpi dv-kpi"><div><span>${N}년 뒤 한 달 평균</span><b>${won(S.last_monthly)}<small>원</small></b></div>
           <div><span>${N}년 뒤 평가액</span><b>${bigNum(S.last_value)}<small>원</small></b></div>
           <div><span>${N}년간 받은 배당</span><b>${bigNum(S.total_net)}<small>원</small></b></div></div>
@@ -2507,6 +2523,10 @@ pages.invest = {
           <div class="tiny">미국 종목이 ${S.us_weight}%라, 환율이 10% 움직이면 원화 배당도 그 비중만큼 움직여요.</div>` : ""}
         <div class="dv-cut"><span>배당이 ${R.cut.pct}% 깎이면</span><b>첫해 월 ${won(R.cut.first)}원</b><small>${N}년 뒤 월 ${won(R.cut.last)}원</small></div>
       </section>
+      ${(() => { const kr = R.assets.filter((x) => x.mkt === "kr").length, us = R.assets.length - kr;
+        return `<section class="card dv-todca"><div><h2>이 구성으로 매달 적립하기</h2>
+          <div class="tiny">${kr ? `비중대로 금액을 나눠 종목마다 적립 플랜을 만들어요. 국내 종목 ${kr}개가 대상이에요${us ? `(미국 ${us}개는 자동 적립이 안 돼요)` : ""}.` : "자동 적립은 국내 상장 종목만 돼요. 이 구성에는 국내 종목이 없어요."}</div></div>
+          <button type="button" class="btn dark" id="dvToDca" ${kr ? "" : "disabled"}>적립 플랜 만들기</button></section>`; })()}
       ${S.over_line_year ? `<div class="notice">${S.over_line_year === 1 ? "첫해부터" : S.over_line_year + "년차부터"} 세전 배당이 연 2,000만 원을 넘어요. 금융소득종합과세 대상이 되고 건강보험료가 달라질 수 있어, 여기 계산보다 세금이 늘 수 있어요. 국내 고배당 기업 배당은 분리과세를 고를 수 있는 제도가 있으니 세무 상담을 권해요.</div>` : ""}
       <div class="tiny" style="padding:0 3px">최근 1년 실제 배당과 위 가정으로 계산한 추정이에요. 배당과 주가, 환율은 달라질 수 있고 수익을 보장하지 않아요. 세금은 원천징수만 반영했고, 투자 판단은 직접 해 주세요.</div>`;
     countUp(out);
@@ -2627,6 +2647,7 @@ pages.invest = {
         this.dvAiDraw(); return this.dvPlansDraw();
       }
       if ((b = q("[data-asd2]"))) { const [mk, sy] = b.dataset.asd2.split(":"); return this.dvDetail(mk, sy); }
+      if (q("[data-todca]") && D.plan) return dcaDraftSheet({ title: D.plan.title, total: D.add || 0, assets: D.plan.assets.map((a) => ({ mkt: a.mkt, sym: a.sym, name: a.name, weight: a.weight })) });
     };
   },
   dvAiBtn(st) {
@@ -2681,6 +2702,7 @@ pages.invest = {
         ${(P.risks || []).length ? `<ul class="lr-ins bad">${P.risks.map((x) => `<li><b>위험</b> ${esc(x)}</li>`).join("")}</ul>` : ""}
         ${(P.notes || []).length ? `<ul class="lr-ins">${P.notes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
         <button type="button" class="btn dark wide" data-use="${D.plans && D.plans.some((x) => x.id === P.id) ? P.id : "now"}">이 구성으로 시뮬레이션</button>
+        ${P.assets.some((a) => a.mkt === "kr") ? `<button type="button" class="btn wide" data-todca="1">이 구성으로 적립 플랜 만들기</button>` : ""}
         <div class="tiny">배당률은 AI가 말한 값이 아니라 실제 자료로 다시 계산한 값이에요. AI는 주문하지 않아요.</div></div>` : ""}
       ${D.used && !streaming ? meterHTML(D.used, D.used) : ""}</section>`;
   },
@@ -2714,10 +2736,14 @@ pages.invest = {
       <div class="sec-title">적립 플랜 · 매달 ${won(d.monthly)}원</div>
       <section class="card tight"><div class="list">${d.plans.length ? d.plans.map((p) => `<div class="item">
         <button type="button" class="main" data-pedit="${p.id}" style="border:0;background:none;padding:0;text-align:left;cursor:pointer">
-          <b>${esc(p.name)}</b><span class="sub">${p.enabled ? `매월 ${p.day}일 · ${won(p.amount)}원` : "쉬는 중"}${p.weight_goal ? ` · 목표 ${p.weight_goal}%` : ""}</span>
+          <b>${esc(p.name)}</b><span class="sub">${p.enabled ? `매월 ${p.day}일 · ${won(p.amount)}원` : "쉬는 중"}${p.weight_goal ? ` · 목표 ${p.weight_goal}%` : ""}<span data-pdv="${esc(p.code)}"></span></span>
           <span class="sub ${tone(p.gain_pct)}" style="font-weight:700">${p.gain_pct == null ? "아직 없음" : `평가 ${won(p.value)} · ${pct(p.gain_pct)}`}</span></button>
         <button class="switch" role="switch" aria-checked="${!!p.enabled}" aria-label="${esc(p.name)} 자동 매수" data-toggle="${p.id}"><span></span></button></div>`).join("")
         : `<div class="empty">첫 플랜을 만들어 보세요<br><span class="tiny">예: TIGER 미국S&P500(360750) 매달 25일 50만 원</span></div>`}</div></section>
+      ${d.plans.length ? AI_BTN("dca", "AI로 적립 플랜 점검") : `<section class="card dca-from"><h2>구성부터 정하고 싶다면</h2>
+        <div class="tiny">배당 탭에서 고른 구성을 그대로 적립 플랜으로 옮길 수 있어요. 종목마다 금액을 비중대로 나눠 줘요.</div>
+        <div class="btns"><button type="button" class="btn" data-dcago="sim">배당 구성에서 고르기</button><button type="button" class="btn" data-dcago="ai"><span class="ai-spark" aria-hidden="true">✦</span> AI 구성 받기</button></div></section>`}
+      <div id="dcaDiv"></div>
       ${d.plans.some((p) => p.target_weight > 0) ? `<section class="card"><h2>목표 비중과 지금</h2>${d.plans.filter((p) => p.enabled).map((p) => `<div style="display:flex;flex-direction:column;gap:4px">
         <div style="display:flex;justify-content:space-between;font-size:10.5px"><b>${esc(p.name)}</b><span class="muted">${p.weight_now}% / 목표 ${p.weight_goal}%</span></div>
         <div style="position:relative;height:7px;background:var(--bg);border-radius:3.5px"><div style="width:${Math.min(100, p.weight_now)}%;height:7px;background:var(--ink);border-radius:3.5px"></div>
@@ -2731,12 +2757,65 @@ pages.invest = {
     fab("플랜", () => planSheet(null));
     bindSeg(box, "매수 방식", async (v) => { await run(() => api("PUT", "/api/dca/config", { mode: v }), "매수 방식을 바꿨어요"); this.fill(); });
     box.onclick = async (e) => {
-      const b = e.target.closest("[data-act],[data-toggle],[data-pedit]");
+      const b = e.target.closest("[data-act],[data-toggle],[data-pedit],[data-dcago],#dcaGoal,#dcaAgain");
       if (!b) return;
+      if (b.dataset.dcago) return this.dcaGo(b.dataset.dcago);
+      if (b.id === "dcaGoal") { this.dvState(); return this.dvGoalSheet((this.dcaO || {}).goal || 0); }
+      if (b.id === "dcaAgain") return this.dcaOutlook();
       if (b.dataset.act === "auto") { await run(() => api("PUT", "/api/dca/config", { auto: !d.auto }), d.auto ? "자동 매수를 껐어요" : "자동 매수를 켰어요"); this.fill(); }
       else if (b.dataset.toggle) { await run(() => api("PUT", `/api/dca/plans/${b.dataset.toggle}/enabled`, { enabled: b.getAttribute("aria-checked") !== "true" })); this.fill(); }
       else if (b.dataset.pedit) planSheet(d.plans.find((p) => p.id == b.dataset.pedit));
     };
+    if (d.plans.length) this.dcaOutlook();
+  },
+  // 적립 → 배당: 플랜을 지금처럼 이어 갈 때 받게 될 배당(플랜 종목의 실제 배당 자료로 추정)
+  async dcaOutlook() {
+    const el = $("#dcaDiv");
+    if (!el) return;
+    el.innerHTML = `<section class="card"><div class="empty small loading">플랜 종목의 배당을 계산하는 중</div></section>`;
+    let O;
+    try { O = await GET("/api/dca/outlook"); } catch (e) {
+      if ($("#dcaDiv")) $("#dcaDiv").innerHTML = e instanceof Locked || e instanceof NeedConnect || e.code === "old_server" ? "" : `<section class="card"><div class="tiny">배당 전망을 불러오지 못했어요. ${esc(e.message)} <button type="button" class="lnk" id="dcaAgain">다시 계산</button></div></section>`;
+      return;
+    }
+    if (investState.tab !== "dca" || !$("#dcaDiv")) return;
+    this.dcaO = O;
+    O.rows.forEach((r) => $$(`[data-pdv="${r.code}"]`).forEach((t) => (t.textContent = r.yield ? ` · 배당 ${r.yield}% ${r.freq_name}` : "")));
+    const S = O.sim;
+    if (!S) { $("#dcaDiv").innerHTML = ""; return; }
+    const nm = {}; O.rows.forEach((r) => (nm[r.sym] = r.name));
+    const tail = `${S.missing.length && !O.pending ? `<div class="tiny">배당 자료가 없는 종목(${S.missing.map((x) => esc(nm[x] || x)).join(", ")})은 배당 0으로 계산했어요.</div>` : ""}
+        ${O.pending ? `<div class="tiny">배당 자료를 아직 받는 중인 종목이 있어요. <button type="button" class="lnk" id="dcaAgain">다시 계산</button></div>` : ""}`;
+    if (!O.payers) {
+      $("#dcaDiv").innerHTML = `<section class="card dca-dv"><h2>${O.pending ? "배당 자료를 받는 중이에요" : "지금 플랜에는 배당을 주는 종목이 없어요"}</h2>
+        <div class="tiny">${O.pending ? "잠시 뒤 다시 계산해 보세요." : "배당 탭에서 배당 종목을 골라 적립 플랜에 담으면, 모을수록 매달 들어오는 돈이 여기 보여요."}</div>${tail}
+        <div class="btns"><button type="button" class="btn dark" data-dcago="list">배당 종목 보기</button><button type="button" class="btn" data-dcago="ai"><span class="ai-spark" aria-hidden="true">✦</span> AI 구성 받기</button></div></section>`;
+      return;
+    }
+    const at = (n) => S.yearly[n - 1], steps = [["지금", O.now_monthly, O.start, "보유 "], ...[5, 10, 20].filter((n) => at(n)).map((n) => [`${n}년 뒤`, at(n).monthly, at(n).value, "평가 "])];
+    const hi = Math.max(1, ...steps.map((x) => x[1])), last = steps[steps.length - 1], lastY = at(Math.min(20, S.yearly.length));
+    const goal = O.goal ? (S.goal_year ? `목표 월 ${bigNum(O.goal)}원은 <b>${S.goal_year}년차</b>에 닿아요${S.goal_year_spend && S.goal_year_spend !== S.goal_year ? ` <span>(배당을 받아 쓰면 ${S.goal_year_spend}년차)</span>` : S.goal_year_spend ? "" : " <span>(배당을 받아 쓰면 20년 안에 못 닿아요)</span>"}`
+      : `목표 월 ${bigNum(O.goal)}원에는 <b>20년 안에 닿지 않아요</b> <span>매달 금액을 늘리거나 배당률이 높은 종목을 섞어야 해요</span>`) : "";
+    $("#dcaDiv").innerHTML = `<section class="card dca-dv">
+        <div class="dv-plan-h"><div><b>이대로 모으면 받는 배당</b><small>매달 ${won(O.monthly)}원 적립 · 배당은 다시 투자 · 세금 뺀 한 달 평균</small></div>
+          <span class="dv-y"><em>${S.yield}%</em><small>플랜 배당률</small></span></div>
+        <div class="dca-stair" role="img" aria-label="${steps.map((x) => `${x[0]} 월 ${won(x[1])}원`).join(", ")}">${steps.map(([t, v, val, lab], i) => `<div class="${i ? "" : "now"}">
+          <em><b>${v ? bigNum(v) : "0"}<small>원</small></b><i style="height:${Math.max(3, Math.round(v / hi * 78))}%"></i></em><span>${t}</span><small>${lab}${bigNum(val)}원</small></div>`).join("")}</div>
+        <div class="tiny">${last[0]}에는 넣은 돈 ${bigNum(lastY.invested)}원이 ${bigNum(last[2])}원이 되고, 배당만 한 달 ${won(last[1])}원쯤이에요.</div>
+        ${goal ? `<div class="dca-goal">${goal} <button type="button" class="lnk" id="dcaGoal">목표 바꾸기</button></div>` : `<div class="dca-goal none">한 달에 받고 싶은 배당을 정하면 언제 닿는지 보여 드려요. <button type="button" class="lnk" id="dcaGoal">목표 정하기</button></div>`}
+        ${tail}
+        <div class="btns"><button type="button" class="btn dark" data-dcago="sim">시뮬레이션으로 자세히</button><button type="button" class="btn" data-dcago="list">배당 종목 더 보기</button></div>
+        <div class="tiny">플랜 금액 비율대로 계속 사고 주가가 연 3% 오른다고 본 추정이에요. 최근 1년 실제 배당 기준이고, 배당·주가는 달라질 수 있어요.</div>
+      </section>`;
+  },
+  // 적립 → 배당 탭으로 이어 가기(sim: 내 적립 플랜을 그대로 시뮬레이션에 넣는다)
+  dcaGo(to) {
+    const D = this.dvState(), O = this.dcaO;
+    if (to === "sim" && O && O.assets && O.assets.length) {
+      D.assets = O.assets.map((a) => ({ mkt: a.mkt, sym: a.sym, weight: a.weight, name: a.name })); D.preset = "dca";
+      D.amount = O.start; D.add = O.monthly; D.reinvest = true; D.years = Math.max(10, D.years || 10); D.sim = null;
+    }
+    D.tab = to; this.dvSave(); location.hash = "#invest/dividend";
   },
 
   // ---------- 백테스트 ----------
@@ -3326,6 +3405,7 @@ const mkt = {
         <section class="card" id="dtPane" ${D.tab === "chart" ? "hidden" : ""}><div class="empty small loading">불러오는 중</div></section>
         <div id="mkHold"></div>
         ${AI_BTN("stock", "AI로 이 종목 정리(뉴스 포함)", `data-sym="${esc(D.sym)}" data-mkt="${m}"`)}
+        ${usd ? "" : `<button type="button" class="btn wide" id="mkDca">매달 적립하기</button>`}
         ${usd && !q.live ? `<div class="tiny" style="padding:0 3px">지금은 공개 시세(최대 15분 지연)예요. 키움을 연결하면 실시간으로 보여요.</div>` : ""}
         <div class="mk-act"><button type="button" class="btn blue" data-o="sell">매도</button><button type="button" class="btn red" data-o="buy">매수</button></div>`;
       bindSeg(box, "보기", (v) => {
@@ -3344,6 +3424,12 @@ const mkt = {
       });
       $$("[data-o]", box).forEach((b) => b.onclick = () => orderSheet({ code: D.sym, market: m, side: b.dataset.o, exch: D.q?.exch, name: D.q?.name, holding: D.q?.holding,
         qty: b.dataset.o === "sell" && D.q?.holding ? (D.q.holding.sellable || D.q.holding.qty) : 1 }));
+      if ($("#mkDca", box)) {
+        // 이미 적립 중인 종목이면 단추에 표시(가벼운 조회라 화면을 막지 않는다)
+        const mark = async () => { try { const B = await GET("/api/dca/plans"), p = B.plans.find((x) => x.code === D.sym); if (this.d === D && $("#mkDca")) $("#mkDca").textContent = p ? `적립 중 · 매달 ${won(p.amount)}원${p.enabled ? "" : " (쉬는 중)"}` : "매달 적립하기"; } catch (e) { /* 표시만 생략 */ } };
+        $("#mkDca", box).onclick = () => dcaOne(D.sym, D.q?.name || "", mark);
+        mark();
+      }
       this.drawPick();
       $("#mkBell").onclick = () => alertSheet({ mkt: m, sym: D.sym, name: q.name, price: D.q.price, currency: cur });
     }
@@ -3643,7 +3729,7 @@ function bindCredit(box, after) {
   const b = $("#crSave", box);
   if (b) b.onclick = async () => { const v = $("#crUsd", box).value; await run(() => api("POST", "/api/ai/credit", { usd: v }), "잔액을 맞췄어요"); after && after(); };
 }
-const AI_TITLES = { learn: "AI 추천 복기 · 규칙 갱신", stock: "AI 종목 정리", portfolio: "AI 포트폴리오 점검", review: "AI 단타 복기", sweep: "AI 훑기 해석", chat: "AI에게 묻기" };
+const AI_TITLES = { learn: "AI 추천 복기 · 규칙 갱신", stock: "AI 종목 정리", portfolio: "AI 포트폴리오 점검", dca: "AI 적립 점검", review: "AI 단타 복기", sweep: "AI 훑기 해석", chat: "AI에게 묻기" };
 function aiSheet(kind, payload = {}) {
   const chat = kind === "chat";
   const S = { history: [], ctl: null, busy: false };
@@ -4094,32 +4180,133 @@ function orderSheet(o) {
 }
 
 // ---------- 적립 플랜 시트 ----------
-function planSheet(e) {
+function planSheet(e, pre, after) {
+  const done = after || (() => pages.invest.fill());
   openSheet(e ? "플랜 고치기" : "플랜 만들기", `
-    <div class="fields"><label class="field">종목코드<input id="pCode" maxlength="6" inputmode="numeric" value="${esc(e?.code || "")}" placeholder="360750"></label>
-      <label class="field">이름<input id="pName" value="${esc(e?.name || "")}" placeholder="비우면 자동"></label></div>
+    <div class="fields"><label class="field">종목코드<input id="pCode" maxlength="6" inputmode="numeric" value="${esc(e?.code || pre?.code || "")}" placeholder="360750"></label>
+      <label class="field">이름<input id="pName" value="${esc(e?.name || pre?.name || "")}" placeholder="비우면 자동"></label></div>
     <label class="field">매달 금액<input id="pAmt" class="r" inputmode="numeric" value="${e ? won(e.amount) : ""}" placeholder="500,000"></label>
     <div class="fields"><label class="field">매수일<select id="pDay">${Array.from({ length: 28 }, (_, i) => i + 1).map((n) => `<option value="${n}" ${(e?.day || 25) === n ? "selected" : ""}>매월 ${n}일</option>`).join("")}</select></label>
       <label class="field">목표 비중(%)<input id="pW" class="r" inputmode="decimal" value="${e?.target_weight || ""}" placeholder="선택"></label></div>
     <button class="btn dark wide" id="pSave">${e ? "고친 내용 저장" : "플랜 저장"}</button>
-    ${e ? `<div class="btns"><button class="btn" id="pRun">지금 매수</button><button class="btn soft" id="pDel">지우기</button></div>` : ""}`, (box) => {
+    ${e ? `<div class="btns"><button class="btn" id="pRun">지금 매수</button><button class="btn soft" id="pDel">지우기</button></div>` : `<div class="tiny">저장만 해요. 매수일에 자동 매수가 사요.</div>`}`, (box) => {
     moneyInput($("#pAmt", box));
+    if (pre && !e) setTimeout(() => $("#pAmt", box)?.focus(), 80);
     box.onclick = async (ev) => {
       const id = ev.target.id;
       if (id === "pSave") {
         await run(() => api("POST", "/api/dca/plans", { id: e?.id, code: $("#pCode").value, name: $("#pName").value, amount: num($("#pAmt").value), day: num($("#pDay").value), target_weight: num($("#pW").value), enabled: e ? !!e.enabled : true }), "플랜을 저장했어요");
-        closeSheet(); pages.invest.fill();
+        closeSheet(); done();
       } else if (id === "pDel") {
         if (!confirmTap(ev.target, "한 번 더 누르면 지워요")) return;
-        await run(() => api("DELETE", `/api/dca/plans/${e.id}`), "플랜을 지웠어요"); closeSheet(); pages.invest.fill();
+        await run(() => api("DELETE", `/api/dca/plans/${e.id}`), "플랜을 지웠어요"); closeSheet(); done();
       } else if (id === "pRun") {
         if (!confirmTap(ev.target, "한 번 더 누르면 사요")) return;
         const r = await run(() => api("POST", `/api/dca/plans/${e.id}/run`));
         const x = r.results[0];
         toast(x.status === "done" ? `${x.qty}주, ${won(x.amount)}원 매수했어요` : x.msg, x.status !== "done");
-        closeSheet(); pages.invest.fill();
+        closeSheet(); done();
       }
     };
+  });
+}
+// 종목 하나를 적립으로: 이미 플랜이 있으면 고치기, 없으면 종목을 채운 새 플랜
+async function dcaOne(code, name, after) {
+  let B;
+  try { B = await run(() => GET("/api/dca/plans")); } catch (e) { return; }
+  if (pages.invest.dv) pages.invest.dv.dca = null;
+  const p = B.plans.find((x) => x.code === code);
+  planSheet(p || null, p ? null : { code, name }, after || (() => { if (pages.invest.dv) pages.invest.dv.dca = null; if ($("#iv")) pages.invest.fill(); }));
+}
+// 구성(종목·비중) → 적립 플랜 여러 개. 저장만 하고 주문은 하지 않는다(매수일에 자동 매수가 산다).
+function dcaDraftSheet(src) {
+  const S = { total: Math.round((src.total || 0) / 1e4) * 1e4, day: 0, spread: false, R: null, amt: {}, off: {}, err: "", seq: 0, t: 0 };
+  const assets = src.assets.filter((a) => a.sym && a.weight > 0);
+  if (!assets.some((a) => a.mkt === "kr")) return toast("자동 적립은 국내 상장 종목만 돼요. 이 구성에는 국내 종목이 없어요", true);
+  openSheet("적립 플랜 만들기", `<div class="dd">
+      <div class="tiny">${src.title ? `'${esc(src.title)}' 구성` : "이 구성"}의 비중대로 매달 넣을 돈을 나눠, 종목마다 적립 플랜을 만들어요.</div>
+      <label class="field">매달 넣을 돈<span class="dv-unit"><input id="ddTot" inputmode="numeric" autocomplete="off" value="${S.total ? Math.round(S.total / 1e4) : ""}" placeholder="예: 50"><i>만원</i></span></label>
+      <div class="chips dd-amt">${[[1e5, "10만"], [3e5, "30만"], [5e5, "50만"], [1e6, "100만"], [2e6, "200만"]].map(([v, t]) => `<button type="button" class="chip" data-tot="${v}" aria-pressed="${S.total === v}">${t}</button>`).join("")}</div>
+      <label class="field">매수일<select id="ddDay">${Array.from({ length: 28 }, (_, i) => i + 1).map((n) => `<option value="${n}" ${n === 25 ? "selected" : ""}>매월 ${n}일</option>`).join("")}</select></label>
+      <div id="ddOut"></div></div>`, (box) => {
+    const out = $("#ddOut", box);
+    const amt = (r) => (S.amt[r.code] != null ? S.amt[r.code] : r.amount);
+    const picked = () => (S.R ? S.R.rows.filter((r) => !S.off[r.code]) : []);
+    const foot = () => {
+      const ps = picked(), sum = ps.reduce((t, r) => t + amt(r), 0), ok = ps.length && ps.every((r) => amt(r) >= 1000);
+      if ($("#ddSumV", box)) $("#ddSumV", box).textContent = won(sum) + "원";
+      if ($("#ddSumN", box)) $("#ddSumN", box).textContent = `플랜 ${ps.length}개 · 매달`;
+      const b = $("#ddSave", box); if (b) { b.disabled = !ok; b.textContent = ps.length ? `플랜 ${ps.length}개 저장` : "담을 종목을 골라 주세요"; }
+    };
+    const draw = () => {
+      const R = S.R;
+      if (!S.total) { out.innerHTML = `<div class="empty small">매달 넣을 돈을 넣으면 종목별 금액을 나눠 보여 드려요</div>`; return; }
+      if (S.err) { out.innerHTML = `<div class="notice warn">${esc(S.err)}</div>`; return; }
+      if (!R) { out.innerHTML = `<div class="empty small loading">금액을 나누는 중</div>`; return; }
+      const usW = R.us.reduce((t, u) => t + u.weight, 0), usAmt = R.us.reduce((t, u) => t + u.amount, 0);
+      out.innerHTML = `<div class="dd-rows">${R.rows.map((r) => { const on = !S.off[r.code], v = amt(r);
+          return `<div class="dd-row ${on ? "" : "off"}">
+            <button type="button" class="dd-ck" role="checkbox" aria-checked="${on}" data-ck="${r.code}" aria-label="${esc(r.name)} 담기"></button>
+            <span class="main"><b>${esc(r.name)}</b><small>비중 ${r.weight}%${r.price ? ` · 1주 ${won(r.price)}원` : ""}</small>
+              ${r.plan ? `<small class="has">이미 적립 중이에요. 매달 ${won(r.plan.amount)}원에서 이 금액으로 바꿔요${r.plan.enabled ? "" : " (쉬는 중 → 다시 켜요)"}</small>` : ""}
+              ${on && v < 1000 ? `<small class="warn">1,000원 이상이어야 해요</small>` : on && r.unit != null && v < r.unit ? `<small class="warn">1주 값보다 적어, 이 금액으로는 사지 못하고 건너뛰어요</small>` : ""}</span>
+            <label class="dv-num dd-won"><input data-da="${r.code}" inputmode="numeric" autocomplete="off" value="${won(v)}" ${on ? "" : "disabled"} aria-label="${esc(r.name)} 매달 금액"><i>원</i></label></div>`; }).join("")}</div>
+        ${R.us.length ? `<div class="dd-us"><b>미국 종목 ${R.us.length}개(${Math.round(usW)}%)는 자동 적립이 안 돼요</b>
+          <span>${R.us.map((u) => esc(u.sym)).join(", ")} · ${S.spread ? "그 몫까지 국내 종목에 나눠 담았어요." : `매달 약 ${won(usAmt)}원은 주문 탭에서 직접 사야 해요.`}</span>
+          <div class="lr-auto"><span><b>미국 몫도 국내 종목에 나눠 담기</b></span><button type="button" class="switch" role="switch" id="ddSpread" aria-checked="${S.spread}" aria-label="미국 몫도 국내 종목에 나눠 담기"><span></span></button></div></div>` : ""}
+        <div class="dd-sum"><span id="ddSumN"></span><b id="ddSumV"></b></div>
+        ${R.error ? `<div class="notice warn">${esc(R.error)}</div>` : ""}
+        ${R.mode === "kiwoom-real" ? `<div class="notice warn">실전 계좌예요. 자동 매수가 켜져 있으면 매수일에 실제 주문이 나가요.</div>` : ""}
+        <div class="tiny">${esc(R.mode_label || "계좌 없음")} · 자동 매수 ${R.auto ? "켜짐" : "꺼짐(적립 화면에서 켜야 사요)"}${R.others ? ` · 지금 있는 다른 플랜 ${R.others}개(매달 ${won(R.others_monthly)}원)는 그대로 둬요` : ""}</div>
+        <button type="button" class="btn dark wide" id="ddSave"></button>
+        <div class="tiny">저장만 하고 지금 주문하지 않아요. 매수일(휴장일이면 다음 영업일)에 자동 매수가 사고, 적립 화면에서 언제든 고치거나 끌 수 있어요.</div>`;
+      foot();
+    };
+    const load = async () => {
+      clearTimeout(S.t);
+      const seq = ++S.seq;
+      S.err = ""; S.amt = {};
+      if (!S.total) { S.R = null; return draw(); }
+      if (!S.R) draw();
+      try {
+        const R = await api("POST", "/api/dca/draft", { total: S.total, spread: S.spread, assets });
+        if (seq !== S.seq) return;
+        S.R = R;
+        if (!S.day) { const p = R.rows.map((r) => r.plan).find(Boolean); S.day = p ? p.day : 25; $("#ddDay", box).value = String(S.day); }
+      } catch (e) {
+        if (e instanceof Locked) { closeSheet(); throw e; }
+        if (seq !== S.seq) return;
+        S.R = null; S.err = e.code === "old_server" ? "노트북의 앱이 아직 예전 버전이에요. 업데이트한 뒤 다시 해 주세요." : e.message;
+      }
+      draw();
+    };
+    box.oninput = (e) => {
+      const t = e.target;
+      if (t.id === "ddTot") { S.total = (Number(String(t.value).replace(/[^\d.]/g, "")) || 0) * 1e4; $$("[data-tot]", box).forEach((c) => c.setAttribute("aria-pressed", String(+c.dataset.tot === S.total))); clearTimeout(S.t); S.t = setTimeout(load, 450); }
+      else if (t.dataset.da) { const v = num(t.value); S.amt[t.dataset.da] = v; t.value = v ? won(v) : ""; foot(); }
+    };
+    box.onchange = (e) => { if (e.target.id === "ddDay") S.day = +e.target.value; else if (e.target.dataset.da) draw(); };
+    box.onclick = async (e) => {
+      const q = (x) => e.target.closest(x);
+      let b;
+      if ((b = q("[data-tot]"))) { S.total = +b.dataset.tot; $("#ddTot", box).value = Math.round(S.total / 1e4); $$("[data-tot]", box).forEach((c) => c.setAttribute("aria-pressed", String(c === b))); return load(); }
+      if ((b = q("[data-ck]"))) { S.off[b.dataset.ck] = !S.off[b.dataset.ck]; return draw(); }
+      if (q("#ddSpread")) { S.spread = !S.spread; return load(); }
+      if ((b = q("#ddSave")) && !b.disabled) {
+        const ps = picked(), tw = ps.reduce((t, r) => t + r.weight, 0) || 1;
+        b.disabled = true;
+        let res;
+        try {
+          res = await run(() => api("POST", "/api/dca/plans/bulk", { day: S.day || 25, set_weight: !S.R.others && !S.R.rows.some((r) => S.off[r.code] && r.plan),
+            items: ps.map((r) => ({ code: r.code, name: r.name, amount: amt(r), target_weight: Math.round(r.weight / tw * 1000) / 10 })) }));
+        } catch (err) { b.disabled = false; return; }
+        closeSheet();
+        toast([res.created ? `플랜 ${res.created}개를 만들었어요` : "", res.updated ? `${res.updated}개는 금액을 바꿨어요` : ""].filter(Boolean).join(" · ") + ` · 매달 ${won(res.monthly)}원`);
+        if (pages.invest.dv) pages.invest.dv.dca = null;
+        if (location.hash.startsWith("#invest/dca")) pages.invest.fill(); else location.hash = "#invest/dca";
+      }
+    };
+    load();
   });
 }
 

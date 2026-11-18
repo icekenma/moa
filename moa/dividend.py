@@ -261,11 +261,11 @@ def simulate(p, today=None):
         raise ValueError("구성에 종목을 하나 이상 넣어 주세요")
     tw = sum(a["weight"] for a in assets)
     assets = [dict(a, weight=a["weight"] / tw * 100) for a in assets]
-    amount = float(p.get("amount") or 0)
-    if amount <= 0:
-        raise ValueError("투자금을 넣어 주세요")
-    years = int(min(max(int(p.get("years") or 10), 1), 40))
+    amount = max(0.0, float(p.get("amount") or 0))
     add = max(0.0, float(p.get("monthly_add") or 0))
+    if amount <= 0 and add <= 0:                       # 처음 넣는 돈 없이 매달 적립만 하는 경우도 계산한다
+        raise ValueError("투자금이나 매달 넣는 돈을 넣어 주세요")
+    years = int(min(max(int(p.get("years") or 10), 1), 40))
     reinvest = bool(p.get("reinvest", True))
     pg = float(p.get("price_growth") if p.get("price_growth") is not None else 3)
     gs = float(p.get("growth_scale") if p.get("growth_scale") is not None else 1)
@@ -301,7 +301,7 @@ def simulate(p, today=None):
         "start": start.isoformat(), "years": years, "reinvest": reinvest, "assets": assets,
         "months": months[:12], "last_months": months[-12:], "yearly": yearly, "other": other,
         "summary": {"amount": round(amount), "monthly_add": round(add), "yield": round(blended, 2),
-                    "yield_net": round(y1["net"] / amount * 100, 2), "first_monthly": y1["monthly"], "first_net": y1["net"], "first_gross": y1["gross"],
+                    "yield_net": round(y1["net"] / amount * 100, 2) if amount > 0 else None, "first_monthly": y1["monthly"], "first_net": y1["net"], "first_gross": y1["gross"],
                     "last_monthly": yn["monthly"], "last_value": yn["value"], "invested": yn["invested"],
                     "total_net": sum(r["net"] for r in yearly), "total_tax": sum(r["tax"] for r in yearly),
                     "other_last_monthly": other[-1]["monthly"], "other_last_value": other[-1]["value"],
@@ -499,6 +499,105 @@ class Dividend:
                 "need": round((goal * 12 - net_t) / (net_t / value_t)) if goal and net_t > 0 and value_t and goal * 12 > net_t else None,
                 "payers": sum(1 for r in rows if r["net"] > 0), "fx": fx, "line": FIN_INCOME_LINE}
 
+    # ---------- 적립 플랜과 잇기 ----------
+    def dca_outlook(self, years=20):
+        """적립 플랜을 지금처럼 이어 갈 때의 배당 전망: 플랜 종목의 실제 배당 자료 + 보유분의 지금 배당 + 해마다 추정."""
+        rt = self.rt
+        plans = rt.dca.plans()
+        on = [p for p in plans if p["enabled"]]
+        monthly = sum(p["amount"] for p in on)
+        goal = self.goal()
+        out = {"n": len(plans), "monthly": monthly, "goal": goal, "rows": [], "sim": None, "tax": TAX_KR, "now_net": 0, "now_monthly": 0, "start": 0}
+        if not plans:
+            return out
+        names, amt = {}, {}
+        for p in plans:
+            names.setdefault(p["code"], p["name"])
+            if p["enabled"]:
+                amt[p["code"]] = amt.get(p["code"], 0) + p["amount"]
+        codes = list(names)
+        infos = dict(zip(codes, self.many([("kr", c) for c in codes], deadline=20)))
+        hold = {}
+        b = rt.brokers.get("dca")
+        if b is not None:
+            try:
+                for h in b.positions():
+                    x = hold.setdefault(h["code"], [0, 0.0])
+                    x[0] += h["qty"]
+                    x[1] += h["qty"] * h["price"]
+            except Exception:
+                pass
+        for c in codes:
+            i, (qty, value) = infos[c], hold.get(c, (0, 0.0))
+            net = qty * (i.get("ttm") or 0) * (1 - TAX_KR / 100)
+            out["rows"].append({"code": c, "sym": i["sym"], "name": names[c], "amount": amt.get(c, 0),
+                                "share": round(amt.get(c, 0) / monthly * 100, 1) if monthly else 0, "yield": i.get("yield"), "freq": i.get("freq"),
+                                "freq_name": i.get("freq_name"), "months": i.get("months"), "growth": i.get("growth"), "cat_name": i.get("cat_name"),
+                                "error": i.get("error"), "pending": bool(i.get("pending")), "held": round(value), "net": round(net)})
+        out["rows"].sort(key=lambda r: -r["amount"])
+        out["now_net"] = sum(r["net"] for r in out["rows"])
+        out["now_monthly"] = round(out["now_net"] / 12)
+        out["start"] = round(sum(hold.get(c, (0, 0.0))[1] for c in amt))
+        out["pending"] = any(r["pending"] for r in out["rows"] if r["amount"])
+        out["payers"] = sum(1 for r in out["rows"] if r["amount"] and r["yield"])
+        if monthly <= 0:
+            return out
+        assets = [dict(self._asset(infos[c], a), name=names[c]) for c, a in amt.items()]
+        sim = simulate({"amount": out["start"], "monthly_add": monthly, "years": years, "reinvest": True, "goal": goal, "assets": assets})
+        g = next((m for m in sim["milestones"] if m["goal"]), None)
+        out["sim"] = {"years": sim["years"], "yield": sim["summary"]["yield"], "missing": sim["summary"]["missing"],
+                      "yearly": [{k: y[k] for k in ("year", "monthly", "value", "invested")} for y in sim["yearly"]],
+                      "spend": [y["monthly"] for y in sim["other"]],                       # 배당을 다시 투자하지 않을 때
+                      "goal_year": g["year"] if g else None, "goal_year_spend": g["other"] if g else None,
+                      "months": [m["net"] for m in sim["last_months"]], "month0": int(sim["last_months"][0]["ym"][5:])}
+        out["assets"] = [{"mkt": "kr", "sym": a["sym"], "weight": round(a["weight"], 1), "name": a["name"]} for a in sim["assets"]]
+        return out
+
+    def dca_ai_context(self):
+        """AI 적립 점검에 줄 자료: 플랜·성과·매수 기록과 배당 전망."""
+        rt = self.rt
+        st = rt.dca.status()
+        if not st["plans"]:
+            raise ValueError("적립 플랜을 먼저 만들어 주세요")
+        try:
+            o = self.dca_outlook()
+        except Exception:
+            o = {"rows": [], "sim": None}
+        dv = {r["code"]: r for r in o.get("rows") or []}
+        costs = rt.settings.get("costs")
+        plans = []
+        for p in st["plans"]:
+            r = dv.get(p["code"]) or {}
+            try:
+                price = float(rt.feed.quote(p["code"])["price"])
+            except Exception:
+                price = None
+            plans.append({"종목": p["name"], "코드": p["code"], "매달(원)": p["amount"], "매수일": p["day"], "켜짐": bool(p["enabled"]),
+                          "목표 비중%": p["weight_goal"] or None, "지금 비중%": p["weight_now"], "평가액": p["value"], "매수 원금": p["cost"],
+                          "수익률%": p["gain_pct"], "현재가": price,
+                          "한 달 금액으로 살 수 있는 주식 수": None if not price else int(p["amount"] // (price * (1 + costs["commission"]))),
+                          "분류": r.get("cat_name") or None, "배당률%(세전, 최근 1년)": r.get("yield"), "배당 지급": r.get("freq_name"),
+                          "배당 성장률%(시뮬레이션 기본값)": r.get("growth")})
+        codes = {p["code"] for p in st["plans"]}
+        runs = st["runs"]
+        sim = o.get("sim") or {}
+        at = lambda n: next((y for y in sim.get("yearly") or [] if y["year"] == n), None)
+        data = {"기준시각": datetime.now().isoformat(timespec="minutes"), "계좌": st["mode_label"], "자동 매수": "켜짐" if st["auto"] else "꺼짐",
+                "매수 방식": "목표 비중 맞추기" if st["rebalance"] == "rebalance" else "플랜별 고정 금액", "매달 합계(원)": st["monthly"],
+                "남은 현금": st["cash"], "매수 원금 합계": st["cost"], "평가액 합계": st["value"], "수익률%": st["gain_pct"], "플랜": plans,
+                "플랜에 없는 보유 종목": [{"종목": h.get("name") or h["code"], "평가액": int(h["qty"] * h["price"])} for h in st["holdings"] if h["code"] not in codes][:10] or None,
+                "최근 매수 기록": [{"날짜": r["run_ts"][:10], "종목": r.get("name"), "결과": {"done": "매수", "skipped": "건너뜀", "failed": "실패"}.get(r["status"], r["status"]),
+                              "수량": r["qty"], "메모": r["msg"] or None} for r in runs[:12]] or None,
+                "배당 전망(지금 플랜을 그대로 이어 가고 배당을 다시 투자할 때, 세후 월평균)": {
+                    "지금 보유분": o.get("now_monthly"), "5년 뒤": (at(5) or {}).get("monthly"), "10년 뒤": (at(10) or {}).get("monthly"),
+                    "20년 뒤": (at(20) or {}).get("monthly"), "플랜 배당률%(세전)": sim.get("yield")} if sim else None,
+                "목표 월 배당(세후, 원)": o.get("goal") or None, "배당 목표 도달(추정)": f"{sim['goal_year']}년차" if sim.get("goal_year") else None}
+        ask = ("내 적립 플랜을 점검해 줘. 볼 것: ① 종목끼리 겹치는 부분(같은 지수·같은 종목을 담은 ETF)과 쏠림 ② 금액·비중이 목표 비중과 맞는지 "
+               "③ 한 달 금액으로 1주를 못 사서 건너뛰게 되는 플랜, 최근 건너뜀·실패 기록 ④ 배당 관점(지금 배당률, 성장, 지급 주기, 목표 월 배당까지의 거리) "
+               "⑤ 환노출·보수·세금 계좌처럼 확인할 점. 마지막에 '고칠 만한 것'을 우선순위대로 3개 이내로 적어. "
+               "종목을 새로 사라고 지시하지 말고, 선택지와 근거를 알려 줘.")
+        return "AI 적립 점검", ask, {k: v for k, v in data.items() if v is not None}
+
     # ---------- 시뮬레이션 ----------
     def run_sim(self, d):
         """화면에서 온 구성(종목·비중)에 실제 배당 자료를 붙여 계산한다. 사용자가 고친 값(yield·growth)이 있으면 그 값을 쓴다."""
@@ -507,6 +606,8 @@ class Dividend:
         assets = []
         for a, i in zip(want, infos):
             x = self._asset(i, float(a.get("weight") or 0))
+            if a.get("name") and i["name"] in (i["sym"], i.get("yname")):      # 후보 밖 종목(보유·적립 종목)은 화면이 아는 이름을 쓴다
+                x["name"] = str(a["name"])[:40]
             if a.get("yield") not in (None, ""):
                 x["yield"], x["edited"] = float(a["yield"]), True
             if a.get("growth") not in (None, ""):
@@ -538,6 +639,10 @@ class Dividend:
             held = [{"종목": r["name"], "평가액": r["value"], "연 배당(세후)": r["net"]} for r in mine["rows"][:12]] if mine.get("configured") else None
         except Exception:
             held = None
+        try:
+            dca = [{"종목": p["name"], "코드": p["code"], "매달(원)": p["amount"]} for p in self.rt.dca.plans() if p["enabled"]] or None
+        except Exception:
+            dca = None
         goal = float(d.get("goal") or self.goal() or 0)
         style = {"growth": "배당 성장(지금 배당은 적어도 해마다 늘어나는 쪽)", "income": "매월 현금흐름(지금 받는 돈을 크게)",
                  "balance": "균형(성장과 현금흐름 절반씩)", "high": "고분배(커버드콜 포함, 원금 변동 감수)"}.get(d.get("style"), "균형")
@@ -545,10 +650,15 @@ class Dividend:
         data = {"투자금(원)": round(amount), "매월 추가 투자(원)": round(float(d.get("monthly_add") or 0)), "목표 월 배당(세후, 원)": round(goal) or "정하지 않음",
                 "원하는 방향": style, "지역": region, "투자 기간(년)": int(d.get("years") or 10), "배당 재투자": "함" if d.get("reinvest", True) else "안 함(생활비로 씀)",
                 "사용자 메모": str(d.get("memo") or "")[:300] or None, "환율(원/달러)": round(uni["fx"]), "세율 가정%": {"국내": TAX_KR, "미국": TAX_US},
-                "금융소득종합과세 기준(연, 세전)": FIN_INCOME_LINE, "후보 목록(실제 최근 1년 지급 기준)": rows, "지금 보유 종목의 배당": held}
+                "금융소득종합과세 기준(연, 세전)": FIN_INCOME_LINE, "후보 목록(실제 최근 1년 지급 기준)": rows, "지금 보유 종목의 배당": held,
+                "지금 매달 적립 중인 플랜(국내 종목만 자동 적립 가능)": dca}
         ask = (f"투자금 {round(amount):,}원으로 배당 포트폴리오를 짜 줘. 방향: {style}. 지역: {region}. "
                "후보 목록의 실제 숫자를 근거로 종목과 비중을 정하고, 매달 들어오는 돈이 고르게 되도록 지급월을 따져. "
                "세후 원화 기준으로 첫해에 한 달 평균 얼마쯤 들어오는지, 연 금융소득 2천만 원 기준을 넘는지 판단 글에 적어.")
+        if dca:
+            ask += " 이미 매달 적립 중인 플랜이 있으니, 겹치는 종목은 그 사실을 판단 글에 한 줄로 적어."
+        if float(d.get("monthly_add") or 0) > 0:
+            ask += " 매월 추가 투자금은 앱의 적립 플랜(국내 상장 종목만 자동 매수)으로 넣을 수 있어. 미국 종목 몫은 직접 사야 한다는 점을 notes에 적어."
         if goal:
             ask += f" 목표는 세후 월 {round(goal):,}원이야. 이 투자금으로 가능한지, 안 되면 얼마가 더 필요하거나 몇 년 재투자해야 하는지도 말해 줘."
         return "AI 배당 포트폴리오", ask, {k: v for k, v in data.items() if v is not None}

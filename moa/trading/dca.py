@@ -75,9 +75,149 @@ def allocate(plans, values, mode):
     return {p["id"]: a for p, a in zip(plans, alloc)}
 
 
+def split_amounts(total, weights, unit=1000):
+    """총액을 비중대로 나눈다. unit(원) 단위로 내림하고 남은 돈은 비중이 가장 큰 쪽에 붙여 합이 총액과 같게 한다."""
+    total = int(total // unit * unit)
+    ws = [max(0.0, float(w or 0)) for w in weights]
+    if total <= 0 or sum(ws) <= 0:
+        return [0] * len(ws)
+    out = [int(total * w / sum(ws) // unit * unit) for w in ws]
+    out[max(range(len(ws)), key=lambda i: ws[i])] += total - sum(out)
+    return out
+
+
+def clean_code(v):
+    return "".join(ch for ch in str(v or "") if ch.isalnum()).upper()
+
+
 class DcaEngine:
     def __init__(self, rt):
         self.rt = rt
+
+    # ---------- 다른 화면(배당·AI·종목)과 잇기 ----------
+    def brief(self):
+        """다른 화면에서 '이미 적립 중인지'만 가볍게 볼 때 쓴다(잔고·시세를 묻지 않는다)."""
+        plans = [{k: p[k] for k in ("id", "code", "name", "amount", "day", "target_weight", "enabled")} for p in self.plans()]
+        b = self.rt.brokers.get(ENGINE)
+        return {"plans": plans, "monthly": sum(p["amount"] for p in plans if p["enabled"]), "auto": self.rt.settings.get("dca_auto"),
+                "mode_label": b.label if b else None}
+
+    def _unit(self, code, costs):
+        """1주를 사는 데 드는 돈(호가 한 칸 불리하게 + 수수료). 시세를 못 받으면 None."""
+        try:
+            price = float(self.rt.feed.quote(code)["price"])
+        except Exception:
+            return None, None
+        return price, C.buy_fill(price, costs) * (1 + costs["commission"])
+
+    def draft(self, d):
+        """구성(종목·비중)과 매달 넣을 돈을 받아 적립 플랜 초안을 만든다. 저장하지 않는다.
+        국내 종목만 적립할 수 있어서 미국 종목은 따로 알려 주고, spread가 참이면 그 몫까지 국내 종목에 나눈다."""
+        s = self.rt.settings.all()
+        try:
+            total = int(float(str(d.get("total") or 0).replace(",", "")))
+        except ValueError:
+            raise ValueError("매달 넣을 금액은 숫자로 넣어 주세요")
+        if total < 1000:
+            raise ValueError("매달 넣을 금액을 1,000원 이상으로 넣어 주세요")
+        kr, us, seen = [], [], set()
+        for a in (d.get("assets") or [])[:30]:
+            try:
+                w = float(a.get("weight") or 0)
+            except (TypeError, ValueError):
+                w = 0
+            if w <= 0 or not a.get("sym"):
+                continue
+            code = clean_code(a["sym"])
+            if a.get("mkt") == "kr" and len(code) == 6:
+                if code in seen:
+                    continue
+                seen.add(code)
+                kr.append({"code": code, "name": str(a.get("name") or "")[:40], "w": w})
+            else:
+                us.append({"sym": str(a["sym"])[:12], "name": str(a.get("name") or a["sym"])[:40], "w": w})
+        tw = sum(x["w"] for x in kr) + sum(x["w"] for x in us)
+        if not tw:
+            raise ValueError("구성에 종목이 없어요")
+        kr_share = sum(x["w"] for x in kr) / tw
+        spread = bool(d.get("spread"))
+        kr_total = total if spread else int(total * kr_share // 1000 * 1000)
+        amounts = split_amounts(kr_total, [x["w"] for x in kr]) if kr else []
+        mine = {}
+        for p in self.plans():
+            mine.setdefault(p["code"], p)
+        rows = []
+        for x, amt in zip(kr, amounts):
+            price, unit = self._unit(x["code"], s["costs"])
+            name = x["name"]
+            if not name:
+                try:
+                    name = self.rt.feed.name(x["code"])
+                except Exception:
+                    name = x["code"]
+            p = mine.get(x["code"])
+            rows.append({"code": x["code"], "name": name, "weight": round(x["w"] / (kr_share * tw) * 100, 1), "amount": amt,
+                         "price": price, "unit": None if unit is None else int(math.ceil(unit)),
+                         "enough": None if unit is None else amt >= unit,
+                         "plan": {"id": p["id"], "amount": p["amount"], "day": p["day"], "enabled": bool(p["enabled"])} if p else None})
+        codes = {r["code"] for r in rows}
+        others = [p for p in self.plans() if p["code"] not in codes]
+        b = self.rt.brokers.get(ENGINE)
+        return {"total": total, "kr_total": kr_total, "kr_share": round(kr_share * 100, 1), "spread": spread, "rows": rows,
+                "us": [{"sym": x["sym"], "name": x["name"], "weight": round(x["w"] / tw * 100, 1),
+                        "amount": int(total * x["w"] / tw // 1000 * 1000)} for x in us],
+                "others": len(others), "others_monthly": sum(p["amount"] for p in others if p["enabled"]),
+                "auto": s["dca_auto"], "mode": b.mode if b else None, "mode_label": b.label if b else None,
+                "cash": self._cash(b), "error": self.rt.errors.get(ENGINE)}
+
+    @staticmethod
+    def _cash(b):
+        try:
+            return None if b is None else b.cash()
+        except Exception:
+            return None
+
+    def save_many(self, d):
+        """초안을 플랜으로 저장한다. 같은 종목 플랜이 이미 있으면 새로 만들지 않고 금액·매수일을 바꾼다.
+        하나라도 값이 잘못되면 아무것도 저장하지 않는다. 주문은 하지 않는다(매수일에 자동 매수가 산다)."""
+        items = [x for x in (d.get("items") or []) if x][:30]
+        if not items:
+            raise ValueError("저장할 플랜이 없어요")
+        try:
+            day = int(d.get("day") or 0)
+        except (TypeError, ValueError):
+            day = 0
+        if not 1 <= day <= 28:
+            raise ValueError("매수일은 1일부터 28일 사이로 골라 주세요")
+        ready, seen = [], set()
+        for x in items:
+            code = clean_code(x.get("code"))
+            if len(code) != 6:
+                raise ValueError(f"{x.get('name') or x.get('code') or '종목'}: 국내 종목코드 6자리만 적립할 수 있어요")
+            if code in seen:
+                raise ValueError(f"{x.get('name') or code}: 같은 종목이 두 번 들어 있어요")
+            seen.add(code)
+            try:
+                amount = int(float(str(x.get("amount") or 0).replace(",", "")))
+                weight = max(0.0, float(x.get("target_weight") or 0))
+            except (TypeError, ValueError):
+                raise ValueError(f"{x.get('name') or code}: 금액은 숫자로 넣어 주세요")
+            if amount < 1000:
+                raise ValueError(f"{x.get('name') or code}: 매달 금액은 1,000원 이상이어야 해요")
+            ready.append((code, str(x.get("name") or "").strip()[:40], amount, weight))
+        mine = {}
+        for p in self.plans():
+            mine.setdefault(p["code"], p)
+        set_w = bool(d.get("set_weight"))
+        made, changed, ids = 0, 0, []
+        for code, name, amount, weight in ready:
+            p = mine.get(code)
+            row = {"id": p["id"] if p else None, "code": code, "name": name or (p["name"] if p else ""), "amount": amount, "day": day,
+                   "target_weight": weight if set_w else (p["target_weight"] if p else 0), "enabled": True}
+            ids.append(self.save_plan(row))
+            made, changed = made + (0 if p else 1), changed + (1 if p else 0)
+        self.log(f"다른 화면의 구성으로 플랜 {made}개 만들고 {changed}개 바꿈(매월 {day}일)")
+        return {"created": made, "updated": changed, "ids": ids, "monthly": sum(p["amount"] for p in self.plans() if p["enabled"])}
 
     def log(self, msg, level="info"):
         self.rt.db.log(ENGINE, level, msg, datetime.now().isoformat(timespec="seconds"))
@@ -86,7 +226,7 @@ class DcaEngine:
         return self.rt.db.q("SELECT * FROM dca_plans ORDER BY id")
 
     def save_plan(self, d):
-        code = "".join(ch for ch in str(d.get("code", "")) if ch.isalnum())
+        code = clean_code(d.get("code"))
         if len(code) != 6:
             raise ValueError("종목코드 6자리를 넣어 주세요")
         try:

@@ -1192,6 +1192,22 @@ def create_app(rt, updater=None):
     def dca():
         return jsonify(rt.dca.status())
 
+    @app.get("/api/dca/plans")
+    def dca_brief():
+        return jsonify(rt.dca.brief())
+
+    @app.get("/api/dca/outlook")
+    def dca_outlook():
+        return jsonify(rt.dividend.dca_outlook())
+
+    @app.post("/api/dca/draft")
+    def dca_draft():
+        return jsonify(rt.dca.draft(body()))
+
+    @app.post("/api/dca/plans/bulk")
+    def dca_bulk():
+        return jsonify(rt.dca.save_many(body()))
+
     @app.post("/api/dca/plans")
     def dca_save():
         return jsonify(id=rt.dca.save_plan(body()))

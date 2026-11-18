@@ -8,6 +8,7 @@ import re
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from moa.ai import AIError  # noqa: E402
 from moa.app import create_app  # noqa: E402
 from moa.broker.brokers import OrderError  # noqa: E402
 from moa.broker.demo import demo_day  # noqa: E402
@@ -2187,6 +2188,116 @@ def test_ai_stream_recovers_from_paused_empty_or_broken_answers(rt, monkeypatch)
     evs = list(rt.ai.stream("chat", {"question": "배당이 뭐야", "web_search": False}))
     assert len(calls) == 2 and evs[-1]["t"] == "error" and "답을 주지 않았어요" in evs[-1]["msg"]
     assert rt.db.one("SELECT COUNT(*) AS n FROM ai_usage")["n"] == n0 + 1
+
+
+def test_dca_links_with_dividend_and_ai(rt, monkeypatch):
+    """적립 ↔ 배당·AI 연결: 구성 → 플랜 초안 → 한꺼번에 저장, 적립의 배당 전망, AI 점검 자료."""
+    from moa.trading.dca import split_amounts
+    _div_rt(rt, monkeypatch)
+    assert split_amounts(1_000_000, [40, 35, 25]) == [400_000, 350_000, 250_000]
+    a = split_amounts(500_500, [1, 1, 1])
+    assert sum(a) == 500_000 and all(x % 1000 == 0 for x in a) and split_amounts(0, [1]) == [0] and split_amounts(9000, [0, 0]) == [0, 0]
+    c = create_app(rt).test_client()
+    mix = [{"mkt": "us", "sym": "SCHD", "name": "SCHD", "weight": 50}, {"mkt": "kr", "sym": "458730", "name": "TIGER 미국배당다우존스", "weight": 30},
+           {"mkt": "kr", "sym": "005930", "weight": 20}, {"mkt": "kr", "sym": "458730", "weight": 5}, {"mkt": "kr", "sym": "000000", "weight": 0}]
+    # 초안: 미국 종목은 적립 대상에서 빠지고(몫은 알려 줌), 국내 종목끼리 비중을 다시 나눈다. 저장은 하지 않는다
+    d = c.post("/api/dca/draft", json={"total": 1_000_000, "assets": mix}).get_json()
+    assert d["kr_share"] == 50.0 and d["kr_total"] == 500_000 and [r["code"] for r in d["rows"]] == ["458730", "005930"]
+    assert [r["amount"] for r in d["rows"]] == [300_000, 200_000] and [r["weight"] for r in d["rows"]] == [60.0, 40.0]
+    assert d["us"] == [{"sym": "SCHD", "name": "SCHD", "weight": 50.0, "amount": 500_000}] and d["rows"][1]["name"] and rt.dca.plans() == []
+    assert all(r["unit"] and r["enough"] is (r["amount"] >= r["unit"]) and r["plan"] is None for r in d["rows"])
+    d2 = c.post("/api/dca/draft", json={"total": 1_000_000, "assets": mix, "spread": True}).get_json()
+    assert d2["kr_total"] == 1_000_000 and [r["amount"] for r in d2["rows"]] == [600_000, 400_000]
+    small = c.post("/api/dca/draft", json={"total": 3000, "assets": mix[1:3], "spread": True}).get_json()
+    assert any(r["enough"] is False for r in small["rows"])                       # 한 달 금액이 1주 값보다 적으면 알려 준다
+    assert c.post("/api/dca/draft", json={"total": 500, "assets": mix}).status_code == 400
+    assert c.post("/api/dca/draft", json={"total": 100000, "assets": []}).status_code == 400
+    only_us = c.post("/api/dca/draft", json={"total": 100000, "assets": mix[:1]}).get_json()
+    assert only_us["rows"] == [] and only_us["kr_total"] == 0
+    # 한꺼번에 저장: 하나라도 틀리면 아무것도 저장하지 않는다. 주문은 나가지 않는다
+    bad = c.post("/api/dca/plans/bulk", json={"day": 25, "items": [{"code": "458730", "amount": 300000}, {"code": "SCHD", "amount": 100000}]})
+    assert bad.status_code == 400 and rt.dca.plans() == []
+    assert c.post("/api/dca/plans/bulk", json={"day": 31, "items": [{"code": "458730", "amount": 300000}]}).status_code == 400
+    assert c.post("/api/dca/plans/bulk", json={"day": 25, "items": [{"code": "458730", "amount": 500}]}).status_code == 400
+    assert c.post("/api/dca/plans/bulk", json={"day": 25, "items": [{"code": "458730", "amount": 5000}, {"code": "458730", "amount": 5000}]}).status_code == 400
+    r = c.post("/api/dca/plans/bulk", json={"day": 25, "set_weight": True, "items": [
+        {"code": r["code"], "name": r["name"], "amount": r["amount"], "target_weight": r["weight"]} for r in d["rows"]]}).get_json()
+    assert r["created"] == 2 and r["updated"] == 0 and r["monthly"] == 500_000
+    ps = rt.dca.plans()
+    assert [(p["code"], p["amount"], p["day"], p["target_weight"], p["enabled"]) for p in ps] == [("458730", 300_000, 25, 60.0, 1), ("005930", 200_000, 25, 40.0, 1)]
+    assert rt.db.q("SELECT 1 FROM orders") == [] and rt.db.q("SELECT 1 FROM dca_runs") == []
+    # 같은 종목이 이미 있으면 새로 만들지 않고 금액·매수일을 바꾼다(꺼 둔 플랜은 다시 켠다). 목표 비중은 시키지 않으면 그대로
+    rt.dca.set_enabled(ps[0]["id"], False)
+    d3 = c.post("/api/dca/draft", json={"total": 400_000, "assets": mix[1:3]}).get_json()
+    assert d3["rows"][0]["plan"] == {"id": ps[0]["id"], "amount": 300_000, "day": 25, "enabled": False} and d3["others"] == 0
+    r = c.post("/api/dca/plans/bulk", json={"day": 10, "items": [{"code": "458730", "amount": 240_000, "target_weight": 99}, {"code": "069500", "amount": 50_000}]}).get_json()
+    assert r["created"] == 1 and r["updated"] == 1 and len(rt.dca.plans()) == 3
+    p0 = rt.dca.plans()[0]
+    assert (p0["amount"], p0["day"], p0["target_weight"], p0["enabled"], p0["name"]) == (240_000, 10, 60.0, 1, "TIGER 미국배당다우존스")
+    br = c.get("/api/dca/plans").get_json()
+    assert br["monthly"] == 490_000 and len(br["plans"]) == 3 and "value" not in br["plans"][0] and br["mode_label"]
+
+    # 적립의 배당 전망: 플랜 종목의 실제 배당 자료로, 보유분의 지금 배당과 해마다 추정을 준다
+    rt.dividend.set_goal(100_000)
+    o = c.get("/api/dca/outlook").get_json()
+    rows = {r["code"]: r for r in o["rows"]}
+    assert o["n"] == 3 and o["monthly"] == 490_000 and o["goal"] == 100_000 and o["start"] == 0 and o["now_net"] == 0
+    assert rows["458730"]["freq"] == 12 and rows["458730"]["yield"] > 3 and rows["458730"]["share"] == round(240 / 490 * 100, 1)
+    assert rows["069500"]["error"] and rows["069500"]["yield"] is None                       # 자료 없는 종목은 0으로 치고 알려 준다
+    S = o["sim"]
+    assert S["years"] == 20 and len(S["yearly"]) == 20 and S["missing"] == ["069500"] and len(S["spend"]) == 20 and len(S["months"]) == 12
+    assert S["yearly"][0]["invested"] == 490_000 * 11 and S["yearly"][9]["monthly"] > S["yearly"][4]["monthly"] > S["yearly"][0]["monthly"] > 0
+    assert S["yearly"][19]["monthly"] > S["spend"][19] and S["goal_year"] and S["goal_year_spend"] and S["goal_year"] <= S["goal_year_spend"]
+    assert abs(sum(a["weight"] for a in o["assets"]) - 100) < 0.3 and {a["sym"] for a in o["assets"]} == {"458730", "005930", "069500"}
+    # 보유분이 생기면 지금 배당과 시작 금액에 반영된다
+    rt.brokers["dca"].buy("458730", 100)
+    o2 = c.get("/api/dca/outlook").get_json()
+    r2 = next(r for r in o2["rows"] if r["code"] == "458730")
+    assert r2["held"] > 0 and r2["net"] == round(100 * 35 * 12 * (1 - 0.154)) and o2["now_monthly"] == round(r2["net"] / 12) and o2["start"] == r2["held"]
+    assert o2["sim"]["yearly"][0]["monthly"] > S["yearly"][0]["monthly"]
+    # 플랜이 없거나 모두 꺼져 있으면 전망은 비운다
+    for p in rt.dca.plans():
+        rt.dca.set_enabled(p["id"], False)
+    o3 = c.get("/api/dca/outlook").get_json()
+    assert o3["sim"] is None and o3["monthly"] == 0 and len(o3["rows"]) == 3
+    for p in rt.dca.plans():
+        rt.dca.set_enabled(p["id"], True)
+
+    # 시뮬레이션: 처음 넣는 돈 없이 매달 적립만으로도 계산한다
+    sim = c.post("/api/div/simulate", json={"amount": 0, "monthly_add": 500_000, "years": 5, "assets": [{"mkt": "kr", "sym": "458730", "weight": 100}]}).get_json()
+    assert sim["summary"]["yield_net"] is None and sim["summary"]["invested"] == 500_000 * 59 and sim["yearly"][4]["monthly"] > 0
+    assert c.post("/api/div/simulate", json={"amount": 0, "monthly_add": 0, "assets": [{"mkt": "kr", "sym": "458730", "weight": 100}]}).status_code == 400
+
+    # 후보 목록 밖 종목(보유·적립 종목)은 화면이 보낸 이름으로 결과에 싣는다
+    sim = c.post("/api/div/simulate", json={"amount": 10_000_000, "assets": [{"mkt": "kr", "sym": "005930", "weight": 50, "name": "삼성전자"},
+                                                                              {"mkt": "kr", "sym": "458730", "weight": 50, "name": "엉뚱한 이름"}]}).get_json()
+    assert [a["name"] for a in sim["assets"]] == ["삼성전자", "TIGER 미국배당다우존스"]
+    # AI 적립 점검: 플랜·성과·배당 전망을 자료로 주고, 종목을 사라고 지시하지 않게 묻는다
+    title, ask, data = rt.ai.context("dca", {})
+    assert title == "AI 적립 점검" and "겹치는" in ask and "지시하지 말고" in ask and data["매달 합계(원)"] == 490_000
+    pl = {p["코드"]: p for p in data["플랜"]}
+    assert pl["458730"]["배당 지급"] == "월배당" and pl["458730"]["평가액"] > 0 and pl["458730"]["한 달 금액으로 살 수 있는 주식 수"] >= 1
+    assert data["배당 전망(지금 플랜을 그대로 이어 가고 배당을 다시 투자할 때, 세후 월평균)"]["10년 뒤"] > 0 and data["목표 월 배당(세후, 원)"] == 100_000 and data["배당 목표 도달(추정)"].endswith("년차")
+    assert rt.ai.meter("dca")["usd_lo"] > 0 and rt.ai.meter("dca", web=True)["web"] is False
+    rt.settings.update({"ai": {"api_key": "sk-test-key-1234567890"}})
+    sent = {}
+
+    def post(body):
+        sent.update(body)
+        yield {"type": "message_start", "message": {"usage": {"input_tokens": 100, "output_tokens": 1}}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "점검 결과"}}
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 20}}
+    monkeypatch.setattr(rt.ai, "_post", post)
+    evs = list(rt.ai.stream("dca", {"web_search": True}))
+    assert "tools" not in sent and evs[-1]["t"] == "done" and evs[-1]["title"] == "AI 적립 점검"          # 앱 자료만으로 답한다(검색 안 함)
+    assert rt.db.q("SELECT 1 FROM orders") == [] and len(rt.dca.plans()) == 3                                # AI는 플랜을 바꾸거나 주문하지 않는다
+    # AI 배당 구성에도 지금 적립 중인 플랜을 알려 준다
+    _, ask2, data2 = rt.dividend.ai_context({"amount": 100_000_000, "monthly_add": 500_000})
+    assert len(data2["지금 매달 적립 중인 플랜(국내 종목만 자동 적립 가능)"]) == 3 and "적립 중인 플랜" in ask2 and "직접 사야" in ask2
+    for p in rt.dca.plans():
+        rt.dca.delete_plan(p["id"])
+    with pytest.raises(AIError):
+        rt.ai.context("dca", {})
 
 
 def test_dividend_slow_source_does_not_block_screen(rt, monkeypatch):

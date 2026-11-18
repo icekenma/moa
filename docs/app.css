@@ -1908,3 +1908,61 @@ html.dark-theme .dv-plan,html.dark-theme .dv-pa button{border-color:var(--glass-
 @media (prefers-reduced-motion:reduce){#view.enter .dv-bar>span{animation:none}}
 .dv-strip-u{font-size:8.5px;font-weight:700;color:var(--ink3);text-align:right;margin:2px 0 -4px}
 .old-srv{display:flex;flex-direction:column;gap:9px}
+
+/* ---------- v4.35 적립 ↔ 배당·AI ---------- */
+.dca-dv{display:flex;flex-direction:column;gap:10px}
+.dca-dv h2{margin:0}
+/* 지금 → 5년 → 10년 → 20년: 계단처럼 커지는 월 배당 */
+.dca-stair{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.dca-stair>div{display:flex;flex-direction:column;align-items:stretch;gap:2px;min-width:0;text-align:center}
+.dca-stair em{display:flex;flex-direction:column;justify-content:flex-end;gap:4px;height:118px;font-style:normal}
+.dca-stair b{font-size:14px;font-weight:900;letter-spacing:-.03em;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dca-stair b small{font-size:9px;font-weight:700;color:var(--ink3);margin-left:1px}
+.dca-stair i{display:block;flex:0 0 auto;min-height:4px;border-radius:9px 9px 3px 3px;background:linear-gradient(180deg,var(--sec),color-mix(in srgb,var(--sec) 50%,transparent))}
+.dca-stair>div:nth-child(2) i{opacity:.6}.dca-stair>div:nth-child(3) i{opacity:.8}
+.dca-stair>div.now i{background:var(--ink3);opacity:.45}
+.dca-stair span{font-size:10.5px;font-weight:800;margin-top:3px}
+.dca-stair div>small{font-size:9px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+html.dark-theme .dca-stair i{background:linear-gradient(180deg,var(--n1),rgba(var(--n-rgb),.3))}
+html.dark-theme .dca-stair>div.now i{background:rgba(255,255,255,.4)}
+.dca-goal{padding:9px 11px;border-radius:12px;background:var(--sec-s);font-size:11.5px;line-height:1.5}
+.dca-goal b{font-weight:900}.dca-goal span{color:var(--ink3);font-size:10.5px}
+.dca-goal.none{background:none;border:1px dashed var(--line2);color:var(--ink2);font-size:11px}
+html.dark-theme .dca-goal{background:rgba(var(--n-rgb),.12)}html.dark-theme .dca-goal.none{background:none;border-color:var(--glass-b)}
+[data-pdv]{color:var(--sec-i);font-weight:700}
+html.dark-theme [data-pdv]{color:var(--n1)}
+.dca-from{display:flex;flex-direction:column;gap:8px}
+/* 배당 → 적립 */
+.card.dv-todca{display:flex;flex-direction:row;align-items:center;gap:12px}
+.card.dv-todca>div{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;text-align:left}
+.card.dv-todca h2{margin:0}
+.dv-todca .btn{flex:0 0 auto;white-space:nowrap}
+/* 적립 플랜 초안 시트 */
+.dd{display:flex;flex-direction:column;gap:10px}
+.dd-amt{margin-top:-4px}
+#ddOut{display:flex;flex-direction:column;gap:10px}
+.dd-rows{display:flex;flex-direction:column}
+.dd-row{display:flex;align-items:center;gap:9px;padding:9px 0;border-top:1px solid var(--line)}
+.dd-row:first-child{border-top:0}
+.dd-row .main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.dd-row .main b{font-size:12.5px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dd-row .main small{font-size:10px;color:var(--ink3);line-height:1.4}
+.dd-row .main small.has{color:var(--sec-i);font-weight:700}
+.dd-row .main small.warn{color:var(--coral-i,#B3261E);font-weight:700}
+.dd-row.off .main,.dd-row.off .dd-won{opacity:.42}
+.dd-won input{width:96px}
+.dd-ck{flex:0 0 auto;width:26px;height:26px;border-radius:9px;border:1.5px solid var(--line2);background:none;position:relative;cursor:pointer}
+.dd-ck[aria-checked="true"]{background:var(--ink);border-color:var(--ink)}
+.dd-ck[aria-checked="true"]::after{content:"";position:absolute;left:8.5px;top:4.5px;width:6px;height:11px;border:solid #fff;border-width:0 2.2px 2.2px 0;transform:rotate(45deg)}
+.dd-us{display:flex;flex-direction:column;gap:3px;padding:10px 11px;border-radius:12px;background:var(--bg);font-size:10.5px;line-height:1.5}
+.dd-us>b{font-size:11.5px}.dd-us>span{color:var(--ink2)}
+.dd-us .lr-auto{margin-top:6px}
+.dd-sum{display:flex;align-items:baseline;justify-content:space-between;padding-top:10px;border-top:1px solid var(--line)}
+.dd-sum span{font-size:11px;font-weight:700;color:var(--ink3)}
+.dd-sum b{font-size:22px;font-weight:900;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+html.dark-theme .dd-row,html.dark-theme .dd-sum{border-color:var(--glass-b)}
+html.dark-theme .dd-row .main small.has{color:var(--n1)}html.dark-theme .dd-row .main small.warn{color:#FFB4A8}
+html.dark-theme .dd-ck{border-color:rgba(255,255,255,.3)}
+html.dark-theme .dd-ck[aria-checked="true"]{background:var(--n1);border-color:var(--n1)}
+html.dark-theme .dd-ck[aria-checked="true"]::after{border-color:#14101c}
+html.dark-theme .dd-us{background:rgba(255,255,255,.05)}

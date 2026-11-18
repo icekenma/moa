@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.0819";
+const UI_VERSION = "261119.0853";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1520,8 +1520,9 @@ pages.invest = {
     const idx = (d.indices || []).filter((x) => x.price != null);
     const us = a && a.us && !a.us.error && (a.us.eval || a.us.usd_krw);
     box.innerHTML = `
+      ${a && a.error ? `<div class="notice warn">${a.stale ? "키움 연결이 끊겨 아래 금액은 마지막으로 받은 값이에요. 시세·AI 추천·자동매매도 연결돼야 움직여요.<br>" : ""}${esc(a.error)}${ipHelp(a.error)}</div>` : ""}
       <section class="ih-hero">
-        ${a && a.total != null ? `<div class="ih-lbl">내 투자 · 키움 ${esc(a.server || "")}</div>
+        ${a && a.total != null ? `<div class="ih-lbl">내 투자 · 키움 ${esc(a.server || "")}${a.stale ? " · 연결 끊김" : ""}</div>
           <div class="ih-total">${won(a.total)}<small>원</small></div>
           <div class="ih-day ${tone(d.day_pnl)}">오늘 ${signed(d.day_pnl)}원 (${pct(d.day_pct, 2)})</div>
           <div class="ih-sub"><span>평가손익 <b class="${tone(a.pnl)}">${signed(a.pnl)}</b> (${pct(a.pnl_pct, 2)})</span><span class="ih-cash" role="button" tabindex="0" data-cashwhy>주문 가능 <b>${won(a.orderable)}</b> ›</span>${us ? `<span>달러 <b>${usd(a.us.usd)}</b></span>` : ""}</div>`

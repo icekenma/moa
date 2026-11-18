@@ -2023,3 +2023,48 @@ html.dark-theme .bk-days i.on{background:var(--n1)}
 html.dark-theme .bk-days i.today{outline-color:rgba(255,255,255,.55)}
 html.dark-theme .bk-dirf input{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.14)}
 html.dark-theme .btn.bk-danger,html.dark-theme .sheet .btn.bk-danger{color:#FFB4A8!important;border-color:rgba(255,140,125,.55)!important}
+
+/* AI 자동매매 */
+.at-back{align-self:flex-start;border:0;background:transparent;color:var(--on-deep2);font-size:11px;font-weight:700;padding:4px 0;min-height:26px}
+.at-run{border:0;text-align:left;width:100%;gap:5px;cursor:pointer;font:inherit;color:inherit}
+.at-run:active{transform:scale(.99)}
+.at-run-top{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.at-run-top b{font-size:13.5px;font-weight:800;letter-spacing:-0.02em;margin-right:auto}
+.at-run-mid{display:flex;align-items:baseline;gap:8px}
+.at-eq{font-size:21px;font-weight:800;letter-spacing:-0.03em}
+.at-ret{font-size:13px;font-weight:800}
+.at-hero .at-run-top b{font-size:15px;color:var(--on-deep-strong)}
+.at-hero-eq{font-size:30px;line-height:1.1;font-weight:800;letter-spacing:-0.04em}
+.at-hero-ret{font-size:13px;font-weight:800}
+.at-hero-ret.up{color:#FF8A80}.at-hero-ret.down{color:#8FB2FF}
+.at-hero-kv{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:2px 0}
+.at-hero-kv div{display:flex;flex-direction:column;gap:1px;padding:7px 9px;border-radius:10px;background:rgba(255,255,255,.07);min-width:0}
+.at-hero-kv span{font-size:9.5px;color:var(--on-deep2);font-weight:700}
+.at-hero-kv b{font-size:12.5px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.at-hero-kv b.up{color:#FF8A80}.at-hero-kv b.down{color:#8FB2FF}
+.at-ctl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.at-ctl .btn:only-child{grid-column:1/-1}
+.at-body{display:flex;flex-direction:column;gap:8.5px}
+.at-styles{display:flex;flex-direction:column;gap:5px}
+.at-days{display:flex;gap:5px;flex-wrap:wrap}
+.at-plan{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:9px}
+.at-plan li{display:grid;grid-template-columns:86px minmax(0,1fr);gap:8px;font-size:11.5px;line-height:1.5}
+.at-plan b{font-weight:800}
+.at-plan span{color:var(--ink2)}
+.at-prop.pend{outline:2px solid var(--sec);outline-offset:-2px}
+.at-chg{display:flex;flex-direction:column;gap:7px}
+.at-chg>div{display:flex;flex-direction:column;gap:1px;padding:8px 10px;border-radius:10px;background:var(--bg)}
+.at-chg b{font-size:11.5px}
+.at-arrow{font-size:13px;font-weight:700;color:var(--ink2)}
+.at-arrow em{font-style:normal;font-weight:900;color:var(--ink)}
+.at-more summary{font-size:11px;font-weight:700;color:var(--sec-i);cursor:pointer;min-height:26px;display:flex;align-items:center}
+.at-msg{font-size:11.5px;font-weight:600;white-space:normal;line-height:1.45}
+.at-log .ico{font-size:9.5px}
+.at-bar{position:relative;height:4px;margin-top:5px;border-radius:2px;background:linear-gradient(90deg,color-mix(in srgb,var(--down) 35%,transparent),var(--line) 50%,color-mix(in srgb,var(--up) 35%,transparent))}
+.at-bar i{position:absolute;top:-3px;width:10px;height:10px;margin-left:-5px;border-radius:50%;background:var(--ink);border:2px solid var(--card)}
+.at-bar u{position:absolute;top:-2px;width:1.5px;height:8px;background:var(--ink3)}
+.at-tbl{display:flex;flex-direction:column;padding-bottom:6px}
+.at-tr{display:grid;grid-template-columns:minmax(0,1.6fr) repeat(3,minmax(0,1fr));gap:6px;padding:7px 0;border-top:1px solid var(--bg);font-size:11.5px;font-weight:600}
+.at-tr span:not(:first-child){text-align:right;font-weight:800}
+.at-th{border-top:0;font-size:9.5px;color:var(--ink3)}
+.at-th span:not(:first-child){font-weight:700}

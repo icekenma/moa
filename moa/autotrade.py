@@ -1,0 +1,1143 @@
+"""AI 자동매매(투자 → 자동매매).
+
+사용자가 정하는 것: 쓸 돈, 시장(국내·미국), 방식(단타·스윙·장기), 엔진(Claude 모델), 기간, 모의/실전.
+앱이 하는 것
+1. 플랜: 위 값으로 종목 수·1회 비중·익절/손절 상한·손실 한도·하루 추천 횟수를 정한다(make_plan).
+2. 매매: 정해진 시간에 AI 추천(aipick)을 받아 조건에 맞는 종목만 사고, 목표·손절·기간에 닿으면 판다.
+3. 기록: 살 때의 근거·지표, 보유 중 최고·최저, 팔 때의 사유·손익을 at_trades에, 판단 과정을 at_log에 남긴다.
+4. 분석: 표본이 쌓이면 조건별 성적으로 개선안(at_proposals)을 만든다. 개선안은 사용자가 승인해야 반영된다.
+
+안전장치: 쓸 돈 상한(그 안에서만 삼), 하루 손실 한도(그날 새 매수 중지), 전체 손실 한도(전부 정리 후 종료),
+연속 손절 시 그날 쉬기, 같은 종목 하루 한 번, 긴급 종료(전부 청산).
+모의는 앱 안 가상 장부(실제 시세)로만 돌고 주문이 나가지 않는다. 실전은 설정의 주문 계좌(키움)로 주문한다.
+"""
+import copy
+import csv
+import io
+import json
+import math
+import re
+import threading
+import time
+from datetime import datetime, timedelta
+
+from . import aipick as AP
+from .trading import costs as C
+
+STYLES = {
+    "day": {"label": "단타", "sub": "오늘 사서 오늘 정리"},
+    "swing": {"label": "스윙", "sub": "약 1주 보유"},
+    "month": {"label": "장기", "sub": "약 1달 보유"},
+}
+MIN_BUDGET = {"kr": 300_000, "us": 300}
+US_FEE = 0.25          # 미국 왕복 비용(%) 대략
+US_SLIP = 0.0005       # 모의 체결 슬리피지(미국)
+ACTIVE = ("running", "paused", "closing")
+
+# 개선안으로 바꿀 수 있는 값과 범위(이 밖의 값은 AI가 내놔도 버린다)
+PLAN_KEYS = {
+    "max_positions": (1, 6, int, "동시 보유 종목 수"),
+    "per_trade_pct": (5, 50, float, "1회 매수 비중(%)"),
+    "min_win_prob": (40, 80, float, "최소 승률(%)"),
+    "min_score": (30, 90, float, "최소 점수"),
+    "tp_cap": (0.5, 60, float, "익절 상한(%)"),
+    "sl_cap": (0.3, 20, float, "손절 상한(%)"),
+    "min_rr": (1.0, 3.0, float, "최소 손익비"),
+    "cycles_per_day": (1, 6, int, "하루 추천 횟수"),
+    "cycle_gap_min": (20, 240, int, "추천 간격(분)"),
+    "entry_start": (None, None, "hm", "매수 시작 시각"),
+    "entry_end": (None, None, "hm", "매수 끝 시각"),
+    "daily_loss_pct": (0.5, 10, float, "하루 손실 한도(%)"),
+    "total_loss_pct": (2, 30, float, "전체 손실 한도(%)"),
+    "loss_streak": (2, 6, int, "연속 손절 시 쉬기(번)"),
+    "chase_pct": (0.1, 3, float, "추천가 대비 추격 허용(%)"),
+    "skip_watch": (None, None, bool, "관망이면 매수 안 함"),
+}
+
+
+def _clamp_key(key, val):
+    lo, hi, typ, _ = PLAN_KEYS[key]
+    if typ is bool:
+        if isinstance(val, str):
+            return val.strip().lower() in ("1", "true", "yes", "on", "예")
+        return bool(val)
+    if typ == "hm":
+        s = str(val).strip()
+        if not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", s):
+            raise ValueError("시각은 HH:MM으로 넣어 주세요")
+        return s
+    v = float(str(val).replace(",", ""))
+    if math.isnan(v) or math.isinf(v):
+        raise ValueError("숫자를 확인해 주세요")
+    v = min(hi, max(lo, v))
+    return int(round(v)) if typ is int else round(v, 2)
+
+
+def make_plan(budget, mkt, style, days):
+    """쓸 돈·시장·방식·기간으로 매매 플랜을 만든다. 돈이 적을수록 종목 수를 줄여 1주도 못 사는 일을 막는다."""
+    unit = 1_000_000 if mkt == "kr" else 1_000
+    small = budget < unit
+    if style == "day":
+        p = {"max_positions": 2 if small else 3, "min_win_prob": 55, "min_score": 60, "tp_cap": 4.0, "sl_cap": 2.0,
+             "min_rr": 1.5, "cycles_per_day": 3, "cycle_gap_min": 60, "daily_loss_pct": 2.0, "total_loss_pct": 8.0,
+             "entry_start": "09:10" if mkt == "kr" else "09:40", "entry_end": "14:30" if mkt == "kr" else "15:00"}
+    elif style == "swing":
+        p = {"max_positions": 2 if small else 4, "min_win_prob": 50, "min_score": 60, "tp_cap": 12.0, "sl_cap": 6.0,
+             "min_rr": 1.6, "cycles_per_day": 1, "cycle_gap_min": 120, "daily_loss_pct": 3.0, "total_loss_pct": 10.0,
+             "entry_start": "09:30" if mkt == "kr" else "09:45", "entry_end": "15:00" if mkt == "kr" else "15:30"}
+    else:
+        p = {"max_positions": 3 if small else 5, "min_win_prob": 50, "min_score": 60, "tp_cap": 25.0, "sl_cap": 10.0,
+             "min_rr": 1.6, "cycles_per_day": 1, "cycle_gap_min": 180, "daily_loss_pct": 4.0, "total_loss_pct": 12.0,
+             "entry_start": "09:30" if mkt == "kr" else "09:45", "entry_end": "15:00" if mkt == "kr" else "15:30"}
+    p["per_trade_pct"] = round(min(100 / p["max_positions"], {"day": 33.0, "swing": 25.0, "month": 20.0}[style]), 1)
+    p.update(loss_streak=3, chase_pct=0.5, skip_watch=True, warmup_trades=10, warmup_mult=0.5,
+             review_every=30, ai_review=True, ai_daily_usd=1.0, web_search=True)
+    return p
+
+
+def plan_text(run):
+    """플랜을 사람이 읽는 줄글 목록으로."""
+    p, cur = run["params"], "원" if run["mkt"] == "kr" else "달러"
+    b = run["budget"]
+
+    def money(v):
+        return f"{v:,.0f}{cur}" if run["mkt"] == "kr" else f"${v:,.2f}"
+    st = run["style"]
+    hold = {"day": "그날 장 마감 전에 모두 정리", "swing": "최대 5거래일 보유", "month": "최대 20거래일 보유"}[st]
+    return [
+        {"t": "1단계 · 검증", "d": f"처음 {p['warmup_trades']}번은 정해진 비중의 {int(p['warmup_mult'] * 100)}%만 써서 전략이 통하는지 확인해요."},
+        {"t": "2단계 · 본 운용", "d": f"한 번에 굴리는 돈의 {p['per_trade_pct']:g}%(약 {money(b * p['per_trade_pct'] / 100)})씩, 최대 {p['max_positions']}종목. {hold}."},
+        {"t": "3단계 · 복리", "d": "번 돈은 굴리는 돈에 더해 다음 매수 금액이 함께 커져요. 잃으면 매수 금액도 같이 줄어요."},
+        {"t": "고르는 기준", "d": f"AI 승률 {p['min_win_prob']:g}% 이상 · 점수 {p['min_score']:g} 이상 · 손익비 {p['min_rr']:g} 이상만 매수"
+                              + (" · AI가 관망이면 쉬어요" if p["skip_watch"] else "") + "."},
+        {"t": "파는 기준", "d": f"익절 최대 +{p['tp_cap']:g}%, 손절 최대 -{p['sl_cap']:g}% 안에서 AI가 종목마다 정해요."},
+        {"t": "추천 받기", "d": f"하루 최대 {p['cycles_per_day']}번, {p['entry_start']}~{p['entry_end']}({'한국' if run['mkt'] == 'kr' else '뉴욕'} 시간) 사이, 자리가 비었을 때만."},
+        {"t": "손실 한도", "d": f"하루 -{p['daily_loss_pct']:g}%(약 {money(b * p['daily_loss_pct'] / 100)})면 그날 매수 중지, "
+                              f"누적 -{p['total_loss_pct']:g}%(약 {money(b * p['total_loss_pct'] / 100)})면 전부 정리하고 종료. 연속 {p['loss_streak']}번 손절이면 그날 쉬어요."},
+        {"t": "개선", "d": f"매매 {p['review_every']}건이 쌓일 때마다 조건별 성적을 분석해 개선안을 내요. 승인해야 반영돼요."},
+    ]
+
+
+def _median(xs):
+    xs = sorted(x for x in xs if x is not None)
+    if not xs:
+        return None
+    n = len(xs)
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
+
+
+def _pctile(xs, q):
+    xs = sorted(x for x in xs if x is not None)
+    if not xs:
+        return None
+    return xs[min(len(xs) - 1, max(0, int(round(q * (len(xs) - 1)))))]
+
+
+def _agg(rows):
+    """거래 묶음의 성적."""
+    n = len(rows)
+    if not n:
+        return {"n": 0}
+    pcts = [r["pnl_pct"] or 0 for r in rows]
+    wins = [x for x in pcts if x > 0]
+    losses = [x for x in pcts if x <= 0]
+    gain = sum(r["pnl"] for r in rows if (r["pnl"] or 0) > 0)
+    loss = -sum(r["pnl"] for r in rows if (r["pnl"] or 0) < 0)
+    return {"n": n, "win": len(wins), "win_rate": round(len(wins) / n * 100, 1), "avg_pct": round(sum(pcts) / n, 3),
+            "avg_win": round(sum(wins) / len(wins), 2) if wins else 0, "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0,
+            "pnl": round(sum(r["pnl"] or 0 for r in rows), 2), "pf": round(gain / loss, 2) if loss > 0 else (None if not gain else 99.0)}
+
+
+class AutoTrade:
+    def __init__(self, rt):
+        self.rt = rt
+        db = rt.db
+        db.x("""CREATE TABLE IF NOT EXISTS at_runs(
+            id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, name TEXT NOT NULL, mode TEXT NOT NULL, mkt TEXT NOT NULL,
+            style TEXT NOT NULL, model TEXT NOT NULL, budget REAL NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL,
+            status TEXT NOT NULL, status_msg TEXT NOT NULL DEFAULT '', params TEXT NOT NULL, ver INTEGER NOT NULL DEFAULT 1,
+            last_cycle REAL NOT NULL DEFAULT 0, last_review_n INTEGER NOT NULL DEFAULT 0, ended_at TEXT)""")
+        db.x("""CREATE TABLE IF NOT EXISTS at_trades(
+            id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL, ver INTEGER NOT NULL, mkt TEXT NOT NULL, sym TEXT NOT NULL,
+            name TEXT NOT NULL, exch TEXT NOT NULL DEFAULT '', qty INTEGER NOT NULL, status TEXT NOT NULL,
+            entry_ts TEXT NOT NULL, entry_day TEXT NOT NULL, entry_hm TEXT NOT NULL, entry_price REAL NOT NULL,
+            target_pct REAL NOT NULL, stop_pct REAL NOT NULL, trail_pct REAL NOT NULL DEFAULT 0,
+            exit_by TEXT NOT NULL DEFAULT '', exit_date TEXT NOT NULL DEFAULT '',
+            high REAL, low REAL, last REAL, exit_ts TEXT, exit_price REAL, reason TEXT,
+            pnl REAL, pnl_pct REAL, fees REAL, mfe_pct REAL, mae_pct REAL, hold_min INTEGER,
+            pick_id INTEGER, score REAL, win_prob REAL, cal_prob REAL, stance TEXT, feat TEXT, why TEXT,
+            buy_no TEXT NOT NULL DEFAULT '', sell_no TEXT NOT NULL DEFAULT '', fill_ok INTEGER NOT NULL DEFAULT 1,
+            exit_ok INTEGER NOT NULL DEFAULT 1, exit_day TEXT)""")
+        db.x("CREATE INDEX IF NOT EXISTS ix_at_trades_run ON at_trades(run_id, status)")
+        db.x("""CREATE TABLE IF NOT EXISTS at_log(
+            id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL, ts TEXT NOT NULL, day TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL, msg TEXT NOT NULL, data TEXT)""")
+        db.x("CREATE INDEX IF NOT EXISTS ix_at_log_run ON at_log(run_id, id)")
+        db.x("""CREATE TABLE IF NOT EXISTS at_equity(
+            run_id INTEGER NOT NULL, day TEXT NOT NULL, equity REAL NOT NULL, PRIMARY KEY(run_id, day))""")
+        db.x("""CREATE TABLE IF NOT EXISTS at_proposals(
+            id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL, ts TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL,
+            summary TEXT NOT NULL, changes TEXT NOT NULL, stats TEXT, text TEXT, decided_at TEXT)""")
+        db.x("""CREATE TABLE IF NOT EXISTS at_changes(
+            id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL, ts TEXT NOT NULL, ver INTEGER NOT NULL, source TEXT NOT NULL,
+            changes TEXT NOT NULL, stats TEXT)""")
+        self._last = 0.0
+        self._busy = {}       # run_id → 추천을 받는 중인 스레드
+        self._day_note = {}   # (run_id, 날짜, 사유) → 같은 안내를 하루 한 번만 남기려고
+        self._mkt = {}        # run_id → 시장(기록에 그 시장의 날짜를 붙이려고)
+
+    # ------------------------------------------------------------------ 공통
+    @staticmethod
+    def _now():
+        return datetime.now().isoformat(timespec="seconds")
+
+    def _local(self, mkt):
+        return AP.et_now() if mkt == "us" else AP.kst_now()
+
+    def _session(self, mkt):
+        ss = AP.session(mkt)
+        if mkt == "kr" and ss["open"] and AP.kst_now().strftime("%Y-%m-%d") in (self.rt.settings.get("holidays") or []):
+            ss = dict(ss, open=False, left_min=0)
+        return ss
+
+    def _quote(self, mkt, sym):
+        return self.rt.aipick.quote(mkt, sym)
+
+    def _run(self, rid):
+        r = self.rt.db.one("SELECT * FROM at_runs WHERE id=?", (rid,))
+        if not r:
+            raise ValueError("자동매매를 찾지 못했어요")
+        r["params"] = json.loads(r["params"])
+        return r
+
+    def _runs(self, where="", args=()):
+        rows = self.rt.db.q("SELECT * FROM at_runs " + where + " ORDER BY id DESC", args)
+        for r in rows:
+            r["params"] = json.loads(r["params"])
+        return rows
+
+    def log(self, rid, kind, msg, data=None):
+        if rid not in self._mkt:
+            r = self.rt.db.one("SELECT mkt FROM at_runs WHERE id=?", (rid,))
+            self._mkt[rid] = r["mkt"] if r else "kr"
+        self.rt.db.x("INSERT INTO at_log(run_id,ts,day,kind,msg,data) VALUES(?,?,?,?,?,?)",
+                     (rid, self._now(), AP.mkt_date(self._mkt[rid]), kind, msg,
+                      json.dumps(data, ensure_ascii=False, default=str) if data is not None else None))
+
+    def _note_once(self, run, why):
+        """같은 사유의 '쉬는 중' 안내는 하루 한 번만 기록한다."""
+        key = (run["id"], AP.mkt_date(run["mkt"]), why)
+        if key in self._day_note:
+            return
+        if len(self._day_note) > 500:
+            self._day_note.clear()
+        self._day_note[key] = 1
+        self.log(run["id"], "skip", why)
+
+    def _set_status(self, run, status, msg=""):
+        ended = self._now() if status == "ended" else None
+        self.rt.db.x("UPDATE at_runs SET status=?, status_msg=?, ended_at=COALESCE(?, ended_at) WHERE id=?",
+                     (status, msg, ended, run["id"]))
+        run["status"], run["status_msg"] = status, msg
+
+    # ------------------------------------------------------------------ 돈 계산
+    def _open(self, rid):
+        return self.rt.db.q("SELECT * FROM at_trades WHERE run_id=? AND status='open' ORDER BY id", (rid,))
+
+    def _closed(self, rid):
+        return self.rt.db.q("SELECT * FROM at_trades WHERE run_id=? AND status='closed' ORDER BY exit_ts, id", (rid,))
+
+    def money(self, run, live=False):
+        """굴리는 돈(예산 + 실현손익), 남은 현금, 보유 평가."""
+        realized = self.rt.db.one("SELECT COALESCE(SUM(pnl),0) s FROM at_trades WHERE run_id=? AND status='closed'", (run["id"],))["s"]
+        opens = self._open(run["id"])
+        cost = sum(t["qty"] * t["entry_price"] for t in opens)
+        value = 0.0
+        for t in opens:
+            px = t["last"] or t["entry_price"]
+            if live:
+                px = self._quote(t["mkt"], t["sym"]).get("price") or px
+            value += t["qty"] * px
+        base = run["budget"] + realized
+        return {"budget": run["budget"], "realized": round(realized, 2), "base": round(base, 2), "cash": round(base - cost, 2),
+                "open_cost": round(cost, 2), "open_value": round(value, 2), "unrealized": round(value - cost, 2),
+                "equity": round(base - cost + value, 2),
+                "ret_pct": round((base - cost + value) / run["budget"] * 100 - 100, 2) if run["budget"] else 0}
+
+    def _fees(self, mkt, entry, exit_, qty):
+        """왕복 비용과 손익(시장 통화)."""
+        if mkt == "kr":
+            pnl, fees = C.trade_pnl(entry, exit_, qty, self.rt.settings.get("costs"))
+            return float(pnl), float(fees)
+        fees = round((entry + exit_) * qty * US_FEE / 200, 2)
+        return round((exit_ - entry) * qty - fees, 2), fees
+
+    # ------------------------------------------------------------------ 준비 상태
+    def real_broker(self):
+        """실전 주문에 쓸 계좌(설정의 기본 주문 계좌). (브로커, 못 쓰는 이유)"""
+        b = self.rt.brokers.get("scalp")
+        if b is None:
+            return None, self.rt.errors.get("scalp") or "주문 계좌가 준비되지 않았어요"
+        if getattr(b, "client", None) is None:
+            return None, "실전은 키움 주문 계좌가 필요해요. 설정 → 계좌에서 주문 방식을 '키움으로 주문'으로 바꿔 주세요"
+        return b, ""
+
+    def ready(self):
+        b, why = self.real_broker()
+        return {"ai": self.rt.ai.configured(), "data": self.rt.invest.kr() is not None,
+                "real": {"ok": b is not None, "label": getattr(b, "label", None), "why": why}}
+
+    # ------------------------------------------------------------------ 만들기·조작
+    def _read_form(self, d):
+        mkt = "us" if d.get("mkt") == "us" else "kr"
+        style = d.get("style") if d.get("style") in STYLES else "day"
+        try:
+            budget = float(str(d.get("budget") or 0).replace(",", ""))
+            days = int(float(d.get("days") or 0))
+        except ValueError:
+            raise ValueError("금액과 기간은 숫자로 넣어 주세요")
+        if budget < MIN_BUDGET[mkt]:
+            raise ValueError(f"쓸 돈은 {'30만 원' if mkt == 'kr' else '300달러'} 이상으로 넣어 주세요")
+        if budget > (5_000_000_000 if mkt == "kr" else 5_000_000):
+            raise ValueError("금액을 확인해 주세요")
+        if not 1 <= days <= 365:
+            raise ValueError("기간은 1일~365일 사이로 넣어 주세요")
+        if style != "day" and days < 7:
+            raise ValueError("스윙·장기는 기간을 7일 이상으로 넣어 주세요")
+        from .ai import MODELS
+        model = d.get("model") if d.get("model") in MODELS else (self.rt.ai.conf().get("model") or "claude-sonnet-5-5")
+        return mkt, style, budget, days, model
+
+    def preview(self, d):
+        mkt, style, budget, days, model = self._read_form(d)
+        p = make_plan(budget, mkt, style, days)
+        for k in ("daily_loss_pct", "total_loss_pct"):
+            if d.get(k) not in (None, ""):
+                p[k] = _clamp_key(k, d[k])
+        run = {"mkt": mkt, "style": style, "budget": budget, "params": p}
+        m = self.rt.ai.meter("pick" if style == "day" else "pickw", model, True)
+        per = m["avg_usd"] if m.get("avg_usd") is not None else (m["usd_lo"] + m["usd_hi"]) / 2
+        return {"mkt": mkt, "style": style, "budget": budget, "days": days, "model": model, "params": p, "plan": plan_text(run),
+                "ai_cost": {"per_usd": round(per, 3), "day_usd": round(min(per * p["cycles_per_day"], p["ai_daily_usd"]), 2),
+                            "fx": m.get("fx"), "budget_usd": m.get("budget_usd"), "month_usd": m.get("month_usd")}}
+
+    def create(self, d):
+        pv = self.preview(d)
+        mode = "real" if d.get("mode") == "real" else "paper"
+        rd = self.ready()
+        if not rd["ai"]:
+            raise ValueError("설정 → AI에서 Claude API 키를 먼저 넣어 주세요")
+        if not rd["data"]:
+            raise ValueError("실시간 순위가 필요해요. 설정 → 계좌에서 키움 계좌를 먼저 연결해 주세요")
+        if mode == "real":
+            if not rd["real"]["ok"]:
+                raise ValueError(rd["real"]["why"])
+            if d.get("confirm") != "실전":
+                raise ValueError("실전은 실제 주문이 나가요. 확인란에 '실전'을 적어 주세요")
+        if self._runs("WHERE status IN ('running','paused','closing') AND mode=? AND mkt=?", (mode, pv["mkt"])):
+            raise ValueError(f"{'실전' if mode == 'real' else '모의'} {'국내' if pv['mkt'] == 'kr' else '미국'} 자동매매가 이미 돌고 있어요. 먼저 종료해 주세요")
+        today = self._local(pv["mkt"]).date()
+        end = today + timedelta(days=pv["days"] - 1)
+        name = str(d.get("name") or "").strip()[:30] or \
+            f"{'국내' if pv['mkt'] == 'kr' else '미국'} {STYLES[pv['style']]['label']} {'실전' if mode == 'real' else '모의'}"
+        rid = self.rt.db.x(
+            "INSERT INTO at_runs(created_at,name,mode,mkt,style,model,budget,start_date,end_date,status,params) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (self._now(), name, mode, pv["mkt"], pv["style"], pv["model"], pv["budget"], today.isoformat(), end.isoformat(),
+             "running", json.dumps(pv["params"], ensure_ascii=False)))
+        self.rt.db.x("INSERT INTO at_changes(run_id,ts,ver,source,changes,stats) VALUES(?,?,?,?,?,?)",
+                     (rid, self._now(), 1, "start", json.dumps([], ensure_ascii=False), None))
+        self.log(rid, "start", f"자동매매를 시작했어요 · {name}", {"params": pv["params"]})
+        self.rt.notify(f"[moa 자동매매] {name} 시작 · {pv['budget']:,.0f}{'원' if pv['mkt'] == 'kr' else '달러'}")
+        return self.detail(rid)
+
+    def control(self, rid, action):
+        run = self._run(rid)
+        if run["status"] == "ended":
+            raise ValueError("이미 끝난 자동매매예요")
+        if action == "pause":
+            if run["status"] == "running":
+                self._set_status(run, "paused", "새 매수를 멈췄어요. 들고 있는 종목은 계속 지켜봐요")
+                self.log(rid, "control", "새 매수 멈춤")
+        elif action == "resume":
+            if run["status"] == "paused":
+                self._set_status(run, "running", "")
+                self.log(rid, "control", "다시 시작")
+        elif action == "end":
+            if self._open(rid):
+                self._set_status(run, "closing", "전부 정리하는 중이에요(장이 열려 있을 때 팔아요)")
+                self.log(rid, "control", "종료 요청 · 보유 종목 정리 시작")
+                self._manage(run)
+            else:
+                self._finish(run, "사용자가 종료했어요")
+        else:
+            raise ValueError("알 수 없는 동작이에요")
+        return self.detail(rid)
+
+    def _finish(self, run, why):
+        m = self.money(run)
+        self._set_status(run, "ended", why)
+        self._snap(run)
+        self.log(run["id"], "end", f"종료 · {why} · 수익률 {m['ret_pct']:+.2f}%", m)
+        self.rt.notify(f"[moa 자동매매] {run['name']} 종료 · {why} · {m['ret_pct']:+.2f}%")
+
+    def busy(self):
+        """추천을 받아 주문하려는 중인지(업데이트·되돌리기를 잠깐 미룰 때 본다)."""
+        return any(t.is_alive() for t in self._busy.values())
+
+    def active(self):
+        return bool(self.rt.db.one("SELECT 1 x FROM at_runs WHERE status IN ('running','paused','closing') LIMIT 1"))
+
+    # ------------------------------------------------------------------ 반복(엔진)
+    def tick(self, force=False):
+        if not force and time.time() - self._last < 5:
+            return
+        self._last = time.time()
+        for run in self._runs("WHERE status IN ('running','paused','closing')"):
+            try:
+                self._manage(run)
+                if run["status"] == "running":
+                    self._maybe_cycle(run)
+            except Exception as e:
+                self.rt.db.log("system", "error", f"자동매매({run['id']}) 처리 오류: {type(e).__name__}: {e}", self._now())
+
+    # ----- 보유 종목 지켜보기·팔기
+    def _manage(self, run):
+        mkt, p = run["mkt"], run["params"]
+        ss = self._session(mkt)
+        today = AP.mkt_date(mkt)
+        opens = self._open(run["id"])
+        if run["mode"] == "real":
+            self._reconcile(run)
+        past_end = today > run["end_date"]
+        last_day = today >= run["end_date"]
+        if ss["open"]:
+            close_soon = ss["left_min"] <= 8
+            now_hm = AP.kst_now().strftime("%H:%M")
+            if run["status"] != "closing" and opens and (past_end or (last_day and close_soon)):
+                self._set_status(run, "closing", "기간이 끝나 보유 종목을 정리하는 중이에요")
+                self.log(run["id"], "control", "기간 종료 · 보유 종목 정리")
+            for t in opens:
+                if not t["fill_ok"]:
+                    continue  # 실전: 매수 체결을 아직 확인하지 못함
+                price = self._quote(mkt, t["sym"]).get("price")
+                if not price:
+                    continue
+                high, low = max(t["high"] or t["entry_price"], price), min(t["low"] or t["entry_price"], price)
+                self.rt.db.x("UPDATE at_trades SET high=?, low=?, last=? WHERE id=?", (high, low, price, t["id"]))
+                t.update(high=high, low=low, last=price)
+                chg = (price / t["entry_price"] - 1) * 100
+                reason = None
+                if run["status"] == "closing":
+                    reason = "종료 정리"
+                elif chg >= t["target_pct"]:
+                    reason = "익절"
+                elif chg <= -t["stop_pct"]:
+                    reason = "손절"
+                elif t["trail_pct"] and high > t["entry_price"] * (1 + t["trail_pct"] / 100) \
+                        and price <= high * (1 - t["trail_pct"] / 100) and price > t["entry_price"]:
+                    reason = "추적 익절"
+                elif run["style"] == "day":
+                    if close_soon or (t["exit_by"] and mkt == "kr" and now_hm >= t["exit_by"]) or t["entry_day"] < today:
+                        reason = "시간 정리"
+                elif t["exit_date"] and today >= t["exit_date"] and close_soon:
+                    reason = "기간 정리"
+                if reason:
+                    self._sell(run, t, price, reason)
+        opens = self._open(run["id"])
+        if run["status"] == "closing" and not opens:
+            msg = run["status_msg"] or ""
+            self._finish(run, "기간이 끝났어요" if msg.startswith("기간") else "손실 한도에 닿았어요" if "손실" in msg else "사용자가 종료했어요")
+            return
+        if past_end and run["status"] in ("running", "paused") and not opens:
+            self._finish(run, "기간이 끝났어요")
+            return
+        # 전체 손실 한도: 평가손실 포함
+        if run["status"] in ("running", "paused"):
+            m = self.money(run)
+            if m["equity"] <= run["budget"] * (1 - p["total_loss_pct"] / 100):
+                self.log(run["id"], "risk", f"전체 손실 한도(-{p['total_loss_pct']:g}%)에 닿아 전부 정리하고 종료해요", m)
+                self.rt.notify(f"[moa 자동매매] {run['name']} 전체 손실 한도 도달 · 전부 정리 후 종료")
+                if opens:
+                    self._set_status(run, "closing", "손실 한도에 닿아 전부 정리하는 중이에요")
+                    self._manage(run)
+                else:
+                    self._finish(run, "손실 한도에 닿았어요")
+                return
+        if not ss["open"]:
+            ph, day = AP.phase_at(mkt, AP.kst_now().replace(tzinfo=None))
+            if ph == "post" and not self.rt.db.one("SELECT 1 x FROM at_equity WHERE run_id=? AND day=?", (run["id"], day.isoformat())):
+                self._snap(run, day.isoformat())  # 하루 한 번, 장 마감 뒤 평가액
+
+    def _snap(self, run, day=None):
+        self.rt.db.x("INSERT INTO at_equity(run_id,day,equity) VALUES(?,?,?) ON CONFLICT(run_id,day) DO UPDATE SET equity=excluded.equity",
+                     (run["id"], day or AP.mkt_date(run["mkt"]), self.money(run)["equity"]))
+
+    def _sell(self, run, t, price, reason):
+        mkt, now = run["mkt"], self._now()
+        sell_no, exit_ok = "", 1
+        if run["mode"] == "real":
+            b, why = self.real_broker()
+            try:
+                if b is None:
+                    raise RuntimeError(why)
+                if mkt == "us":
+                    no, exch = b.client.us_order("sell", t["sym"], t["qty"], None, t["exch"] or None)
+                    sell_no = f"{no}|{exch}"
+                else:
+                    sell_no = b.sell(t["sym"], t["qty"], None).get("broker_no", "")
+                self.rt.db.x("INSERT INTO orders(ts,engine,mode,code,name,side,qty,price,status,fill_price,broker_no,msg) "
+                             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                             (now, "scalp", b.mode, t["sym"], t["name"], "sell", t["qty"], None, "accepted", price, sell_no, f"AI 자동매매 {reason}"))
+                exit_ok = 0
+            except Exception as e:
+                self._note_once(run, f"{t['name']} {reason} 매도 실패: {e} (다음 확인 때 다시 시도)")
+                return
+            fill = price
+        else:
+            fill = C.sell_fill(price, self.rt.settings.get("costs")) if mkt == "kr" else round(price * (1 - US_SLIP), 4)
+        self._close(run, t, fill, reason, sell_no, exit_ok)
+
+    def _close(self, run, t, fill, reason, sell_no="", exit_ok=1):
+        pnl, fees = self._fees(run["mkt"], t["entry_price"], fill, t["qty"])
+        cost = t["entry_price"] * t["qty"]
+        hi, lo = max(t["high"] or t["entry_price"], fill), min(t["low"] or t["entry_price"], fill)
+        try:
+            hold = int((datetime.now() - datetime.fromisoformat(t["entry_ts"])).total_seconds() // 60)
+        except Exception:
+            hold = None
+        self.rt.db.x("UPDATE at_trades SET status='closed', exit_ts=?, exit_price=?, reason=?, pnl=?, pnl_pct=?, fees=?, mfe_pct=?, mae_pct=?, "
+                     "hold_min=?, sell_no=?, exit_ok=?, high=?, low=?, last=?, exit_day=? WHERE id=?",
+                     (self._now(), fill, reason, pnl, round(pnl / cost * 100, 3) if cost else 0, fees,
+                      round((hi / t["entry_price"] - 1) * 100, 3), round((lo / t["entry_price"] - 1) * 100, 3), hold,
+                      sell_no, exit_ok, hi, lo, fill, AP.mkt_date(run["mkt"]), t["id"]))
+        unit = "원" if run["mkt"] == "kr" else "달러"
+        self.log(run["id"], "sell", f"{t['name']} {t['qty']}주 {reason} · {pnl:+,.0f}{unit} ({pnl / cost * 100:+.2f}%)" if run["mkt"] == "kr"
+                 else f"{t['name']} {t['qty']}주 {reason} · {pnl:+,.2f}{unit} ({pnl / cost * 100:+.2f}%)", {"trade": t["id"]})
+        self.rt.notify(f"[moa 자동매매] {t['name']} {reason} {pnl / cost * 100:+.2f}%")
+        self._after_close(run)
+
+    def _after_close(self, run):
+        """표본이 쌓였으면 분석해서 개선안을 만든다."""
+        p = run["params"]
+        n = self.rt.db.one("SELECT COUNT(*) n FROM at_trades WHERE run_id=? AND status='closed'", (run["id"],))["n"]
+        if n - (run.get("last_review_n") or 0) < int(p.get("review_every") or 30):
+            return
+        self.rt.db.x("UPDATE at_runs SET last_review_n=? WHERE id=?", (n, run["id"]))
+        run["last_review_n"] = n
+        try:
+            pr = self.review(run["id"], auto=True)
+            if pr and pr.get("changes"):
+                self.rt.notify(f"[moa 자동매매] {run['name']} 개선안이 나왔어요({len(pr['changes'])}건). 앱에서 확인해 주세요")
+        except Exception as e:
+            self.rt.db.log("system", "error", f"자동매매 분석 오류: {e}", self._now())
+        if p.get("ai_review") and self.rt.ai.configured():
+            threading.Thread(target=self._ai_review_bg, args=(run["id"],), daemon=True).start()
+
+    # ----- 실전: 체결 맞추기
+    def _reconcile(self, run):
+        rows = self.rt.db.q("SELECT * FROM at_trades WHERE run_id=? AND ((status='open' AND fill_ok=0) OR (status='closed' AND exit_ok=0))", (run["id"],))
+        if not rows:
+            return
+        b, _ = self.real_broker()
+        if b is None:
+            return
+        try:
+            fills = b.client.us_fills_today() if run["mkt"] == "us" else b.client.fills_today()
+        except Exception:
+            fills = None
+        for t in rows:
+            buying = t["status"] == "open"
+            no = str((t["buy_no"] if buying else t["sell_no"]) or "").split("|")[0].lstrip("0")
+            ts = datetime.fromisoformat(t["entry_ts"] if buying else t["exit_ts"])
+            age = (datetime.now() - ts).total_seconds()
+            f = (fills or {}).get(no) if no else None
+            if buying:
+                if f and f["qty"] > 0:
+                    if f["qty"] >= t["qty"] or age > 120:
+                        self.rt.db.x("UPDATE at_trades SET qty=?, entry_price=?, high=?, low=?, fill_ok=1 WHERE id=?",
+                                     (min(t["qty"], f["qty"]), f["price"], f["price"], f["price"], t["id"]))
+                        if f["qty"] < t["qty"]:
+                            self._cancel_rest(run, b, t, no)
+                elif age > 180:
+                    # 3분이 지나도 체결 내역이 없으면: 남은 주문을 취소하고 이 거래는 없던 것으로 한다
+                    self._cancel_rest(run, b, t, no)
+                    held = self._held_qty(run, b, t["sym"])
+                    if fills is not None and not held:
+                        self.rt.db.x("UPDATE at_trades SET status='cancelled', reason='체결 안 됨' WHERE id=?", (t["id"],))
+                        self.log(run["id"], "skip", f"{t['name']} 매수 주문이 체결되지 않아 취소했어요")
+                    elif held:
+                        self.rt.db.x("UPDATE at_trades SET qty=?, fill_ok=1 WHERE id=?", (min(t["qty"], held), t["id"]))
+                    elif age > 900:  # 체결 조회가 계속 안 되고 잔고에도 없음
+                        self.rt.db.x("UPDATE at_trades SET status='cancelled', reason='체결 확인 실패' WHERE id=?", (t["id"],))
+                        self.log(run["id"], "skip", f"{t['name']} 매수 체결을 확인하지 못해 기록에서 뺐어요. 키움 앱에서 잔고를 확인해 주세요")
+                        self.rt.notify(f"[moa 자동매매] {t['name']} 매수 체결 확인 실패. 키움 잔고를 확인해 주세요")
+            else:
+                if f and f["qty"] > 0:
+                    pnl, fees = self._fees(run["mkt"], t["entry_price"], f["price"], t["qty"])
+                    cost = t["entry_price"] * t["qty"]
+                    self.rt.db.x("UPDATE at_trades SET exit_price=?, pnl=?, pnl_pct=?, fees=?, exit_ok=1 WHERE id=?",
+                                 (f["price"], pnl, round(pnl / cost * 100, 3) if cost else 0, fees, t["id"]))
+                elif age > 6 * 3600:
+                    self.rt.db.x("UPDATE at_trades SET exit_ok=1 WHERE id=?", (t["id"],))  # 예상가로 확정
+
+    def _held_qty(self, run, b, sym):
+        try:
+            rows = b.client.us_holdings() if run["mkt"] == "us" else b.positions()
+            return next((int(h.get("qty") or 0) for h in rows if str(h["code"]).upper() == sym), 0)
+        except Exception:
+            return 0
+
+    def _cancel_rest(self, run, b, t, no):
+        if not no:
+            return
+        try:
+            if run["mkt"] == "us":
+                b.client.us_cancel(no, t["sym"], t["exch"] or None)
+            else:
+                b.cancel(no, t["sym"])
+        except Exception:
+            pass
+
+    # ----- 새 매수: 조건이 되면 AI 추천을 받는다
+    def _today_closed(self, run):
+        return self.rt.db.q("SELECT pnl, exit_ts FROM at_trades WHERE run_id=? AND status='closed' AND exit_day=? ORDER BY exit_ts, id",
+                            (run["id"], AP.mkt_date(run["mkt"])))
+
+    def gate(self, run):
+        """지금 새로 사도 되는지. (허용, 사유)"""
+        p, mkt = run["params"], run["mkt"]
+        ss = self._session(mkt)
+        if not ss["open"]:
+            return False, "장이 열려 있지 않아요"
+        if AP.mkt_date(mkt) > run["end_date"]:
+            return False, "기간이 끝났어요"
+        hm = self._local(mkt).strftime("%H:%M")
+        if not (p["entry_start"] <= hm <= p["entry_end"]):
+            return False, f"매수 시간({p['entry_start']}~{p['entry_end']})이 아니에요"
+        opens = self._open(run["id"])
+        if len(opens) >= p["max_positions"]:
+            return False, "보유 종목 수가 꽉 찼어요"
+        closed = self._today_closed(run)
+        day_pnl = sum(c["pnl"] or 0 for c in closed) + sum(t["qty"] * ((t["last"] or t["entry_price"]) - t["entry_price"]) for t in opens)
+        if day_pnl <= -run["budget"] * p["daily_loss_pct"] / 100:
+            return False, f"하루 손실 한도(-{p['daily_loss_pct']:g}%)에 닿아 오늘은 새로 사지 않아요"
+        k = int(p["loss_streak"])
+        if k and len(closed) >= k and all((c["pnl"] or 0) < 0 for c in closed[-k:]):
+            return False, f"오늘 연속 {k}번 손절이라 새로 사지 않아요"
+        cycles = self.rt.db.q("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' AND day=?", (run["id"], AP.mkt_date(mkt)))
+        if len(cycles) >= p["cycles_per_day"]:
+            return False, "오늘 추천 횟수를 다 썼어요"
+        if time.time() - (run["last_cycle"] or 0) < p["cycle_gap_min"] * 60:
+            return False, "다음 추천 시간을 기다리는 중이에요"
+        m = self.money(run)
+        price_floor = 1000 if mkt == "kr" else 2
+        if m["cash"] < price_floor:
+            return False, "남은 현금이 없어요"
+        usd = sum(float((json.loads(c["data"]) if c["data"] else {}).get("usd") or 0) for c in cycles)
+        if usd >= float(p.get("ai_daily_usd") or 1):
+            return False, "오늘 AI 추천 비용 한도를 다 썼어요"
+        if not self.rt.ai.configured():
+            return False, "AI 키가 없어요"
+        c = self.rt.ai.conf()
+        if c.get("budget_usd") and self.rt.ai.month_usd()[0] >= float(c["budget_usd"]):
+            return False, "이번 달 AI 예산을 다 썼어요"
+        return True, ""
+
+    def _maybe_cycle(self, run):
+        th = self._busy.get(run["id"])
+        if th is not None and th.is_alive():
+            return
+        ok, why = self.gate(run)
+        if not ok:
+            if "한도" in why or "연속" in why:
+                self._note_once(run, why)
+            return
+        self.rt.db.x("UPDATE at_runs SET last_cycle=? WHERE id=?", (time.time(), run["id"]))
+        th = threading.Thread(target=self._cycle, args=(run["id"],), name=f"moa-auto-{run['id']}", daemon=True)
+        self._busy[run["id"]] = th
+        th.start()
+
+    def _ask_ai(self, run):
+        """AI 추천을 끝까지 받아 결과만 돌려준다(스트리밍을 서버에서 소비)."""
+        res, err, done = None, None, {}
+        d = {"mkt": run["mkt"], "horizon": run["style"], "model": run["model"], "web_search": bool(run["params"].get("web_search", True))}
+        for ev in self.rt.ai.stream("pick", d):
+            t = ev.get("t")
+            if t == "picks":
+                res = ev
+            elif t == "error":
+                err = ev.get("msg")
+            elif t == "done":
+                done = ev
+        return res, err, done
+
+    def _cycle(self, rid):
+        try:
+            run = self._run(rid)
+            res, err, done = self._ask_ai(run)
+            with self.rt._lock:
+                run = self._run(rid)
+                if err or not res:
+                    self.log(rid, "cycle", f"추천을 받지 못했어요: {err or '결과 없음'}")
+                    return
+                self._enter(run, res, done)
+        except Exception as e:
+            try:
+                self.log(rid, "cycle", f"추천 처리 중 오류: {type(e).__name__}: {e}")
+            except Exception:
+                pass
+
+    def _enter(self, run, res, done=None):
+        """추천 결과를 플랜 조건으로 걸러 매수한다. 판단은 모두 기록한다."""
+        p, mkt, rid = run["params"], run["mkt"], run["id"]
+        picks = res.get("picks") or []
+        decisions, bought = [], 0
+        head = {"pick_id": res.get("id"), "stance": res.get("stance"), "view": res.get("view"), "usd": (done or {}).get("usd")}
+        if run["status"] != "running":
+            self.log(rid, "cycle", "추천은 받았지만 멈춘 상태라 사지 않았어요", head)
+            return 0
+        if p.get("skip_watch") and res.get("stance") == "관망":
+            self.log(rid, "cycle", f"AI가 관망을 권해 쉬어요 · {res.get('view') or ''}"[:200], dict(head, picks=[{"sym": x.get("sym"), "name": x.get("name")} for x in picks]))
+            return 0
+        n_closed = self.rt.db.one("SELECT COUNT(*) n FROM at_trades WHERE run_id=? AND status='closed'", (rid,))["n"]
+        mult = float(p.get("warmup_mult") or 1) if n_closed < int(p.get("warmup_trades") or 0) else 1.0
+        today = AP.mkt_date(mkt)
+        fee = AP.FEE[mkt]
+        for x in picks:
+            name, sym = x.get("name") or x.get("sym"), str(x.get("sym") or "").upper()
+            dec = {"sym": sym, "name": name, "score": x.get("score"), "win_prob": x.get("win_prob"), "cal_prob": x.get("cal_prob")}
+            decisions.append(dec)
+
+            def skip(why):
+                dec.update(act="skip", why=why)
+            opens = self._open(rid)
+            if len(opens) >= p["max_positions"]:
+                skip("보유 종목 수가 꽉 참")
+                continue
+            if x.get("auto"):
+                skip("AI가 아니라 앱이 지표로 고른 예비 종목")
+                continue
+            wp = x.get("cal_prob") if x.get("cal_prob") is not None and (x.get("cal_n") or 0) >= 10 else x.get("win_prob")
+            if (wp or 0) < p["min_win_prob"]:
+                skip(f"승률 {wp or 0:g}% < 기준 {p['min_win_prob']:g}%")
+                continue
+            if (x.get("score") or 0) < p["min_score"]:
+                skip(f"점수 {x.get('score') or 0:g} < 기준 {p['min_score']:g}")
+                continue
+            tp, sl = min(float(x.get("target_pct") or 0), p["tp_cap"]), min(float(x.get("stop_pct") or 0), p["sl_cap"])
+            if tp <= 0 or sl <= 0 or tp / sl < p["min_rr"]:
+                skip(f"손익비 {tp / sl if sl else 0:.2f} < 기준 {p['min_rr']:g}")
+                continue
+            if tp < fee * 3:
+                skip(f"목표 {tp:g}%가 비용({fee:g}%)의 3배보다 작음")
+                continue
+            if self.rt.db.one("SELECT 1 x FROM at_trades WHERE run_id=? AND sym=? AND (status='open' OR entry_day=?) AND status!='cancelled'", (rid, sym, today)):
+                skip("오늘 이미 거래했거나 보유 중")
+                continue
+            q = self._quote(mkt, sym)
+            price = q.get("price")
+            if not price:
+                skip("시세를 받지 못함")
+                continue
+            ref = float(x.get("entry_price") or 0)
+            if ref and price > ref * (1 + p["chase_pct"] / 100):
+                skip(f"추천가보다 {((price / ref) - 1) * 100:.2f}% 올라 쫓아가지 않음")
+                continue
+            m = self.money(run)
+            alloc = min(m["base"] * p["per_trade_pct"] / 100 * mult, m["cash"])
+            buy_px = C.buy_fill(price, self.rt.settings.get("costs")) if mkt == "kr" else round(price * (1 + US_SLIP), 4)
+            qty = int(alloc // (buy_px * 1.002))
+            if qty < 1:
+                skip(f"배정 금액({alloc:,.0f})으로 1주를 못 삼")
+                continue
+            try:
+                tid = self._buy(run, x, sym, name, q, qty, price, buy_px, tp, sl, res)
+            except Exception as e:
+                skip(f"매수 실패: {e}")
+                continue
+            bought += 1
+            dec.update(act="buy", qty=qty, price=buy_px, target_pct=tp, stop_pct=sl, trade=tid)
+        self.log(rid, "cycle", f"추천 {len(picks)}종목 중 {bought}종목 매수" + (f" · {res.get('view')}" if res.get("view") else ""),
+                 dict(head, mult=mult, decisions=decisions))
+        return bought
+
+    def _buy(self, run, x, sym, name, q, qty, price, buy_px, tp, sl, res):
+        mkt, now = run["mkt"], datetime.now()
+        exch, buy_no, fill_ok = q.get("exch") or x.get("exch") or "", "", 1
+        if run["mode"] == "real":
+            b, why = self.real_broker()
+            if b is None:
+                raise RuntimeError(why)
+            need = price * qty * 1.003
+            try:
+                have = b.client.us_cash()["usd_orderable"] if mkt == "us" else b.cash()
+            except Exception:
+                have = None  # 조회가 안 되면 주문을 넣어 보고 증권사 판단에 맡긴다
+            if have is not None and have < need:
+                raise RuntimeError(f"계좌의 주문 가능 금액({have:,.0f})이 모자라요")
+            if mkt == "us":
+                limit = round(price * 1.003, 2)  # 시장가 대신 조금 위 지정가(체결가 상한)
+                no, exch = b.client.us_order("buy", sym, qty, limit, exch or None)
+                buy_no = f"{no}|{exch}"
+            else:
+                buy_no = b.buy(sym, qty, None).get("broker_no", "")
+            self.rt.db.x("INSERT INTO orders(ts,engine,mode,code,name,side,qty,price,status,fill_price,broker_no,msg) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                         (now.isoformat(timespec="seconds"), "scalp", b.mode, sym, name, "buy", qty, None, "accepted", price, buy_no, "AI 자동매매 매수"))
+            fill_ok, buy_px = 0, price
+        style = run["style"]
+        exit_by, exit_date = "", ""
+        if style == "day":
+            eb = str(x.get("exit_by") or "")[:5]
+            exit_by = eb if re.match(r"^\d\d:\d\d$", eb) else ""
+        else:
+            hold = int(min(max(float(x.get("hold_days") or AP.HORIZONS[style]["days"]), 1), AP.HORIZONS[style]["days"]))
+            exit_date = min(AP.swing_end(mkt, AP.kst_now().replace(tzinfo=None), hold)[1].isoformat(), run["end_date"])
+        why = {"reasons": x.get("reasons"), "risks": x.get("risks"), "catalyst": x.get("catalyst"), "theme": x.get("theme"),
+               "view": res.get("view"), "entry_type": x.get("entry_type"), "ref_price": x.get("entry_price"),
+               "ai_target": x.get("target_pct"), "ai_stop": x.get("stop_pct"), "change_pct": q.get("change_pct")}
+        tid = self.rt.db.x(
+            "INSERT INTO at_trades(run_id,ver,mkt,sym,name,exch,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,"
+            "trail_pct,exit_by,exit_date,high,low,last,pick_id,score,win_prob,cal_prob,stance,feat,why,buy_no,fill_ok) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (run["id"], run["ver"], mkt, sym, name, exch, qty, "open", now.isoformat(timespec="seconds"), AP.mkt_date(mkt),
+             self._local(mkt).strftime("%H:%M"), buy_px, tp, sl, abs(float(x.get("trail_pct") or 0)), exit_by, exit_date,
+             buy_px, buy_px, price, res.get("id"), x.get("score"), x.get("win_prob"), x.get("cal_prob"), res.get("stance"),
+             json.dumps(x.get("feat"), ensure_ascii=False, default=str), json.dumps(why, ensure_ascii=False, default=str), buy_no, fill_ok))
+        unit = "원" if mkt == "kr" else "달러"
+        self.log(run["id"], "buy", f"{name} {qty}주 매수 · {buy_px:,.{0 if mkt == 'kr' else 2}f}{unit} · 목표 +{tp:g}% / 손절 -{sl:g}%", {"trade": tid})
+        self.rt.notify(f"[moa 자동매매] {name} {qty}주 매수 · 목표 +{tp:g}% 손절 -{sl:g}%")
+        return tid
+
+    # ------------------------------------------------------------------ 분석
+    def stats(self, rid, rows=None):
+        run = self._run(rid)
+        rows = self._closed(rid) if rows is None else rows
+        out = {"all": _agg(rows)}
+        if not rows:
+            return out
+        eq, peak, mdd, curve = run["budget"], run["budget"], 0.0, []
+        for r in rows:
+            eq += r["pnl"] or 0
+            peak = max(peak, eq)
+            mdd = max(mdd, (peak - eq) / peak * 100 if peak else 0)
+            curve.append(round(eq, 2))
+        out["all"].update(mdd_pct=round(mdd, 2), mfe_med=_median([r["mfe_pct"] for r in rows]), mae_med=_median([r["mae_pct"] for r in rows]),
+                          hold_med=_median([r["hold_min"] for r in rows]),
+                          fees=round(sum(r["fees"] or 0 for r in rows), 2))
+        out["curve"] = curve
+
+        def group(label, fn):
+            g = {}
+            for r in rows:
+                try:
+                    k = fn(r)
+                except Exception:
+                    k = None
+                if k is not None:
+                    g.setdefault(k, []).append(r)
+            return {"label": label, "rows": [dict(_agg(v), key=k) for k, v in g.items()]}
+
+        def wp(r):
+            v = r["cal_prob"] if r["cal_prob"] is not None else r["win_prob"]
+            return None if v is None else "55% 미만" if v < 55 else "55~65%" if v < 65 else "65% 이상"
+
+        def tod(r):
+            return "장 초반(~10시)" if r["entry_hm"] < "10:00" else "오전(10~12시)" if r["entry_hm"] < "12:00" else "오후(12시~)"
+
+        def score(r):
+            return None if r["score"] is None else "70 미만" if r["score"] < 70 else "70~80" if r["score"] < 80 else "80 이상"
+        out["groups"] = [group("파는 사유", lambda r: r["reason"]), group("AI 승률", wp), group("AI 점수", score),
+                         group("산 시간", tod), group("AI 분위기", lambda r: r["stance"] or None),
+                         group("플랜 판", lambda r: f"{r['ver']}판")]
+        return out
+
+    def _since_ver(self, run):
+        """지금 플랜 판으로 한 거래만(없으면 전체)."""
+        rows = self._closed(run["id"])
+        cur = [r for r in rows if r["ver"] == run["ver"]]
+        return cur if len(cur) >= 10 else rows
+
+    def rule_changes(self, run, rows):
+        """조건별 성적으로 고칠 값을 찾는다. 반환: [{key, from, to, why}]"""
+        p, out = run["params"], []
+        n = len(rows)
+        if n < 10:
+            return out
+        a = _agg(rows)
+
+        def add(key, to, why):
+            try:
+                to = _clamp_key(key, to)
+            except Exception:
+                return
+            if to != p.get(key) and not any(c["key"] == key for c in out):
+                out.append({"key": key, "label": PLAN_KEYS[key][3], "from": p.get(key), "to": to, "why": why})
+
+        # 1) 승률 기준: 낮은 승률대가 손실이고 높은 쪽이 이익이면 기준을 올린다
+        for step in (5, 10):
+            t = p["min_win_prob"] + step
+            lo = [r for r in rows if (r["cal_prob"] if r["cal_prob"] is not None else r["win_prob"] or 0) < t]
+            hi = [r for r in rows if (r["cal_prob"] if r["cal_prob"] is not None else r["win_prob"] or 0) >= t]
+            if len(lo) >= 8 and len(hi) >= 8:
+                al, ah = _agg(lo), _agg(hi)
+                if al["avg_pct"] < 0 < ah["avg_pct"]:
+                    add("min_win_prob", t, f"승률 {t:g}% 미만 {al['n']}건은 평균 {al['avg_pct']:+.2f}%, 이상 {ah['n']}건은 {ah['avg_pct']:+.2f}%")
+                    break
+        # 2) 점수 기준
+        t = p["min_score"] + 10
+        lo, hi = [r for r in rows if (r["score"] or 0) < t], [r for r in rows if (r["score"] or 0) >= t]
+        if len(lo) >= 8 and len(hi) >= 8 and _agg(lo)["avg_pct"] < 0 < _agg(hi)["avg_pct"]:
+            add("min_score", t, f"점수 {t:g} 미만 {len(lo)}건은 평균 {_agg(lo)['avg_pct']:+.2f}%, 이상 {len(hi)}건은 {_agg(hi)['avg_pct']:+.2f}%")
+        # 3) 산 시간: 장 초반·오후 끝이 손실이면 그 시간대를 뺀다
+        early = [r for r in rows if r["entry_hm"] < "10:00"]
+        rest = [r for r in rows if r["entry_hm"] >= "10:00"]
+        if len(early) >= 8 and len(rest) >= 8 and _agg(early)["avg_pct"] < 0 < _agg(rest)["avg_pct"] and p["entry_start"] < "10:00":
+            add("entry_start", "10:00", f"10시 전에 산 {len(early)}건은 평균 {_agg(early)['avg_pct']:+.2f}%, 그 뒤 {len(rest)}건은 {_agg(rest)['avg_pct']:+.2f}%")
+        late = [r for r in rows if r["entry_hm"] >= "13:30"]
+        rest = [r for r in rows if r["entry_hm"] < "13:30"]
+        if run["style"] == "day" and len(late) >= 8 and len(rest) >= 8 and _agg(late)["avg_pct"] < 0 < _agg(rest)["avg_pct"] and p["entry_end"] > "13:30":
+            add("entry_end", "13:30", f"13시 30분 뒤에 산 {len(late)}건은 평균 {_agg(late)['avg_pct']:+.2f}%, 그 전 {len(rest)}건은 {_agg(rest)['avg_pct']:+.2f}%")
+        # 4) 익절 폭: 목표에 거의 못 닿고 오르다 마는 경우 목표를 실제 오름폭에 맞춘다
+        tp_hit = sum(1 for r in rows if r["reason"] == "익절") / n
+        mfe70 = _pctile([r["mfe_pct"] for r in rows], 0.7)
+        if tp_hit < 0.15 and mfe70 is not None and 0 < mfe70 < p["tp_cap"] * 0.7:
+            to = max(round(mfe70, 1), round(p["sl_cap"] * 1.2, 1), AP.FEE[run["mkt"]] * 4)
+            if to < p["tp_cap"]:
+                add("tp_cap", to, f"익절까지 간 거래가 {tp_hit * 100:.0f}%뿐이고, 보유 중 최고 오름폭은 10건 중 7건이 +{mfe70:.1f}% 이하")
+                if to / p["sl_cap"] < p["min_rr"]:
+                    add("min_rr", max(1.0, round(to / p["sl_cap"], 1)), "익절 상한을 낮추면서 손익비 기준도 함께 맞춤")
+        # 5) 비중: 충분한 표본에서 꾸준히 벌면 조금 늘리고, 잃고 있으면 줄인다
+        st = self.stats(run["id"], rows)["all"]
+        cap = {"day": 40.0, "swing": 30.0, "month": 25.0}[run["style"]]
+        if n >= 30 and (a["pf"] or 0) >= 1.3 and a["avg_pct"] > 0 and st["mdd_pct"] < p["total_loss_pct"] / 2 and p["per_trade_pct"] < cap:
+            add("per_trade_pct", min(cap, p["per_trade_pct"] + 5),
+                f"{n}건에서 손익비율(PF) {a['pf']:g}, 최대 낙폭 {st['mdd_pct']:.1f}%로 안정적이라 비중을 조금 늘림")
+        elif n >= 20 and a["pf"] is not None and a["pf"] < 0.8 and p["per_trade_pct"] > 5:
+            add("per_trade_pct", max(5, round(p["per_trade_pct"] / 2, 1)),
+                f"{n}건 평균 {a['avg_pct']:+.2f}%, 손익비율(PF) {a['pf']:g}로 잃는 구간이라 비중을 절반으로 줄임")
+        return out
+
+    def review(self, rid, auto=False):
+        """규칙 기반 분석 → 개선안(승인 대기). 바꿀 것이 없어도 분석 결과는 남긴다."""
+        run = self._run(rid)
+        rows = self._since_ver(run)
+        if len(rows) < 10:
+            raise ValueError(f"끝난 거래가 10건은 있어야 분석할 수 있어요(지금 {len(rows)}건)")
+        ch = self.rule_changes(run, rows)
+        a = _agg(rows)
+        small = len(rows) < int(run["params"].get("review_every") or 30)
+        summary = (f"{a['n']}건 · 승률 {a['win_rate']:g}% · 평균 {a['avg_pct']:+.2f}% · " +
+                   (f"고칠 값 {len(ch)}개" if ch else "지금 값 유지")) + (" · 표본이 적어 참고용" if small and not auto else "")
+        return self._save_proposal(run, "rule", summary, ch, {"all": a, "small": small})
+
+    def _save_proposal(self, run, source, summary, changes, stats=None, text=None):
+        # 같은 출처의 승인 대기 개선안은 새것으로 바꾼다
+        self.rt.db.x("UPDATE at_proposals SET status='replaced', decided_at=? WHERE run_id=? AND source=? AND status='pending'",
+                     (self._now(), run["id"], source))
+        pid = self.rt.db.x("INSERT INTO at_proposals(run_id,ts,source,status,summary,changes,stats,text) VALUES(?,?,?,?,?,?,?,?)",
+                           (run["id"], self._now(), source, "pending" if changes else "none", summary[:300],
+                            json.dumps(changes, ensure_ascii=False), json.dumps(stats, ensure_ascii=False, default=str) if stats else None, text))
+        self.log(run["id"], "review", f"{'AI' if source == 'ai' else '자동'} 분석 · {summary}"[:300], {"proposal": pid})
+        return self._proposal(pid)
+
+    def _proposal(self, pid):
+        r = self.rt.db.one("SELECT * FROM at_proposals WHERE id=?", (pid,))
+        if not r:
+            raise ValueError("개선안을 찾지 못했어요")
+        r["changes"] = json.loads(r["changes"] or "[]")
+        r["stats"] = json.loads(r["stats"]) if r["stats"] else None
+        return r
+
+    def decide(self, pid, action, keys=None):
+        """개선안 승인(반영) 또는 거절. keys를 주면 그 항목만 반영한다."""
+        pr = self._proposal(pid)
+        if pr["status"] != "pending":
+            raise ValueError("이미 처리한 개선안이에요")
+        run = self._run(pr["run_id"])
+        if action == "reject":
+            self.rt.db.x("UPDATE at_proposals SET status='rejected', decided_at=? WHERE id=?", (self._now(), pid))
+            self.log(run["id"], "review", "개선안을 반영하지 않기로 했어요", {"proposal": pid})
+            return self.detail(run["id"])
+        if action != "apply":
+            raise ValueError("알 수 없는 동작이에요")
+        if run["status"] == "ended":
+            raise ValueError("끝난 자동매매에는 반영할 수 없어요")
+        p, applied = copy.deepcopy(run["params"]), []
+        for c in pr["changes"]:
+            if c["key"] not in PLAN_KEYS or (keys is not None and c["key"] not in keys):
+                continue
+            to = _clamp_key(c["key"], c["to"])
+            if to == p.get(c["key"]):
+                continue
+            applied.append({"key": c["key"], "label": PLAN_KEYS[c["key"]][3], "from": p.get(c["key"]), "to": to, "why": c.get("why", "")})
+            p[c["key"]] = to
+        if not applied:
+            raise ValueError("반영할 항목이 없어요")
+        if p["entry_start"] >= p["entry_end"]:
+            raise ValueError("매수 시작 시각이 끝 시각보다 늦어요")
+        ver = run["ver"] + 1
+        self.rt.db.x("UPDATE at_runs SET params=?, ver=? WHERE id=?", (json.dumps(p, ensure_ascii=False), ver, run["id"]))
+        self.rt.db.x("UPDATE at_proposals SET status='applied', decided_at=? WHERE id=?", (self._now(), pid))
+        self.rt.db.x("INSERT INTO at_changes(run_id,ts,ver,source,changes,stats) VALUES(?,?,?,?,?,?)",
+                     (run["id"], self._now(), ver, pr["source"], json.dumps(applied, ensure_ascii=False),
+                      json.dumps(pr["stats"], ensure_ascii=False) if pr["stats"] else None))
+        self.log(run["id"], "review", f"개선안 {len(applied)}건을 반영했어요 · 플랜 {ver}판", {"proposal": pid, "changes": applied})
+        return self.detail(run["id"])
+
+    def edit(self, rid, patch):
+        """사용자가 플랜 값을 직접 고친다(판이 하나 올라가고 이력에 남는다)."""
+        run = self._run(rid)
+        if run["status"] == "ended":
+            raise ValueError("끝난 자동매매는 고칠 수 없어요")
+        p, applied = copy.deepcopy(run["params"]), []
+        for k, v in (patch or {}).items():
+            if k not in PLAN_KEYS or v in (None, ""):
+                continue
+            to = _clamp_key(k, v)
+            if to != p.get(k):
+                applied.append({"key": k, "label": PLAN_KEYS[k][3], "from": p.get(k), "to": to, "why": "직접 고침"})
+                p[k] = to
+        if not applied:
+            return self.detail(rid)
+        if p["entry_start"] >= p["entry_end"]:
+            raise ValueError("매수 시작 시각이 끝 시각보다 늦어요")
+        ver = run["ver"] + 1
+        self.rt.db.x("UPDATE at_runs SET params=?, ver=? WHERE id=?", (json.dumps(p, ensure_ascii=False), ver, rid))
+        self.rt.db.x("INSERT INTO at_changes(run_id,ts,ver,source,changes,stats) VALUES(?,?,?,?,?,?)",
+                     (rid, self._now(), ver, "user", json.dumps(applied, ensure_ascii=False), None))
+        self.log(rid, "review", f"플랜 값 {len(applied)}개를 직접 고쳤어요 · 플랜 {ver}판", {"changes": applied})
+        return self.detail(rid)
+
+    # ----- AI 복기(Claude가 기록을 읽고 개선안을 낸다)
+    def review_context(self, d):
+        run = self._run(int(d.get("run_id") or 0))
+        rows = self._closed(run["id"])
+        if len(rows) < 5:
+            raise ValueError(f"끝난 거래가 5건은 있어야 AI가 복기할 수 있어요(지금 {len(rows)}건)")
+        st = self.stats(run["id"], rows)
+        st.pop("curve", None)
+        trades = []
+        for r in rows[-60:]:
+            why = json.loads(r["why"] or "{}")
+            trades.append({"종목": r["name"], "산 날": r["entry_day"], "산 시각": r["entry_hm"], "판": r["ver"], "수익률%": r["pnl_pct"],
+                           "사유": r["reason"], "목표%": r["target_pct"], "손절%": r["stop_pct"], "보유 중 최고%": r["mfe_pct"],
+                           "보유 중 최저%": r["mae_pct"], "보유(분)": r["hold_min"], "AI승률": r["win_prob"], "보정승률": r["cal_prob"],
+                           "점수": r["score"], "분위기": r["stance"], "근거": (why.get("reasons") or [])[:2]})
+        skips = self.rt.db.q("SELECT ts, msg FROM at_log WHERE run_id=? AND kind IN ('cycle','skip','risk') ORDER BY id DESC LIMIT 25", (run["id"],))
+        keys = {k: {"설명": v[3], "범위": "참/거짓" if v[2] is bool else "HH:MM" if v[2] == "hm" else f"{v[0]}~{v[1]}", "지금": run["params"].get(k)}
+                for k, v in PLAN_KEYS.items()}
+        ask = (f"내 AI 자동매매({run['name']}, {'국내' if run['mkt'] == 'kr' else '미국'} {STYLES[run['style']]['label']}, "
+               f"{'실전' if run['mode'] == 'real' else '모의'})의 매매 기록을 복기해 줘.\n"
+               "1) 먼저 한국어로 짧게: 첫 줄에 결론, 이어서 '- ' 항목으로 잘된 점, 손실 원인(종목 선정·산 시간·목표와 손절 폭·비중), 눈에 띄는 패턴.\n"
+               "2) 그다음 플랜에서 바꿀 값을 제안해. 표본이 8건 미만인 조건만 보고 바꾸지 마. 근거가 약하면 changes를 비워. 한 번에 최대 3개.\n"
+               "3) 마지막에 아래 JSON 하나를 ```json 코드 블록으로. key는 '바꿀 수 있는 값'에 있는 것만, to는 범위 안에서.\n"
+               '{"summary":"한 줄 요약","changes":[{"key":"min_win_prob","to":60,"why":"숫자를 넣은 근거 한 줄"}]}\n'
+               "수익을 장담하는 말은 하지 마. 웹 검색은 하지 마.")
+        data = {"기준시각": self._now(), "운용": {"쓸 돈": run["budget"], "통화": "원" if run["mkt"] == "kr" else "달러", "기간": f"{run['start_date']}~{run['end_date']}",
+                                             "플랜 판": run["ver"], "지금 돈": self.money(run)},
+                "성적": st, "바꿀 수 있는 값": keys, "끝난 거래(최근 60건)": trades, "최근 판단 기록": skips,
+                "플랜 변경 이력": self.changes(run["id"])}
+        return f"자동매매 복기 · {run['name']}", ask, data
+
+    def save_review(self, text, d, model, usd):
+        """AI 복기 답에서 개선안을 읽어 승인 대기로 남긴다."""
+        run = self._run(int(d.get("run_id") or 0))
+        m = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
+        j = {}
+        if m:
+            try:
+                j = json.loads(m[-1])
+            except ValueError:
+                j = {}
+        changes = []
+        for c in (j.get("changes") or [])[:3]:
+            key = c.get("key") if isinstance(c, dict) else None
+            if key not in PLAN_KEYS or any(x["key"] == key for x in changes):
+                continue
+            try:
+                to = _clamp_key(key, c.get("to"))
+            except Exception:
+                continue
+            if to != run["params"].get(key):
+                changes.append({"key": key, "label": PLAN_KEYS[key][3], "from": run["params"].get(key), "to": to, "why": str(c.get("why") or "")[:200]})
+        body = text.split("```json")[0].strip()
+        summary = str(j.get("summary") or "").strip() or (body.splitlines()[0] if body else "AI 복기")
+        return self._save_proposal(run, "ai", summary, changes, {"model": model, "usd": usd}, body[:6000])
+
+    def _ai_review_bg(self, rid):
+        try:
+            for _ in self.rt.ai.stream("auto", {"run_id": rid}):
+                pass
+        except Exception as e:
+            self.rt.db.log("system", "error", f"자동매매 AI 복기 오류: {e}", self._now())
+
+    # ------------------------------------------------------------------ 화면용
+    def changes(self, rid):
+        rows = self.rt.db.q("SELECT ts, ver, source, changes FROM at_changes WHERE run_id=? ORDER BY id", (rid,))
+        for r in rows:
+            r["changes"] = json.loads(r["changes"] or "[]")
+        return rows
+
+    def _summary(self, run, live=False):
+        m = self.money(run, live=live)
+        n = self.rt.db.one("SELECT COUNT(*) n, COALESCE(SUM(pnl>0),0) w FROM at_trades WHERE run_id=? AND status='closed'", (run["id"],))
+        pend = self.rt.db.one("SELECT COUNT(*) n FROM at_proposals WHERE run_id=? AND status='pending'", (run["id"],))["n"]
+        return {k: run[k] for k in ("id", "name", "mode", "mkt", "style", "model", "budget", "start_date", "end_date", "status",
+                                    "status_msg", "ver", "created_at", "ended_at")} | {
+            "money": m, "closed": n["n"], "wins": int(n["w"] or 0), "open": len(self._open(run["id"])), "pending": pend,
+            "style_label": STYLES[run["style"]]["label"]}
+
+    def overview(self):
+        from .ai import MODELS
+        c = self.rt.ai.conf()
+        return {"ready": self.ready(), "runs": [self._summary(r) for r in self._runs()][:30],
+                "models": [{"id": k, "label": v[0]} for k, v in MODELS.items()], "default_model": c.get("model") or "claude-sonnet-5-5",
+                "styles": [{"id": k, **v} for k, v in STYLES.items()], "min_budget": MIN_BUDGET,
+                "sessions": {"kr": self._session("kr"), "us": self._session("us")}}
+
+    def detail(self, rid):
+        run = self._run(rid)
+        opens = self._open(rid)
+        for t in opens:
+            px = self._quote(t["mkt"], t["sym"]).get("price") or t["last"] or t["entry_price"]
+            t["last"] = px
+            t["pnl_pct"] = round((px / t["entry_price"] - 1) * 100, 2)
+            t["pnl"] = round((px - t["entry_price"]) * t["qty"], 2)
+            t["why"] = json.loads(t["why"] or "{}")
+            t.pop("feat", None)
+        closed = self._closed(rid)
+        recent = [dict(r, why=json.loads(r["why"] or "{}"), feat=None) for r in closed[-60:]][::-1]
+        st = self.stats(rid, closed)
+        log = self.rt.db.q("SELECT id, ts, kind, msg, data FROM at_log WHERE run_id=? ORDER BY id DESC LIMIT 60", (rid,))
+        for x in log:
+            x["data"] = json.loads(x["data"]) if x["data"] else None
+        props = self.rt.db.q("SELECT id FROM at_proposals WHERE run_id=? AND status IN ('pending','applied','rejected','none') ORDER BY id DESC LIMIT 12", (rid,))
+        ok, why = (False, "") if run["status"] != "running" else self.gate(run)
+        th = self._busy.get(rid)
+        s = self._summary(run)
+        m = s["money"]  # 보유 평가는 방금 받은 시세로 다시 계산
+        m["open_value"] = round(sum(t["qty"] * t["last"] for t in opens), 2)
+        m["unrealized"] = round(m["open_value"] - m["open_cost"], 2)
+        m["equity"] = round(m["cash"] + m["open_value"], 2)
+        m["ret_pct"] = round(m["equity"] / run["budget"] * 100 - 100, 2)
+        b = self.real_broker()[0] if run["mode"] == "real" else None
+        return {"run": s, "params": run["params"], "plan": plan_text(run), "open": opens, "closed": recent, "stats": st,
+                "equity": self.rt.db.q("SELECT day, equity FROM at_equity WHERE run_id=? ORDER BY day", (rid,)),
+                "log": log, "proposals": [self._proposal(x["id"]) for x in props], "changes": self.changes(rid),
+                "next": {"ok": ok, "why": why, "busy": bool(th and th.is_alive())},
+                "broker": getattr(b, "label", None), "session": self._session(run["mkt"]),
+                "keys": {k: v[3] for k, v in PLAN_KEYS.items()}}
+
+    def export_csv(self, rid):
+        """매매 기록 전체를 CSV로(엑셀에서 바로 열리게 BOM 포함)."""
+        self._run(rid)
+        rows = self.rt.db.q("SELECT * FROM at_trades WHERE run_id=? ORDER BY id", (rid,))
+        cols = ["id", "ver", "mkt", "sym", "name", "qty", "status", "entry_ts", "entry_hm", "entry_price", "target_pct", "stop_pct", "trail_pct",
+                "exit_ts", "exit_price", "reason", "pnl", "pnl_pct", "fees", "mfe_pct", "mae_pct", "hold_min", "score", "win_prob",
+                "cal_prob", "stance", "pick_id", "feat", "why"]
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(cols)
+        for r in rows:
+            w.writerow([r.get(c) for c in cols])
+        return ("\ufeff" + buf.getvalue()).encode("utf-8")

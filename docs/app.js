@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.1732";
+const UI_VERSION = "261118.1805";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -505,7 +505,7 @@ const MENU = {
   home: { title: "홈", subs: [["summary", "요약"], ["activity", "최근 활동"]] },
   ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["analysis", "분석"], ["budget", "예산"], ["fixed", "고정비"], ["cards", "카드"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
-  invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["dca", "적립"], ["dividend", "배당"]], extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
+  invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["dca", "적립"], ["dividend", "배당"], ["auto", "자동매매"]], extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
   // 설정: 자주 바꾸는 것부터. 한 번만 맞추면 되는 서버 연결은 뒤로.
   settings: { title: "설정", subs: [["all", "전체"], ["theme", "화면"], ["ai", "AI"], ["accounts", "계좌"], ["trading", "주문·알림"], ["security", "보안"], ["backup", "백업"], ["connect", "서버"], ["app", "앱 정보"]] },
 };
@@ -1427,7 +1427,7 @@ pages.invest = {
     if (sub === "sweep") return this.sweep();
     if (sub === "stock") return mkt.detail(h);
     if (sub === "aistat") return this.aiStat();
-    investState.tab = ["home", "ai", "market", "discover", "account", "trade", "dca", "dividend"].includes(sub) ? sub : sub === "scalp" ? "ai" : "home";
+    investState.tab = ["home", "ai", "market", "discover", "account", "trade", "dca", "dividend", "auto"].includes(sub) ? sub : sub === "scalp" ? "ai" : "home";
     setTop("투자", { menu: "invest", sub: investState.tab });
     view.innerHTML = `<div id="iv" style="display:flex;flex-direction:column;gap:8.5px"></div>`;
     await this.fill();
@@ -1439,6 +1439,11 @@ pages.invest = {
     if (h.sub === "sweep") return this.sweepPoll();
     if (investState.tab === "ai") { this.apSess(); if (!this._apT || Date.now() - this._apT > 5000) { this._apT = Date.now(); this.apGuards(); } return; }
     if (investState.tab === "dividend") return;  // 입력 중인 화면이라 주기적으로 다시 그리지 않는다
+    if (investState.tab === "auto") {  // 자세히 보는 화면만 6초마다 새로(입력 화면·펼쳐 읽는 중에는 그대로)
+      const A = this.at;
+      if (A && typeof A.view === "number" && A.tab !== "plan" && !$("#atBody details[open]") && (!this._atT || Date.now() - this._atT > 6000)) { this._atT = Date.now(); await this.auto($("#iv")); }
+      return;
+    }
     if (investState.tab !== "dca") await this.fill();
   },
   async fill() {
@@ -1451,6 +1456,7 @@ pages.invest = {
     if (investState.tab === "account") return this.account(box);
     if (investState.tab === "trade") return this.trade(box);
     if (investState.tab === "dividend") return this.dividend(box);
+    if (investState.tab === "auto") return this.auto(box);
     if (investState.tab === "scalp") return this.scalp(box);
     return this.dca(box);
   },
@@ -1497,6 +1503,285 @@ pages.invest = {
     bindSeg(box, "정렬", (v) => { S.sort = v; this.homeRender(box, d); });
     $("#ihFind").onclick = () => mkt.search();
     fab("주문", () => orderSheet({}));
+  },
+
+  // ---------- AI 자동매매 ----------
+  AT_ST: { running: ["가동 중", "y"], paused: ["새 매수 멈춤", "g"], closing: ["정리 중", "warn"], ended: ["종료", ""] },
+  atM(mkt, v, sign) {  // 시장 통화로 금액 표시
+    if (v == null || isNaN(v)) return "-";
+    const s = sign && v > 0 ? "+" : "";
+    return mkt === "us" ? s + (v < 0 ? "-" : "") + "$" + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : s + won(v) + "원";
+  },
+  atState() {
+    return this.at || (this.at = { view: "list", tab: "now", form: { mode: "paper", mkt: "kr", style: "day", budget: "", days: 30, model: "", daily: "", total: "", confirm: "" }, d: null, pv: null });
+  },
+  async auto(box) {
+    const A = this.atState();
+    $(".fab")?.remove();
+    try {
+      if (A.view === "new") return await this.atNew(box);
+      if (A.view !== "list") return await this.atRun(box);
+      return await this.atList(box);
+    } catch (e) {
+      if (e instanceof Locked || e instanceof NeedConnect) throw e;
+      if (e.code === "old_server") return oldServerBox(box, () => this.auto(box));
+      box.innerHTML = `<div class="notice warn">${esc(e.message)}</div><button type="button" class="btn wide" id="atRetry">다시 시도</button>`;
+      $("#atRetry").onclick = () => { A.view = "list"; this.auto(box); };
+    }
+  },
+  atReadyHtml(R) {
+    const rows = [];
+    if (!R.ai) rows.push(`Claude API 키가 없어요. <a href="#settings/ai">AI 설정에서 넣기</a>`);
+    if (!R.data) rows.push(`실시간 순위를 받으려면 키움 계좌 연결이 필요해요. <a href="#settings/accounts">계좌 연결하기</a>`);
+    return rows.map((r) => `<div class="notice warn">${r}</div>`).join("");
+  },
+  atCard(r) {
+    const [lbl, cls] = this.AT_ST[r.status] || [r.status, ""], m = r.money;
+    return `<button type="button" class="card at-run" data-run="${r.id}">
+      <div class="at-run-top"><b>${esc(r.name)}</b><span class="tag ${cls}">${lbl}</span>${r.pending ? `<span class="tag warn">개선안 ${r.pending}</span>` : ""}</div>
+      <div class="at-run-mid"><span class="at-eq">${this.atM(r.mkt, m.equity)}</span><span class="at-ret ${tone(m.ret_pct)}">${pct(m.ret_pct, 2)}</span></div>
+      <div class="tiny">${r.mode === "real" ? "실전" : "모의"} · ${r.mkt === "us" ? "미국" : "국내"} ${esc(r.style_label)} · ${r.start_date.slice(5).replace("-", "/")}~${r.end_date.slice(5).replace("-", "/")} · 거래 ${r.closed}건${r.closed ? ` (승 ${r.wins})` : ""} · 보유 ${r.open}</div>
+    </button>`;
+  },
+  async atList(box) {
+    const A = this.atState(), O = (A.o = await GET("/api/auto"));
+    if (investState.tab !== "auto" || A.view !== "list") return;
+    const live = O.runs.filter((r) => r.status !== "ended"), done = O.runs.filter((r) => r.status === "ended");
+    box.innerHTML = `<section class="ap-hero">
+        <div class="ap-h1">AI 자동매매</div>
+        <div class="ap-h2">쓸 돈·시장·방식·엔진·기간만 정하면, AI가 플랜을 짜서 사고팔아요. 모든 매매를 기록하고, 쌓인 기록을 분석해 개선안을 내요. 개선안은 승인해야 반영돼요.</div>
+      </section>
+      ${this.atReadyHtml(O.ready)}
+      ${live.length ? `<div class="sec-title">돌고 있는 자동매매</div>${live.map((r) => this.atCard(r)).join("")}` : `<section class="card"><div class="empty">아직 돌고 있는 자동매매가 없어요.<br>모의로 먼저 돌려 기록을 쌓아 보는 걸 권해요.</div></section>`}
+      <button type="button" class="btn dark wide" id="atNewBtn">새 자동매매 만들기</button>
+      ${done.length ? `<div class="sec-title">끝난 자동매매</div>${done.map((r) => this.atCard(r)).join("")}` : ""}
+      <div class="tiny" style="padding:0 3px">자동매매는 수익을 보장하지 않아요. 손실 한도에 닿으면 스스로 멈추지만, 급변할 때는 한도보다 더 잃을 수 있어요.</div>`;
+    $("#atNewBtn").onclick = () => { A.view = "new"; A.pv = null; this.auto(box); };
+    box.onclick = (e) => { const b = e.target.closest("[data-run]"); if (b) { A.view = Number(b.dataset.run); A.tab = "now"; A.d = null; box.onclick = null; this.auto(box); } };
+  },
+
+  // ----- 새로 만들기
+  async atNew(box) {
+    const A = this.atState(), F = A.form;
+    const O = A.o || (A.o = await GET("/api/auto"));
+    if (!F.model) F.model = O.default_model;
+    const cur = () => (F.mkt === "us" ? "달러" : "원");
+    box.onclick = null;
+    box.innerHTML = `<section class="ap-hero">
+        <button type="button" class="at-back" id="atBack">‹ 목록</button>
+        <div class="ap-h1">새 자동매매</div>
+        <div class="ap-h2">다섯 가지만 정하면 플랜은 앱이 짜요. 아래에서 플랜을 확인한 뒤 시작해요.</div>
+        ${seg("모드", [["paper", "모의(가상 돈)"], ["real", "실전(실제 주문)"]], F.mode, "ap-mkt")}
+      </section>
+      ${this.atReadyHtml(O.ready)}
+      <div id="atRealNote"></div>
+      <section class="card">
+        <div class="card-head"><h2>어디서, 어떻게</h2></div>
+        <div class="field">시장${seg("시장", [["kr", "국내장"], ["us", "미국장"]], F.mkt, "on-card")}</div>
+        <div class="field">방식<div class="at-styles">${O.styles.map((s) => `<button type="button" class="ap-model" data-style="${s.id}" aria-pressed="${s.id === F.style}"><span class="ap-radio" aria-hidden="true"></span><span><b>${esc(s.label)}</b> <span class="tiny">${esc(s.sub)}</span></span></button>`).join("")}</div></div>
+        <div class="fields">
+          <label class="field"><span>쓸 돈(<span id="atCur">${cur()}</span>)</span><input id="atBudget" class="r" inputmode="decimal" autocomplete="off" placeholder="${F.mkt === "us" ? "3,000" : "3,000,000"}" value="${esc(F.budget)}"><span class="hint">이 금액 안에서만 사요</span></label>
+          <label class="field">기간(일)<input id="atDays" class="r" inputmode="numeric" autocomplete="off" value="${esc(F.days)}"><span class="hint">끝나는 날 모두 정리해요</span></label>
+        </div>
+        <div class="chips at-days">${[[7, "1주"], [14, "2주"], [30, "1달"], [90, "3달"]].map(([d, l]) => `<button type="button" class="chip" data-days="${d}" aria-pressed="${Number(F.days) === d}">${l}</button>`).join("")}</div>
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>엔진</h2><span class="tiny">종목을 고르는 Claude 모델</span></div>
+        <div class="ap-models">${O.models.map((x) => `<button type="button" class="ap-model" data-model="${esc(x.id)}" aria-pressed="${x.id === F.model}"><span class="ap-radio" aria-hidden="true"></span><span><b>${esc(x.label.split(" · ")[0])}</b> <span class="tiny">${esc(x.label.split(" · ")[1] || "")}</span></span></button>`).join("")}</div>
+      </section>
+      <div id="atPlan"></div>`;
+    const save = () => { F.budget = $("#atBudget").value; F.days = $("#atDays").value; };
+    const pressed = (sel, attr, v) => $$(sel, box).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset[attr] === String(v))));
+    let tm = 0;
+    const plan = (reset) => { clearTimeout(tm); if (reset) { F.daily = ""; F.total = ""; } tm = setTimeout(() => this.atPlan(), 350); };
+    const realNote = () => {
+      const R = O.ready.real;
+      $("#atRealNote").innerHTML = F.mode !== "real" ? "" : R.ok
+        ? `<div class="notice warn"><b>실전은 ${esc(R.label || "키움")} 계좌로 실제 주문이 나가요.</b> 모의로 충분히 돌려 본 뒤에 쓰는 걸 권해요.</div>`
+        : `<div class="notice warn">${esc(R.why)} <a href="#settings/accounts">계좌 설정</a></div>`;
+    };
+    realNote();
+    $("#atBack").onclick = () => { A.view = "list"; this.auto(box); };
+    bindSeg(box, "모드", (v) => { F.mode = v; realNote(); plan(); });
+    bindSeg(box, "시장", (v) => { F.mkt = v; F.budget = ""; $("#atBudget").value = ""; $("#atBudget").placeholder = v === "us" ? "3,000" : "3,000,000"; $("#atCur").textContent = cur(); plan(true); });
+    $("#atBudget").addEventListener("input", (e) => { const raw = e.target.value.replace(/[^\d.]/g, ""); const n = Number(raw); e.target.value = raw && !raw.endsWith(".") && n ? n.toLocaleString("en-US", { maximumFractionDigits: 2 }) : raw; save(); plan(true); });
+    $("#atDays").addEventListener("input", () => { save(); pressed("[data-days]", "days", F.days); plan(); });
+    box.onclick = (e) => {
+      const s = e.target.closest("[data-style]"), d = e.target.closest("[data-days]"), m = e.target.closest("[data-model]");
+      if (s) { F.style = s.dataset.style; pressed("[data-style]", "style", F.style); if (F.style !== "day" && Number(F.days) < 7) { F.days = 30; $("#atDays").value = 30; pressed("[data-days]", "days", 30); } plan(true); }
+      if (d) { F.days = Number(d.dataset.days); $("#atDays").value = F.days; pressed("[data-days]", "days", F.days); plan(); }
+      if (m) { F.model = m.dataset.model; pressed("[data-model]", "model", F.model); plan(); }
+    };
+    this.atPlan();
+  },
+  atBody() {
+    const F = this.at.form;
+    return { mode: F.mode, mkt: F.mkt, style: F.style, budget: num(F.budget), days: Number(F.days) || 0, model: F.model, daily_loss_pct: F.daily, total_loss_pct: F.total, confirm: F.confirm };
+  },
+  async atPlan() {
+    const A = this.at, F = A.form, el = $("#atPlan");
+    if (!el || A.view !== "new") return;
+    if (!num(F.budget)) { el.innerHTML = `<section class="card"><div class="empty">쓸 돈을 넣으면 플랜을 보여 드려요</div></section>`; return; }
+    let pv;
+    try { pv = A.pv = await api("POST", "/api/auto/plan", this.atBody()); }
+    catch (e) { if (e instanceof Locked || e instanceof NeedConnect) throw e; el.innerHTML = `<div class="notice warn">${esc(e.message)}</div>`; return; }
+    if (!$("#atPlan") || A.view !== "new") return;
+    const p = pv.params, c = pv.ai_cost, real = F.mode === "real", ok = A.o.ready.ai && A.o.ready.data && (!real || A.o.ready.real.ok);
+    F.daily = p.daily_loss_pct; F.total = p.total_loss_pct;
+    el.innerHTML = `<section class="card">
+        <div class="card-head"><h2>이 조건의 플랜</h2><span class="tiny">시작한 뒤에도 고칠 수 있어요</span></div>
+        <ol class="at-plan">${pv.plan.map((s) => `<li><b>${esc(s.t)}</b><span>${esc(s.d)}</span></li>`).join("")}</ol>
+        <div class="fields">
+          <label class="field">하루 손실 한도(%)<input id="atDaily" class="r" inputmode="decimal" value="${p.daily_loss_pct}"></label>
+          <label class="field">전체 손실 한도(%)<input id="atTotal" class="r" inputmode="decimal" value="${p.total_loss_pct}"></label>
+        </div>
+        <div class="tiny">AI 추천 비용: 한 번에 약 ${won(c.per_usd * (c.fx || 1400))}원, 하루 최대 약 ${won(c.day_usd * (c.fx || 1400))}원. 이번 달 AI 예산 $${c.budget_usd ?? "-"} 가운데 $${Number(c.month_usd || 0).toFixed(2)} 사용.</div>
+      </section>
+      ${real ? `<section class="card"><label class="field"><span>실제 주문이 나가요. 시작하려면 <b>실전</b>이라고 적어 주세요</span><input id="atConfirm" autocomplete="off" placeholder="실전" value="${esc(F.confirm)}"></label></section>` : ""}
+      <button type="button" class="btn ${real ? "red" : "dark"} wide" id="atStart" ${ok ? "" : "disabled"}>${real ? "실전으로 시작" : "모의로 시작"}</button>
+      <div class="tiny" style="padding:0 3px">수익을 보장하지 않아요. 투자 판단과 책임은 본인에게 있어요.</div>`;
+    const lim = () => { F.daily = $("#atDaily").value; F.total = $("#atTotal").value; };
+    $("#atDaily").onchange = () => { lim(); this.atPlan(); };
+    $("#atTotal").onchange = () => { lim(); this.atPlan(); };
+    if (real) $("#atConfirm").oninput = (e) => { F.confirm = e.target.value.trim(); };
+    $("#atStart").onclick = async () => {
+      lim();
+      const d = await run(() => api("POST", "/api/auto/runs", this.atBody()), "자동매매를 시작했어요");
+      F.confirm = ""; A.view = d.run.id; A.tab = "now"; A.d = d; A.o = null;
+      this.auto($("#iv"));
+    };
+  },
+
+  // ----- 한 건 자세히
+  async atRun(box) {
+    const A = this.atState();
+    const d = (A.d = await GET(`/api/auto/runs/${A.view}`));
+    if (investState.tab !== "auto" || A.view !== d.run.id) return;
+    const r = d.run, m = r.money, M = (v, s) => this.atM(r.mkt, v, s), [lbl, cls] = this.AT_ST[r.status] || [r.status, ""];
+    const next = r.status === "running" ? (d.next.busy ? "AI 추천을 받는 중이에요" : d.next.ok ? "곧 AI 추천을 받아요" : d.next.why) : r.status_msg;
+    const keep = $("#atBody") ? window.scrollY : null;
+    box.onclick = null;
+    box.innerHTML = `<section class="ap-hero at-hero">
+        <button type="button" class="at-back" id="atBack">‹ 목록</button>
+        <div class="at-run-top"><b>${esc(r.name)}</b><span class="tag ${cls}">${lbl}</span><span class="tag g">${r.mode === "real" ? esc(d.broker || "실전") : "모의"}</span></div>
+        <div class="at-hero-eq">${M(m.equity)}</div>
+        <div class="at-hero-ret ${tone(m.ret_pct)}">${M(m.equity - m.budget, true)} (${pct(m.ret_pct, 2)})</div>
+        <div class="at-hero-kv"><div><span>쓸 돈</span><b>${M(m.budget)}</b></div><div><span>남은 현금</span><b>${M(m.cash)}</b></div><div><span>확정 손익</span><b class="${tone(m.realized)}">${M(m.realized, true)}</b></div></div>
+        <div class="ap-h2">${esc(next || "")}${r.status !== "ended" ? ` · ${r.end_date.slice(5).replace("-", "/")}까지 · 플랜 ${r.ver}판` : ""}</div>
+        ${r.status === "ended" ? "" : `<div class="at-ctl">
+          ${r.status === "running" ? `<button type="button" class="btn line-w" data-ctl="pause">새 매수 멈춤</button>` : r.status === "paused" ? `<button type="button" class="btn yellow" data-ctl="resume">다시 시작</button>` : ""}
+          ${r.status === "closing" ? "" : `<button type="button" class="btn line-w" data-ctl="end">전부 팔고 종료</button>`}</div>`}
+        ${seg("자동탭", [["now", "현황"], ["log", "기록"], ["stat", "분석"], ["plan", "플랜"]], A.tab, "ap-mkt")}
+      </section><div id="atBody" class="at-body"></div>`;
+    $("#atBack").onclick = () => { A.view = "list"; A.o = null; this.auto(box); };
+    bindSeg(box, "자동탭", (v) => { A.tab = v; this.atTab(); });
+    $$("[data-ctl]", box).forEach((b) => (b.onclick = async () => {
+      const a = b.dataset.ctl;
+      if (a === "end" && !confirmTap(b, d.open.length ? "보유 종목을 모두 팔고 끝내요. 한 번 더 누르기" : "한 번 더 누르면 종료")) return;
+      await run(() => api("POST", `/api/auto/runs/${r.id}/control`, { action: a }), a === "pause" ? "새 매수를 멈췄어요" : a === "resume" ? "다시 시작했어요" : "종료를 시작했어요");
+      this.auto(box);
+    }));
+    this.atTab();
+    if (keep != null) window.scrollTo(0, keep);
+  },
+  atPropHtml(p, mkt) {
+    const pend = p.status === "pending";
+    const stLbl = { applied: "반영함", rejected: "반영 안 함", none: "바꿀 것 없음", pending: "승인 대기" }[p.status] || p.status;
+    return `<section class="card at-prop ${pend ? "pend" : ""}" data-prop="${p.id}">
+      <div class="card-head"><h2>${p.source === "ai" ? "AI 복기 개선안" : "자동 분석 개선안"}</h2><span class="tag ${pend ? "warn" : ""}">${stLbl}</span></div>
+      <div class="small">${esc(p.summary)}</div>
+      ${p.changes.length ? `<div class="at-chg">${p.changes.map((c) => `<div><b>${esc(c.label || c.key)}</b><span class="at-arrow">${esc(String(c.from))} → <em>${esc(String(c.to))}</em></span><span class="tiny">${esc(c.why || "")}</span></div>`).join("")}</div>` : ""}
+      ${p.text ? `<details class="at-more"><summary>AI 복기 전문 보기</summary><div class="ai-ans">${mdLite(p.text)}</div></details>` : ""}
+      ${pend ? `<div class="grid2"><button type="button" class="btn" data-dec="reject">반영 안 함</button><button type="button" class="btn dark" data-dec="apply">승인하고 반영</button></div>` : `<div class="tiny">${esc((p.decided_at || p.ts).replace("T", " ").slice(5, 16))}</div>`}
+    </section>`;
+  },
+  atTradeDt(t, mkt) {
+    const M = (v, s) => this.atM(mkt, v, s), w = t.why || {};
+    return dt({ title: t.name, rows: [
+      ["상태", t.status === "open" ? (t.fill_ok ? "보유 중" : "체결 확인 중") : t.reason, t.status === "closed" ? tone(t.pnl) : ""],
+      ["손익", t.pnl == null ? null : `${M(t.pnl, true)} (${pct(t.pnl_pct, 2)})`, tone(t.pnl)],
+      ["수량", `${won(t.qty)}주`], ["산 값", M(t.entry_price)], ["판 값", t.exit_price ? M(t.exit_price) : null],
+      ["산 때", (t.entry_ts || "").replace("T", " ").slice(5, 16)], ["판 때", t.exit_ts ? t.exit_ts.replace("T", " ").slice(5, 16) : null],
+      ["목표 / 손절", `+${t.target_pct}% / -${t.stop_pct}%`], ["보유 중 최고 / 최저", t.mfe_pct == null ? null : `${pct(t.mfe_pct, 2)} / ${pct(t.mae_pct, 2)}`],
+      ["정리 예정", t.exit_date || t.exit_by || null], ["AI 승률 · 점수", `${t.win_prob ?? "-"}% · ${t.score ?? "-"}`], ["비용", t.fees == null ? null : M(t.fees)], ["플랜", `${t.ver}판`]],
+      note: [w.view ? `시장: ${w.view}` : "", (w.reasons || []).length ? "산 이유\n- " + w.reasons.join("\n- ") : "", (w.risks || []).length ? "위험\n- " + w.risks.join("\n- ") : ""].filter(Boolean).join("\n\n"),
+      links: [["종목 보기", stockHref(t.sym, mkt)]] });
+  },
+  atTab() {
+    const A = this.at, d = A.d, el = $("#atBody");
+    if (!el || !d) return;
+    const r = d.run, mkt = r.mkt, M = (v, s) => this.atM(mkt, v, s), S = d.stats.all || { n: 0 };
+    el.onclick = null;
+    if (A.tab === "now") {
+      const pend = d.proposals.filter((p) => p.status === "pending");
+      const KIND = { buy: ["매수", "y"], sell: ["매도", ""], cycle: ["추천", ""], skip: ["쉼", ""], risk: ["한도", "warn"], review: ["분석", ""], control: ["조작", ""], start: ["시작", "y"], end: ["종료", ""] };
+      el.innerHTML = `${pend.map((p) => this.atPropHtml(p, mkt)).join("")}
+        <section class="card tight"><div class="card-head" style="padding-top:8px"><h2>보유 ${d.open.length}</h2><span class="tiny">평가 ${M(r.money.open_value)} · ${M(r.money.unrealized, true)}</span></div>
+          <div class="list">${d.open.length ? d.open.map((t) => `<div class="item" ${this.atTradeDt(t, mkt)} role="button" tabindex="0">
+            <span class="main"><b>${esc(t.name)}</b><span class="sub">${won(t.qty)}주 · ${M(t.entry_price)} → ${M(t.last)}${t.fill_ok ? "" : " · 체결 확인 중"}</span>
+              <span class="at-bar" aria-hidden="true"><i style="left:${Math.max(0, Math.min(100, (t.pnl_pct + t.stop_pct) / (t.target_pct + t.stop_pct) * 100)).toFixed(1)}%"></i><u style="left:${(t.stop_pct / (t.target_pct + t.stop_pct) * 100).toFixed(1)}%"></u></span></span>
+            <span class="end"><b class="${tone(t.pnl)}">${pct(t.pnl_pct, 2)}</b><span class="small ${tone(t.pnl)}">${M(t.pnl, true)}</span></span></div>`).join("")
+            : `<div class="empty">들고 있는 종목이 없어요</div>`}</div></section>
+        <div class="sec-title">판단 기록</div>
+        <section class="card tight"><div class="list">${d.log.length ? d.log.slice(0, 25).map((x) => { const k = KIND[x.kind] || [x.kind, ""], dec = (x.data || {}).decisions; return `<div class="item at-log" ${dec ? dt({ title: "이번 추천의 판단", rows: dec.map((q) => [q.name || q.sym, q.act === "buy" ? `매수 ${q.qty}주` : `건너뜀: ${q.why}`, q.act === "buy" ? "up" : ""]), note: (x.data.view ? `시장: ${x.data.view}\n` : "") + (x.data.stance ? `AI 분위기: ${x.data.stance}` : "") }) + ' role="button" tabindex="0"' : ""}>
+            <span class="ico ${k[1]}">${k[0]}</span><span class="main"><span class="at-msg">${esc(x.msg)}</span><span class="sub">${esc(x.ts.replace("T", " ").slice(5, 16))}${dec ? " · 눌러서 종목별 판단 보기" : ""}</span></span></div>`; }).join("") : `<div class="empty">아직 기록이 없어요</div>`}</div></section>`;
+    } else if (A.tab === "log") {
+      el.innerHTML = `<section class="card tight"><div class="card-head" style="padding-top:8px"><h2>끝난 거래 ${S.n}</h2><button type="button" class="link" id="atCsv">CSV 내려받기</button></div>
+          <div class="list">${d.closed.length ? d.closed.map((t) => `<div class="item" ${this.atTradeDt(t, mkt)} role="button" tabindex="0">
+            <span class="main"><b>${esc(t.name)}</b><span class="sub">${esc((t.exit_ts || "").replace("T", " ").slice(5, 16))} · ${esc(t.reason || "")} · ${won(t.qty)}주</span></span>
+            <span class="end"><b class="${tone(t.pnl)}">${pct(t.pnl_pct, 2)}</b><span class="small ${tone(t.pnl)}">${M(t.pnl, true)}</span></span></div>`).join("")
+            : `<div class="empty">아직 끝난 거래가 없어요</div>`}</div></section>
+        <div class="tiny" style="padding:0 3px">살 때의 근거·지표, 보유 중 최고·최저, 판 사유까지 모두 저장해요. CSV에는 전체 기록이 들어 있어요.</div>`;
+      $("#atCsv").onclick = () => run(async () => bkSave(await apiBlob(`/api/auto/runs/${r.id}/export`), `자동매매_${r.id}.csv`));
+    } else if (A.tab === "stat") {
+      const hist = d.proposals.filter((p) => p.status !== "pending");
+      el.innerHTML = !S.n ? `<section class="card"><div class="empty">거래가 끝나면 성적이 쌓여요.<br>10건부터 분석할 수 있고, ${d.params.review_every}건마다 스스로 분석해요.</div></section>` : `
+        <section class="card">
+          <div class="sc-kpi"><div><span>승률</span><b>${S.win_rate}%</b></div><div><span>평균 수익률</span><b class="${tone(S.avg_pct)}">${pct(S.avg_pct, 2)}</b></div><div><span>번 돈 ÷ 잃은 돈</span><b>${S.pf == null ? "-" : S.pf >= 99 ? "손실 없음" : S.pf}</b></div>
+            <div><span>거래</span><b>${S.n}건</b></div><div><span>최대 낙폭</span><b>${S.mdd_pct ?? "-"}%</b></div><div><span>확정 손익</span><b class="${tone(S.pnl)}">${M(S.pnl, true)}</b></div></div>
+          ${lineChart([{ values: [r.budget].concat(d.stats.curve || []), color: "#8A7CF0" }], { label: "거래별 굴리는 돈 추이", h: 110 })}
+          <div class="tiny">이길 때 평균 ${pct(S.avg_win, 2)}, 질 때 평균 ${pct(S.avg_loss, 2)} · 보유 중 최고 오름폭 중간값 ${pct(S.mfe_med, 2)}, 최저 ${pct(S.mae_med, 2)} · 비용 합계 ${M(S.fees)}</div>
+        </section>
+        ${(d.stats.groups || []).filter((g) => g.rows.length > 1 || g.label === "파는 사유").map((g) => `<section class="card tight"><div class="card-head" style="padding-top:8px"><h2>${esc(g.label)}별</h2></div>
+          <div class="at-tbl"><div class="at-tr at-th"><span></span><span>거래</span><span>승률</span><span>평균</span></div>${g.rows.sort((a, b) => b.n - a.n).map((x) => `<div class="at-tr"><span>${esc(x.key)}</span><span>${x.n}</span><span>${x.win_rate}%</span><span class="${tone(x.avg_pct)}">${pct(x.avg_pct, 2)}</span></div>`).join("")}</div></section>`).join("")}
+        <div class="grid2"><button type="button" class="btn" id="atRev" ${S.n < 10 ? "disabled" : ""}>지금 분석하기</button><button type="button" class="btn ai-btn" id="atAi" ${S.n < 5 ? "disabled" : ""}><span class="ai-spark" aria-hidden="true">✦</span>AI 복기</button></div>
+        <div class="tiny" style="padding:0 3px">'지금 분석하기'는 조건별 성적으로 고칠 값을 찾아요(무료). 'AI 복기'는 Claude가 기록 전체를 읽고 개선안을 내요(유료). 어느 쪽이든 승인해야 반영돼요.</div>
+        ${hist.length ? `<div class="sec-title">지난 분석</div>${hist.map((p) => this.atPropHtml(p, mkt)).join("")}` : ""}`;
+      if ($("#atRev")) $("#atRev").onclick = async () => { A.d = await run(() => api("POST", `/api/auto/runs/${r.id}/review`), "분석했어요. 현황에서 개선안을 확인해요"); A.tab = "now"; this.auto($("#iv")); };
+      if ($("#atAi")) $("#atAi").onclick = () => { aiSheet("auto", { run_id: r.id }); sheet.addEventListener("close", () => { if (investState.tab === "auto") this.auto($("#iv")); }, { once: true }); };
+    } else {
+      const p = d.params, SRC = { start: "시작", rule: "자동 분석", ai: "AI 복기", user: "직접 고침" };
+      const val = (k) => (typeof p[k] === "boolean" ? (p[k] ? "예" : "아니오") : p[k]);
+      el.innerHTML = `<section class="card"><div class="card-head"><h2>지금 플랜 · ${r.ver}판</h2><span class="tiny">${esc((A.o?.models || []).find((x) => x.id === r.model)?.label.split(" · ")[0] || r.model)}</span></div>
+          <ol class="at-plan">${d.plan.map((s) => `<li><b>${esc(s.t)}</b><span>${esc(s.d)}</span></li>`).join("")}</ol></section>
+        <section class="card tight"><div class="card-head" style="padding-top:8px"><h2>세부 값</h2>${r.status === "ended" ? "" : `<button type="button" class="link" id="atEdit">직접 고치기</button>`}</div>
+          <dl class="dt-rows">${Object.entries(d.keys).map(([k, l]) => `<div><dt>${esc(l)}</dt><dd>${esc(String(val(k)))}</dd></div>`).join("")}</dl></section>
+        <div class="sec-title">바뀐 이력</div>
+        <section class="card tight"><div class="list">${d.changes.slice().reverse().map((c) => `<div class="item"><span class="ico">${c.ver}판</span><span class="main"><span class="at-msg">${c.changes.length ? c.changes.map((x) => `${esc(x.label || x.key)} ${esc(String(x.from))} → ${esc(String(x.to))}`).join(", ") : "처음 플랜"}</span><span class="sub">${esc(c.ts.replace("T", " ").slice(5, 16))} · ${SRC[c.source] || c.source}</span></span></div>`).join("")}</div></section>`;
+      if ($("#atEdit")) $("#atEdit").onclick = () => this.atEdit();
+    }
+    el.onclick = async (e) => {
+      const b = e.target.closest("[data-dec]");
+      if (!b) return;
+      const pid = b.closest("[data-prop]").dataset.prop, a = b.dataset.dec;
+      A.d = await run(() => api("POST", `/api/auto/proposals/${pid}`, { action: a }), a === "apply" ? "개선안을 반영했어요" : "반영하지 않았어요");
+      this.auto($("#iv"));
+    };
+  },
+  atEdit() {
+    const A = this.at, d = A.d, p = d.params;
+    openSheet("플랜 직접 고치기", `<div class="fields">${Object.entries(d.keys).map(([k, l]) => typeof p[k] === "boolean"
+      ? `<label class="field">${esc(l)}<select data-k="${k}"><option value="true" ${p[k] ? "selected" : ""}>예</option><option value="false" ${p[k] ? "" : "selected"}>아니오</option></select></label>`
+      : `<label class="field">${esc(l)}<input data-k="${k}" class="r" ${/^entry_/.test(k) ? 'type="time"' : 'inputmode="decimal"'} value="${esc(p[k])}"></label>`).join("")}</div>
+      <div class="tiny" style="margin:8px 0">고치면 플랜 판이 하나 올라가고 이력에 남아요. 범위를 벗어난 값은 가장 가까운 값으로 맞춰요.</div>
+      <button type="button" class="btn dark wide" id="atSave">저장</button>`, (box) => {
+      $("#atSave", box).onclick = async () => {
+        const patch = {};
+        $$("[data-k]", box).forEach((i) => { patch[i.dataset.k] = i.value; });
+        A.d = await run(() => api("PUT", `/api/auto/runs/${d.run.id}/params`, patch), "저장했어요");
+        closeSheet(); this.auto($("#iv"));
+      };
+    });
   },
 
   // ---------- AI 추천 ----------
@@ -3732,7 +4017,7 @@ function bindCredit(box, after) {
   const b = $("#crSave", box);
   if (b) b.onclick = async () => { const v = $("#crUsd", box).value; await run(() => api("POST", "/api/ai/credit", { usd: v }), "잔액을 맞췄어요"); after && after(); };
 }
-const AI_TITLES = { learn: "AI 추천 복기 · 규칙 갱신", stock: "AI 종목 정리", portfolio: "AI 포트폴리오 점검", dca: "AI 적립 점검", review: "AI 단타 복기", sweep: "AI 훑기 해석", chat: "AI에게 묻기" };
+const AI_TITLES = { auto: "AI 자동매매 복기 · 개선안", learn: "AI 추천 복기 · 규칙 갱신", stock: "AI 종목 정리", portfolio: "AI 포트폴리오 점검", dca: "AI 적립 점검", review: "AI 단타 복기", sweep: "AI 훑기 해석", chat: "AI에게 묻기" };
 function aiSheet(kind, payload = {}) {
   const chat = kind === "chat";
   const S = { history: [], ctl: null, busy: false };

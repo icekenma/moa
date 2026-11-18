@@ -1223,6 +1223,51 @@ def create_app(rt, updater=None):
             job["cancel"] = True
         return jsonify(ok=True)
 
+    # ---------- AI 자동매매 ----------
+    @app.get("/api/auto")
+    def auto_home():
+        return jsonify(rt.autotrade.overview())
+
+    @app.post("/api/auto/plan")
+    def auto_plan():
+        return jsonify(rt.autotrade.preview(body()))
+
+    @app.post("/api/auto/runs")
+    def auto_create():
+        with rt._lock:
+            return jsonify(rt.autotrade.create(body()))
+
+    @app.get("/api/auto/runs/<int:rid>")
+    def auto_detail(rid):
+        return jsonify(rt.autotrade.detail(rid))
+
+    @app.post("/api/auto/runs/<int:rid>/control")
+    def auto_control(rid):
+        with rt._lock:
+            return jsonify(rt.autotrade.control(rid, body().get("action")))
+
+    @app.put("/api/auto/runs/<int:rid>/params")
+    def auto_params(rid):
+        with rt._lock:
+            return jsonify(rt.autotrade.edit(rid, body()))
+
+    @app.post("/api/auto/runs/<int:rid>/review")
+    def auto_review(rid):
+        with rt._lock:
+            rt.autotrade.review(rid)
+            return jsonify(rt.autotrade.detail(rid))
+
+    @app.post("/api/auto/proposals/<int:pid>")
+    def auto_decide(pid):
+        d = body()
+        with rt._lock:
+            return jsonify(rt.autotrade.decide(pid, d.get("action"), d.get("keys") if isinstance(d.get("keys"), list) else None))
+
+    @app.post("/api/auto/runs/<int:rid>/export")
+    def auto_export(rid):
+        return app.response_class(rt.autotrade.export_csv(rid), mimetype="text/csv",
+                                  headers={"Content-Disposition": f'attachment; filename="auto_{rid}.csv"'})
+
     # ---------- 단타 조건 대량 훑기(vectorbt) ----------
     @app.get("/api/sweep")
     def sweep_status():

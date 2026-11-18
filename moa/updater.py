@@ -74,6 +74,8 @@ class Updater:
         """지금 다시 시작해도 되는지. (가능, 사유)"""
         if self.rt.scalp.open_trades():
             return False, "단타 엔진이 종목을 들고 있어 청산 뒤에 업데이트해요"
+        if self.rt.autotrade.busy():
+            return False, "AI 자동매매가 추천을 받아 주문하는 중이라 끝난 뒤에 업데이트해요"
         s = self.rt.settings.all()
         if s["scalp_state"] == "running" and self.rt.feed.market_open():
             return False, "장중에 단타 엔진이 돌고 있어 장 마감 뒤에 업데이트해요"

@@ -37,6 +37,8 @@ class Runtime:
         self.aipick = AIPick(self)
         from .dividend import Dividend
         self.dividend = Dividend(self)
+        from .autotrade import AutoTrade
+        self.autotrade = AutoTrade(self)
         from .trading.sweep import SweepJob
         self.sweep = SweepJob(self, data_dir or ".")
         from .backup import Backup
@@ -132,6 +134,10 @@ class Runtime:
                         self.aipick.evaluate()  # AI 추천 성적 채점(4분마다)
                     except Exception as e:
                         self.db.log("system", "error", f"AI 익절·손절 확인 오류: {e}", datetime.now().isoformat(timespec="seconds"))
+                    try:
+                        self.autotrade.tick()  # AI 자동매매: 보유 종목 감시·새 매수(5초마다)
+                    except Exception as e:
+                        self.db.log("system", "error", f"AI 자동매매 오류: {e}", datetime.now().isoformat(timespec="seconds"))
                     if time.time() - self._last_dca > 30:
                         self._last_dca = time.time()
                         try:

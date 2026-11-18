@@ -362,6 +362,8 @@ class Backup:
                 return False, "단타 엔진이 종목을 들고 있어요. 청산한 뒤 되돌려 주세요"
             if self.rt.settings.get("scalp_state") == "running":
                 return False, "단타 엔진을 멈춘 뒤 되돌려 주세요"
+            if self.rt.autotrade.active():
+                return False, "AI 자동매매가 돌고 있어요. 종료한 뒤 되돌려 주세요"
         except Exception:
             pass
         return True, ""

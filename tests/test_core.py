@@ -2522,6 +2522,93 @@ def test_backup_restore_on_wal_file_and_restart_hook(tmp_path):
     d2.conn.close()
 
 
+def test_dividend_living_off_assets_health_fee_and_overlap(rt, monkeypatch):
+    """모은 돈을 생활비로 쓰는 계산: 배당 먼저, 모자라면 현금성 → 나머지 순으로 팔고, 건강보험료·하락장·같은 지수 쏠림을 함께 본다."""
+    from moa.dividend import simulate, health_fee, overlap, _pg, _shock, PRESETS, UNIVERSE, HEALTH_RATE, CARE_RATE
+    rate = HEALTH_RATE / 100 * (1 + CARE_RATE / 100)
+    # 건강보험료: 지역가입자는 1천만 원을 넘는 순간 전액, 직장가입자는 2천만 원 초과분만
+    assert health_fee(10_000_000, "local") == 0 and abs(health_fee(10_000_001, "local") - 10_000_001 * rate) < 1
+    assert health_fee(20_000_000, "work") == 0 and abs(health_fee(25_000_000, "work") - 5_000_000 * rate) < 1 and health_fee(9e7, None) == 0
+    # 주가 가정: 커버드콜은 분배금+주가를 합친 수익이 성장 ETF의 주가 상승과 같다(분배율이 더 높으면 원금이 준다)
+    assert abs(_pg({"cat": "us_cc", "yield": 10}, 3) + 0.04) < 1e-9 and abs(_pg({"cat": "kr_cc", "yield": 5}, 7) - 0.05) < 1e-9
+    assert abs(_pg({"cat": "us_growth"}, 3) - 0.06) < 1e-9 and _pg({"cat": "us_bond"}, 3) == 0 and abs(_pg({"cat": "us_etf"}, 3) - 0.03) < 1e-9
+    # 하락장 가정: 1년에 걸쳐 -35%, 1년 머물고, 3년에 걸쳐 회복(커버드콜은 85%까지만). 현금성은 그대로
+    assert _shock(0, "us_etf") == 1 and abs(_shock(12, "us_etf") - 0.65) < 1e-9 and abs(_shock(24, "us_growth") - 0.65) < 1e-9
+    assert abs(_shock(60, "us_etf") - 1) < 1e-9 and abs(_shock(60, "us_cc") - 0.85) < 1e-9 and _shock(18, "us_bond") == 1 and _shock(200, "kr_cc") == 0.85
+    # 예시 구성은 모두 후보 목록의 종목이고 비중 합이 100
+    known = {(u[0], u[1]) for u in UNIVERSE}
+    lives = [p for p in PRESETS if p.get("group") == "live"]
+    assert len(lives) == 5 and all(sum(w for _, _, w in p["assets"]) == 100 and all((m, s) in known for m, s, _ in p["assets"]) for p in PRESETS)
+
+    A = lambda sym, w, y, cat, g=0, mkt="us": {"mkt": mkt, "sym": sym, "weight": w, "yield": y, "growth": g, "cat": cat, "months": [1 / 12] * 12}
+    cc_g = [A("QQQ", 60, 0.5, "us_growth"), A("JEPQ", 40, 10, "us_cc")]
+    assert overlap(cc_g) == [{"base": "나스닥100", "weight": 100.0, "syms": ["QQQ", "JEPQ"], "both": True}]
+    assert overlap([A("SCHD", 60, 3.5, "us_etf"), A("JEPQ", 40, 10, "us_cc")]) == [] and overlap([A("QQQ", 100, 0.5, "us_growth")]) == []   # 한 종목뿐이면 쏠림 경고는 따로 안 한다
+    assert overlap([A("SCHD", 30, 3.5, "us_etf"), A("458730", 30, 3.5, "kr_etf", mkt="kr"), A("KO", 40, 3, "us_stock")])[0]["base"] == "미국배당다우존스"
+    run = lambda assets, live, amount=500_000_000, **kw: simulate({"amount": amount, "years": 10, "reinvest": False, "assets": assets, "live": live, **kw})
+    assert run(cc_g, None)["live"] is None and run(cc_g, {"spend": 0})["live"] is None and run(cc_g, None)["overlap"][0]["weight"] == 100.0
+
+    # 1) 배당만으로 생활비가 나오는 경우: 팔지 않고, 남는 돈은 다시 산다
+    div = [A("SCHD", 100, 4, "us_etf", g=6)]
+    L = run(div, {"spend": 1_000_000, "health": "work"}, amount=1_000_000_000)["live"]
+    assert L["code"] == "div" and L["dead"] is None and all(r["sell"] == 0 for r in L["yearly"]) and L["rate"] == 0
+    y1, y2 = L["yearly"][0], L["yearly"][1]
+    assert y1["need"] == 1_000_000 and y2["need"] == 1_025_000 and y1["fee"] == round(health_fee(40_000_000, "work") / 12)      # 물가 2.5%, 건보료는 지금 배당 기준
+    assert abs(y1["div"] - round(40_000_000 * 0.85 / 12)) < 5000 * 12 and y1["cover"] > 250 and L["yearly"][-1]["value"] > 1_000_000_000
+    assert any(t["kind"] == "over" for t in L["tips"]) and L["alone"]["spend"] > 2_500_000                                       # 배당이 필요보다 많으면 알려 준다
+    # 지역가입자면 같은 배당에 보험료가 훨씬 크다(전액 대상)
+    Lloc = run(div, {"spend": 1_000_000, "health": "local"}, amount=1_000_000_000)["live"]
+    assert Lloc["yearly"][0]["fee"] == round(40_000_000 * rate / 12) > y1["fee"] * 1.9 and Lloc["health"] == "local"
+    # 1천만 원을 조금 넘으면 '아래로 맞추면 0'이라고 알려 준다
+    edge = run(div, {"spend": 3_000_000, "health": "local"}, amount=270_000_000)["live"]
+    assert 10_000_000 < edge["first"]["gross"] < 13_000_000 and any(t["kind"] == "health" and "아래로 맞추면" in t["text"] for t in edge["tips"])
+    assert run(div, {"spend": 3_000_000, "health": "local"}, amount=240_000_000)["live"]["first"]["fee"] == 0
+
+    # 2) 팔아서 쓰는 구성: 현금성부터 팔고, 그다음 나머지. 미국 종목을 팔아 남긴 이익의 세금은 이듬해에 낸다
+    self_ = [A("QQQ", 80, 0.5, "us_growth"), A("SGOV", 20, 4, "us_bond")]
+    L2 = run(self_, {"spend": 2_000_000, "health": "local"})["live"]
+    assert L2["code"] == "mix" and L2["first"]["sell"] > 1_300_000 and 3 < L2["rate"] < 5 and L2["first"]["fee"] == 0
+    assert L2["yearly"][0]["cash"] < 100_000_000 * 0.9 and L2["yearly"][0]["cg"] == 0                # 첫해엔 현금성만 줄고 세금도 없다
+    assert L2["cash"]["value"] == 100_000_000 and L2["cash"]["months"] > 36 and not any(t["kind"] == "cushion" for t in L2["tips"])
+    later = [r for r in L2["yearly"] if r["cash"] == 0]
+    assert later and any(r["cg"] > 0 for r in L2["yearly"][later[0]["year"]:])                       # 현금이 떨어진 뒤 주식을 팔면 이듬해 세금이 생긴다
+    none = run([A("QQQ", 100, 0.5, "us_growth")], {"spend": 2_000_000})["live"]
+    assert none["cash"]["months"] is None and any(t["kind"] == "cushion" and "현금성 자산이 없어요" in t["text"] for t in none["tips"])
+    # 3) 버티지 못하는 경우: 바닥나는 해에서 끝난다. 하락장이면 더 빨리 바닥난다
+    L3 = run(cc_g, {"spend": 4_000_000})["live"]
+    assert L3["code"] == "out" and L3["dead"] and len(L3["yearly"]) == L3["dead"] and L3["yearly"][-1]["value"] == 0
+    assert L3["bad_dead"] and L3["bad_dead"] <= L3["dead"] and [t["kind"] for t in L3["tips"]][:1] == ["overlap"]
+    # 하락장: 커버드콜은 분배금이 주가를 따라 줄고 원금도 다 돌아오지 않는다
+    cc = [A("JEPQ", 60, 10, "us_cc"), A("JEPI", 40, 7.5, "us_cc")]
+    L4 = run(cc, {"spend": 2_000_000})["live"]
+    assert L4["bad"][1]["div"] < L4["yearly"][1]["div"] * 0.75 and L4["last"]["bad_value"] <= L4["last"]["value"]
+    assert any(t["kind"] == "cc" for t in L4["tips"]) and L4["yearly"][9]["div"] < L4["yearly"][0]["div"]      # 분배율이 수익보다 높으면 해마다 준다
+    # 주가 가정을 높이면 같은 구성도 버틴다(가정에 따라 결과가 크게 달라진다는 것을 숨기지 않는다)
+    assert run(cc, {"spend": 2_000_000}, price_growth=7)["live"]["dead"] is None and L4["dead"]
+    # 4) 다른 수입(알바·연금)이 시작되면 그만큼 덜 판다
+    base = run(self_, {"spend": 2_000_000})["live"]
+    job = run(self_, {"spend": 2_000_000, "other": 800_000, "other_from": 3})["live"]
+    assert job["yearly"][1]["other"] == 0 and job["yearly"][2]["other"] == round(800_000 * 1.025 ** 2) and job["yearly"][2]["sell"] < base["yearly"][2]["sell"] - 700_000
+    assert job["last"]["value"] > base["last"]["value"]
+
+    # 화면·AI: 예시 구성이 묶음과 함께 나가고, 생활비 계획을 AI 자료에 넣는다
+    _div_rt(rt, monkeypatch)
+    c = create_app(rt).test_client()
+    uni = c.get("/api/div/universe").get_json()
+    assert [p["group"] for p in uni["presets"]].count("live") == 5 and uni["cats"]["us_growth"] and any(i["sym"] == "QQQ" for i in uni["items"])
+    R = c.post("/api/div/simulate", json={"amount": 500_000_000, "years": 20, "assets": [{"mkt": "us", "sym": "SCHD", "weight": 50}, {"mkt": "us", "sym": "JEPI", "weight": 50}],
+                                          "live": {"spend": 2_000_000, "health": "local"}}).get_json()
+    assert R["live"]["spend"] == 2_000_000 and R["live"]["rates"]["local_line"] == 10_000_000 and "overlap" in R
+    assert R["live"]["years"] == 30 and len(R["yearly"]) == 20                                   # 생활비로 쓰는 기간은 모으는 기간과 따로(기본 30년)
+    R40 = c.post("/api/div/simulate", json={"amount": 2_000_000_000, "years": 5, "assets": [{"mkt": "us", "sym": "SCHD", "weight": 100}], "live": {"spend": 1_000_000, "years": 40}}).get_json()
+    assert R40["live"]["years"] == 40 and len(R40["live"]["yearly"]) == 40
+    _, ask, data = rt.dividend.ai_context({"amount": 500_000_000, "live": {"spend": 2_000_000, "health": "work", "other": 500_000, "other_from": 10}})
+    plan = data["생활비로 쓰는 계획"]
+    assert plan["한 달 생활비(원, 지금 물가)"] == 2_000_000 and "직장가입자" in plan["건강보험"] and plan["다른 수입이 시작되는 해"] == 10
+    assert "생활비 2,000,000원" in ask and "같은 지수" in ask and "생활비로 쓰는 계획" not in rt.dividend.ai_context({"amount": 5e8})[2]
+    assert any(r.get("기초 지수") == "미국배당다우존스" for r in data["후보 목록(실제 최근 1년 지급 기준)"])
+
+
 def test_dividend_slow_source_does_not_block_screen(rt, monkeypatch):
     """바깥 서버가 느리면 기다리지 않고 '받는 중'으로 돌려준다. 그 종목은 저장하지 않아 다음에 다시 받는다."""
     import time as _t

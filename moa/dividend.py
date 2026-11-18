@@ -13,13 +13,28 @@ from datetime import date, datetime, timedelta, timezone
 TAX_KR, TAX_US = 15.4, 15.0   # 원천징수 세율(%) 기본값: 국내 배당소득세(지방세 포함), 미국 상장 종목 현지 원천징수
 FIN_INCOME_LINE = 20_000_000  # 금융소득종합과세 기준(연, 세전)
 FADE_YEARS = 5                # 과거 배당 성장률을 그대로 쓰는 햇수(그 뒤로는 낮춘다)
+# 건강보험료(2026년 기준. 해마다 바뀌므로 어림값으로만 쓴다)
+HEALTH_RATE = 7.19            # 건강보험료율(%)
+CARE_RATE = 13.14             # 장기요양보험료: 건강보험료에 곱하는 비율(%)
+HEALTH_LOCAL_LINE = 10_000_000   # 지역가입자: 이자·배당이 연 1천만 원을 넘으면 '전액'이 보험료 대상(이하면 대상 아님)
+HEALTH_WORK_LINE = 20_000_000    # 직장가입자: 월급 외 소득이 연 2천만 원을 넘는 '초과분'만 대상
+US_GAIN_FREE, US_GAIN_TAX = 2_500_000, 22.0   # 미국 상장 종목을 팔아 남긴 이익: 연 250만 원 공제 뒤 22%
+# 하락장 가정: 주가가 1년에 걸쳐 35% 내리고, 1년 머문 뒤, 3년에 걸쳐 돌아온다. 커버드콜은 반등을 덜 따라가 85%까지만 돌아온다고 본다
+SHOCK = {"drop": 35, "down": 12, "flat": 12, "up": 36, "cc_back": 0.85}
 
 CATS = {
     "us_etf": "미국 배당 ETF", "us_cc": "미국 커버드콜·고분배", "us_stock": "미국 배당 성장주", "us_month": "미국 월배당 리츠·BDC",
-    "us_bond": "미국 단기채(현금성)", "kr_etf": "국내 상장 배당 ETF", "kr_cc": "국내 상장 커버드콜", "kr_stock": "국내 고배당주", "kr_reit": "국내 리츠·인프라",
+    "us_bond": "미국 단기채(현금성)", "us_growth": "미국 성장 ETF(배당 적음)", "kr_etf": "국내 상장 배당 ETF", "kr_cc": "국내 상장 커버드콜", "kr_stock": "국내 고배당주", "kr_reit": "국내 리츠·인프라",
 }
-# 주가 상승 가정을 얼마나 적용할지(1 = 그대로). 채권·커버드콜은 주가가 거의 오르지 않는다고 본다
-PRICE_FACTOR = {"us_bond": 0.0, "us_cc": 0.3, "kr_cc": 0.3, "us_month": 0.6, "kr_reit": 0.4}
+# 주가 상승 가정을 얼마나 적용할지(1 = 그대로). 채권은 주가가 오르지 않는다고 본다. 커버드콜은 _pg에서 따로 계산한다
+PRICE_FACTOR = {"us_bond": 0.0, "us_month": 0.6, "kr_reit": 0.4}
+PRICE_ADD = {"us_growth": 3.0}        # 성장 ETF는 배당이 적은 대신 주가가 기본 가정보다 연 3%p 더 오른다고 본다
+CASH_CATS, CC_CATS, GROWTH_CATS = ("us_bond",), ("us_cc", "kr_cc"), ("us_growth",)
+# 같은 지수를 바탕으로 한 종목(겉은 달라도 함께 오르내린다). 쏠림 점검에 쓴다
+BASE = {"나스닥100": ("QQQ", "QQQM", "QLD", "TQQQ", "JEPQ", "QYLD", "QQQI", "GPIQ"),
+        "S&P500": ("VOO", "SPY", "IVV", "SPLG", "SPYM", "SSO", "UPRO", "JEPI", "XYLD", "SPYI", "GPIX"),
+        "미국배당다우존스": ("SCHD", "458730", "446720", "402970", "458760", "441640")}
+BASE_OF = {sym: name for name, syms in BASE.items() for sym in syms}
 
 # 기본 후보 목록. 숫자(배당률 등)는 넣지 않는다 — 전부 실제 자료에서 계산한다.
 UNIVERSE = [
@@ -33,6 +48,9 @@ UNIVERSE = [
     ("us", "JEPI", "JPMorgan 주식 프리미엄 인컴 ETF", "us_cc", "대형주 + 옵션 프리미엄으로 월배당. 상승장에서는 덜 오름"),
     ("us", "JEPQ", "JPMorgan 나스닥 프리미엄 인컴 ETF", "us_cc", "나스닥 + 옵션 프리미엄 월배당. 분배금이 달마다 크게 달라짐"),
     ("us", "QYLD", "Global X 나스닥100 커버드콜 ETF", "us_cc", "분배율은 매우 높지만 원금이 줄어 온 대표 사례. 주의"),
+    ("us", "QQQI", "NEOS 나스닥100 고분배 ETF", "us_cc", "나스닥100 + 지수 옵션 프리미엄 월배당. 분배율이 높은 만큼 상승을 덜 따라감"),
+    ("us", "QQQ", "Invesco 나스닥100 ETF", "us_growth", "나스닥 대형 기술주 100개. 배당은 거의 없고 주가 성장이 목적. 변동이 큼"),
+    ("us", "VOO", "Vanguard S&P500 ETF", "us_growth", "미국 대형주 500개. 시장 전체를 사는 기본형"),
     ("us", "SGOV", "iShares 0-3개월 국채 ETF", "us_bond", "초단기 미국 국채. 주가 변동이 거의 없는 달러 현금 대용"),
     ("us", "BIL", "SPDR 1-3개월 국채 ETF", "us_bond", "초단기 미국 국채. SGOV와 같은 역할"),
     ("us", "O", "리얼티인컴", "us_month", "상업용 부동산 리츠. 매달 배당하고 오래 늘려 온 기록"),
@@ -88,6 +106,17 @@ PRESETS = [
      "assets": [("kr", "458730", 40), ("kr", "161510", 20), ("kr", "466940", 15), ("kr", "088980", 15), ("kr", "329200", 10)]},
     {"id": "mix", "name": "국내 + 미국 균형형", "risk": "보통", "desc": "달러와 원화, ETF와 개별주를 나눠 담아요",
      "assets": [("us", "SCHD", 35), ("kr", "458730", 20), ("us", "JEPI", 15), ("kr", "105560", 10), ("kr", "033780", 10), ("us", "SGOV", 10)]},
+    # 모은 돈을 생활비로 쓰는 단계의 대표적인 짜임 다섯 가지('생활비로 살아 보기'에서 버티는지 따져 볼 출발점)
+    {"id": "l_three", "group": "live", "name": "배당성장 + 커버드콜 + 성장", "risk": "보통", "desc": "생활비는 커버드콜·배당으로, 나머지는 성장에 두고, 현금을 조금 남겨요",
+     "assets": [("us", "JEPQ", 42), ("us", "QQQ", 32), ("us", "SCHD", 20), ("us", "SGOV", 6)]},
+    {"id": "l_ccg", "group": "live", "name": "커버드콜 + 성장", "risk": "높음", "desc": "매달 현금흐름과 성장을 함께. 둘 다 같은 지수면 떨어질 때도 함께 떨어져요",
+     "assets": [("us", "QQQ", 60), ("us", "JEPQ", 40)]},
+    {"id": "l_dcc", "group": "live", "name": "배당성장 + 커버드콜", "risk": "보통", "desc": "사고팔지 않고 배당만으로 지내는 짜임. 성장 몫이 작아 물가에 약해요",
+     "assets": [("us", "JEPQ", 60), ("us", "SCHD", 40)]},
+    {"id": "l_self", "group": "live", "name": "성장 + 현금(팔아서 쓰기)", "risk": "높음", "desc": "배당 대신 조금씩 팔아 생활비로. 하락장에는 현금 몫을 먼저 써요",
+     "assets": [("us", "QQQ", 50), ("us", "VOO", 30), ("us", "SGOV", 20)]},
+    {"id": "l_cc", "group": "live", "name": "커버드콜만", "risk": "높음", "desc": "지금 받는 돈은 가장 크지만, 상승을 덜 따라가고 분배금이 줄 수 있어요",
+     "assets": [("us", "JEPQ", 60), ("us", "JEPI", 40)]},
 ]
 
 DIV_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 배당 포트폴리오 설계 분석가야.
@@ -99,6 +128,10 @@ DIV_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 배�
 - 배당률만 높은 종목을 쫓지 마. 배당이 줄어든 이력, 원금이 깎여 온 커버드콜, 한 업종 쏠림을 반드시 따져.
 - 한 종목은 ETF 50%, 개별주 15%를 넘기지 마. 커버드콜·고분배 상품은 다 합쳐 30% 이하(사용자가 '고분배'를 골랐을 때만 40%까지).
 - 매달 받는 돈이 고르게 들어오도록 지급월이 겹치지 않게 섞어.
+- 생활비가 주어지면 그 돈이 세후로 나오게 하는 것이 먼저야. 배당은 필요한 만큼만 만들고, 남는 자금은 성장 자산(role "성장")에 둬. 필요 이상으로 배당을 키우면 세금과 건강보험료만 늘어.
+- 같은 지수를 바탕으로 한 종목끼리 몰리면(예: 나스닥100 커버드콜 + 나스닥100 성장 ETF) 오를 때도 내릴 때도 함께 움직여. 이런 쏠림은 risks에 반드시 적어.
+- 생활비로 쓰는 구성이면 하락장에 싼값에 팔지 않도록 현금성 자산(role "완충")을 생활비 몇 개월치로 둘지 판단해서 넣어.
+- 건강보험: 직장이 없으면(지역가입자) 이자·배당이 연 1천만 원을 넘는 순간 전액이 보험료 대상이고, 직장가입자는 월급 외 소득 2천만 원 초과분이 대상이야(제도는 바뀔 수 있어). 해당하면 notes에 금액으로 적어.
 - 세금: 국내 배당 15.4%, 미국 상장 종목 15% 원천징수. 연 금융소득이 2천만 원을 넘으면 종합과세·건강보험료가 달라질 수 있다는 점을 금액으로 판단해 알려 줘.
 - 미국 종목은 환율에 따라 원화 배당이 달라져. 환율 위험을 risks에 적어.
 - 확정 수익처럼 말하지 마. 과거 지급 기준 추정이야.
@@ -196,7 +229,7 @@ def _run(assets, amount, monthly_add, years, reinvest, price_growth, growth_scal
     for a in assets:
         w = a["weight"] / 100
         g = (a.get("growth") or 0) / 100 * growth_scale
-        pg_a = price_growth / 100 * PRICE_FACTOR.get(a.get("cat"), 1.0)
+        pg_a = _pg(a, price_growth)
         # 배당이 주가보다 훨씬 빨리 늘어난다고 계속 가정하면 배당률이 끝없이 올라가 결과가 부풀려진다.
         # 그래서 과거 성장률은 처음 FADE_YEARS년만 쓰고, 그 뒤로는 주가 상승률 + 1%p를 넘지 않게 한다.
         g_long = max(0.0, min(g, pg_a + 0.01))
@@ -207,7 +240,7 @@ def _run(assets, amount, monthly_add, years, reinvest, price_growth, growth_scal
             fac.append(f)
         st.append({"a": a, "n": amount * w, "w": w,                      # n: 주식 수(시작 가격을 1로 둔 단위)
                    "y0": (a.get("yield") or 0) / 100, "fac": fac,
-                   "pg": pg_a,
+                   "pg": pg_a, "cc": a.get("cat") in CC_CATS,
                    "tax": (tax_us if a["mkt"] == "us" else tax_kr) / 100, "us": a["mkt"] == "us",
                    "months": a.get("months") if a.get("months") and sum(a["months"]) > 0 else [1 / 12] * 12})
     months, yearly = [], []
@@ -222,7 +255,9 @@ def _run(assets, amount, monthly_add, years, reinvest, price_growth, growth_scal
             buys = []
             for s in st:
                 price = (1 + s["pg"]) ** (t / 12) * (fxm if s["us"] else 1)
-                dps = s["y0"] * s["fac"][k] * (1 - cut / 100) * (fxm if s["us"] else 1)
+                # 커버드콜 분배금은 주가(순자산)에 비례한다: 원금이 줄면 분배금도 같이 준다
+                up = (1 + s["pg"]) ** (t / 12) if s["cc"] else s["fac"][k]
+                dps = s["y0"] * up * (1 - cut / 100) * (fxm if s["us"] else 1)
                 gross = s["n"] * dps * s["months"][m - 1]
                 net = gross * (1 - s["tax"])
                 if gross > 0:
@@ -251,6 +286,194 @@ def _run(assets, amount, monthly_add, years, reinvest, price_growth, growth_scal
                   monthly=round(yr["net"] / 12), yoc=round(yr["net"] / invested * 100, 2) if invested else 0)
         yearly.append(yr)
     return months, yearly
+
+
+def health_fee(gross_year, kind):
+    """배당(세전, 연)에 붙는 건강보험료 어림(연, 장기요양 포함). 소득분만 본다 — 지역가입자의 재산분, 다른 소득은 넣지 않는다."""
+    rate = HEALTH_RATE / 100 * (1 + CARE_RATE / 100)
+    if kind == "work":
+        return max(0.0, gross_year - HEALTH_WORK_LINE) * rate
+    if kind == "local":
+        return gross_year * rate if gross_year > HEALTH_LOCAL_LINE else 0.0
+    return 0.0
+
+
+def overlap(assets):
+    """같은 지수에 몰린 정도. 절반 이상 몰린 지수만 돌려준다."""
+    by = {}
+    for a in assets:
+        b = BASE_OF.get(str(a["sym"]).upper())
+        if b:
+            x = by.setdefault(b, {"base": b, "weight": 0.0, "syms": [], "kinds": set()})
+            x["weight"] += a["weight"]
+            x["syms"].append(a["sym"])
+            x["kinds"].add("cc" if a.get("cat") in CC_CATS else "growth" if a.get("cat") in GROWTH_CATS else "etc")
+    out = []
+    for x in by.values():
+        if x["weight"] >= 50 and len(x["syms"]) >= 2:
+            out.append({"base": x["base"], "weight": round(x["weight"], 1), "syms": x["syms"], "both": {"cc", "growth"} <= x["kinds"]})
+    return sorted(out, key=lambda x: -x["weight"])
+
+
+def _pg(a, price_growth):
+    """종목 한 줄의 주가 상승 가정(연, 소수).
+    커버드콜·고분배는 '분배금 + 주가'를 합친 수익이 성장 ETF의 주가 상승 가정과 같다고 본다(옵션을 판 대가로 상승을 내주므로
+    지수보다 더 벌 수는 없다). 그래서 분배율이 그 수익보다 높으면 그만큼 주가(원금)가 해마다 줄어든다."""
+    cat = a.get("cat")
+    if cat in CC_CATS:
+        return (price_growth + PRICE_ADD["us_growth"] - (a.get("yield") or 0)) / 100
+    return (price_growth * PRICE_FACTOR.get(cat, 1.0) + PRICE_ADD.get(cat, 0.0)) / 100
+
+
+def _shock(t, cat):
+    """하락장 가정에서 t개월째 주가가 평소 경로의 몇 배인지."""
+    if cat in CASH_CATS:
+        return 1.0
+    d, a, b, c = SHOCK["drop"] / 100, SHOCK["down"], SHOCK["flat"], SHOCK["up"]
+    end = SHOCK["cc_back"] if cat in CC_CATS else 1.0
+    if t <= a:
+        return 1 - d * t / a
+    if t <= a + b:
+        return 1 - d
+    if t <= a + b + c:
+        return (1 - d) + (end - (1 - d)) * (t - a - b) / c
+    return end
+
+
+def _live(assets, amount, years, spend, inflation, other, other_from, health, price_growth, growth_scale, tax_kr, tax_us, fx_change, shock=False):
+    """모은 돈을 생활비로 쓰는 경우를 달마다 계산한다.
+    배당(세후)으로 먼저 생활비를 대고, 모자라면 현금성 자산 → 나머지 순으로 판다. 남으면 목표 비중대로 다시 산다.
+    건강보험료는 지난해 배당 기준으로, 미국 종목을 팔아 남긴 이익의 세금은 이듬해에 낸다. 반환: (연도별 목록, 바닥난 해 또는 None)."""
+    st = []
+    for a in assets:
+        w = a["weight"] / 100
+        g = (a.get("growth") or 0) / 100 * growth_scale
+        pg_a = _pg(a, price_growth)
+        g_long = max(0.0, min(g, pg_a + 0.01))
+        fac, f = [], 1.0
+        for k in range(years):
+            if k > 0:
+                f *= 1 + (g if k <= FADE_YEARS else g_long)
+            fac.append(f)
+        st.append({"cat": a.get("cat"), "n": amount * w, "cost": amount * w, "w": w, "y0": (a.get("yield") or 0) / 100, "fac": fac, "pg": pg_a,
+                   "tax": (tax_us if a["mkt"] == "us" else tax_kr) / 100, "us": a["mkt"] == "us", "cash": a.get("cat") in CASH_CATS,
+                   "cc": a.get("cat") in CC_CATS})
+    yearly, dead = [], None
+    gross_prev = sum(s["n"] * s["y0"] for s in st)          # 첫해 건강보험료는 지금 배당 수준으로 어림
+    cg_due = 0.0
+    for k in range(years):
+        fee_y = health_fee(gross_prev, health)
+        infl = (1 + inflation / 100) ** k
+        need_m = spend * infl
+        other_m = other * infl if other > 0 and k + 1 >= other_from else 0.0
+        yr = {"year": k + 1, "gross": 0.0, "div": 0.0, "sell": 0.0, "cg": cg_due}
+        gain_us = 0.0
+        for j in range(12):
+            t = k * 12 + j
+            fxm = (1 + fx_change / 100) ** (t / 12)
+            net = 0.0
+            for s in st:
+                sm = _shock(t, s["cat"]) if shock else 1.0
+                s["p"] = (1 + s["pg"]) ** (t / 12) * (fxm if s["us"] else 1) * sm
+                up = (1 + s["pg"]) ** (t / 12) * sm if s["cc"] else s["fac"][k]                 # 커버드콜 분배금은 주가(순자산)를 따라간다
+                dps = s["y0"] * up * (fxm if s["us"] else 1)
+                gross = s["n"] * dps / 12        # 달마다 고르게 들어온다고 본다(분기 배당의 빈 달은 그 사이 받은 배당으로 지낸다)
+                yr["gross"] += gross
+                net += gross * (1 - s["tax"])
+            yr["div"] += net
+            out = max(0.0, need_m - other_m) + fee_y / 12 + (cg_due if j == 0 else 0.0)
+            if net >= out:
+                extra = net - out
+                for s in st:
+                    s["n"] += extra * s["w"] / s["p"]
+                    s["cost"] += extra * s["w"]
+            else:
+                short = out - net
+                for group in ([s for s in st if s["cash"]], [s for s in st if not s["cash"]]):
+                    tot = sum(s["n"] * s["p"] for s in group)
+                    if tot <= 0 or short <= 0:
+                        continue
+                    take = min(short, tot)
+                    f = take / tot
+                    for s in group:
+                        sold = s["n"] * s["p"] * f
+                        if s["us"] and not s["cash"]:
+                            gain_us += sold - s["cost"] * f
+                        s["n"] *= 1 - f
+                        s["cost"] *= 1 - f
+                    yr["sell"] += take
+                    short -= take
+                if short > 1:
+                    dead = k + 1
+            if dead:
+                break
+        value = sum(s["n"] * s.get("p", 1.0) for s in st)
+        cash = sum(s["n"] * s.get("p", 1.0) for s in st if s["cash"])
+        needs = max(0.0, need_m - other_m) + fee_y / 12
+        yearly.append({"year": k + 1, "need": round(need_m), "other": round(other_m), "fee": round(fee_y / 12), "cg": round(yr["cg"]),
+                       "div": round(yr["div"] / 12), "sell": round(yr["sell"] / 12), "gross": round(yr["gross"]),
+                       "cover": round(yr["div"] / 12 / needs * 100) if needs > 0 else 999, "value": 0 if dead else round(value), "cash": 0 if dead else round(cash)})
+        if dead:
+            break
+        gross_prev = yr["gross"]
+        cg_due = max(0.0, gain_us - US_GAIN_FREE) * US_GAIN_TAX / 100
+    return yearly, dead
+
+
+def live(p, assets, amount, pg, gs, tk, tu, fxc):
+    """'생활비로 살아 보기': 이 구성으로 생활비를 쓰며 버티는지, 평소와 하락장 두 경우로 본다."""
+    L = p.get("live") or {}
+    try:
+        spend = float(L.get("spend") or 0)
+    except (TypeError, ValueError):
+        spend = 0
+    if spend <= 0 or amount <= 0:
+        return None
+    num = lambda k, d, lo, hi: min(max(float(L.get(k) if L.get(k) not in (None, "") else d), lo), hi)
+    infl, other, o_from = num("inflation", 2.5, 0, 10), num("other", 0, 0, 1e9), int(num("other_from", 1, 1, 40))
+    health = L.get("health") if L.get("health") in ("work", "local") else "local"
+    years = int(num("years", 30, 5, 50))               # 생활비로 쓰는 기간은 모으는 기간과 따로 본다(기본 30년)
+    kw = dict(assets=assets, amount=amount, years=years, spend=spend, inflation=infl, other=other, other_from=o_from, health=health,
+              price_growth=pg, growth_scale=gs, tax_kr=tk, tax_us=tu, fx_change=fxc)
+    base, dead = _live(**kw)
+    bad, bad_dead = _live(shock=True, **kw)
+    y1, b1 = base[0], bad[0]
+    w = lambda cats: sum(a["weight"] for a in assets if a.get("cat") in cats)
+    cash0 = amount * w(CASH_CATS) / 100
+    gap = lambda r: max(0, r["need"] - r["other"] + r["fee"] - r["div"])
+    worst_gap = max(gap(r) for r in bad[:3])                               # 하락장 첫 3년 가운데 한 달에 가장 많이 모자란 돈
+    sells = any(r["sell"] > 0 for r in base)
+    code = "out" if dead else "mix" if sells else "div"
+    net_need = max(0.0, y1["need"] - y1["other"]) + y1["fee"]
+    tips = []
+    for o in overlap(assets):
+        tips.append({"kind": "overlap", "text": f"{o['base']} 한 지수에 {o['weight']:g}%가 몰려 있어요({', '.join(o['syms'])}). "
+                     + ("커버드콜과 성장 ETF가 같은 지수라 " if o["both"] else "") + "오를 때도 같이 오르지만 떨어질 때도 같이 떨어져요."})
+    cc_w = w(CC_CATS)
+    if cc_w >= 50:
+        tips.append({"kind": "cc", "text": f"커버드콜·고분배가 {cc_w:g}%예요. 상승을 덜 따라가고, 하락 뒤에는 분배금과 원금이 함께 줄 수 있어요. 하락장 결과를 꼭 같이 보세요."})
+    if y1["div"] > net_need * 1.3 and net_need > 0:
+        tips.append({"kind": "over", "text": f"배당이 생활비보다 한 달 {round((y1['div'] - net_need) / 1e4):,}만 원쯤 많아요. 쓰지 않을 배당은 세금"
+                     + ("·건강보험료" if y1["fee"] else "") + "만 늘리니, 그 몫은 성장 자산으로 옮기는 것도 방법이에요."})
+    if health == "local" and HEALTH_LOCAL_LINE < y1["gross"] <= HEALTH_LOCAL_LINE * 1.3:
+        tips.append({"kind": "health", "text": f"연 배당(세전) {round(y1['gross'] / 1e4):,}만 원이 1천만 원을 조금 넘어, 전액이 건강보험료 대상이 돼요(한 달 약 {y1['fee']:,}원). 1천만 원 아래로 맞추면 이 보험료는 0이에요."})
+    elif y1["fee"] > 0:
+        tips.append({"kind": "health", "text": f"배당에 붙는 건강보험료가 한 달 약 {y1['fee']:,}원이에요({'지역가입자: 연 1천만 원을 넘어 전액 대상' if health == 'local' else '직장가입자: 2천만 원 초과분'}). 생활비에서 빼고 계산했어요."})
+    if worst_gap > 0:
+        if cash0 <= 0:
+            tips.append({"kind": "cushion", "text": f"현금성 자산이 없어요. 하락장에는 한 달 {round(worst_gap / 1e4):,}만 원쯤을 싼값에 팔아 메워야 해요. 생활비 1~2년치를 단기채 같은 현금성 자산으로 두는 방법이 있어요."})
+        elif cash0 / worst_gap < 12:
+            tips.append({"kind": "cushion", "text": f"현금성 자산이 하락장에 모자라는 돈의 {cash0 / worst_gap:.0f}개월치예요. 주가가 돌아오기 전에 바닥나면 싼값에 팔아야 해요."})
+    return {"spend": round(spend), "inflation": infl, "other": round(other), "other_from": o_from, "health": health,
+            "code": code, "dead": dead, "years": years, "yearly": base, "bad": bad, "bad_dead": bad_dead,
+            "first": y1, "bad_first": b1, "rate": round(y1["sell"] * 12 / amount * 100, 2),
+            "cash": {"value": round(cash0), "months": round(cash0 / worst_gap, 1) if worst_gap > 0 and cash0 > 0 else None, "gap": round(worst_gap)},
+            "alone": {"spend": max(0, round(y1["div"] + y1["other"] - y1["fee"])),                 # 배당(과 다른 수입)만으로 낼 수 있는 한 달 생활비
+                      "amount": round(amount * net_need / y1["div"]) if y1["div"] > 0 else None},  # 배당만으로 생활비를 대려면 필요한 투자금(같은 구성 기준)
+            "last": {"value": base[-1]["value"], "bad_value": bad[-1]["value"]}, "tips": tips,
+            "shock": {"drop": SHOCK["drop"], "down": SHOCK["down"] // 12, "flat": SHOCK["flat"] // 12, "up": SHOCK["up"] // 12, "cc_back": round(SHOCK["cc_back"] * 100)},
+            "rates": {"health": round(HEALTH_RATE * (1 + CARE_RATE / 100), 2), "local_line": HEALTH_LOCAL_LINE, "work_line": HEALTH_WORK_LINE,
+                      "gain_free": US_GAIN_FREE, "gain_tax": US_GAIN_TAX}}
 
 
 def simulate(p, today=None):
@@ -308,7 +531,9 @@ def simulate(p, today=None):
                     "us_weight": round(us_w, 1), "min_month": min(r["net"] for r in months[:12]), "max_month": max(r["net"] for r in months[:12]),
                     "over_line_year": over, "missing": miss},
         "milestones": milestones, "scenarios": scen, "fx": fx_s, "cut": {"pct": 25, "first": cut_y[0]["monthly"], "last": cut_y[-1]["monthly"]},
-        "assume": {"price_growth": pg, "growth_scale": gs, "tax_kr": tk, "tax_us": tu, "fx_change": fxc},
+        "assume": {"price_growth": pg, "growth_scale": gs, "tax_kr": tk, "tax_us": tu, "fx_change": fxc, "growth_add": PRICE_ADD["us_growth"]},
+        "overlap": overlap(assets),
+        "live": live(p, assets, amount, pg, gs, tk, tu, fxc),
     }
 
 
@@ -450,7 +675,7 @@ class Dividend:
         for p in PRESETS:
             assets = [self._asset(by[(m, s)], w) for m, s, w in p["assets"] if (m, s) in by]
             y = sum(a["weight"] * (a["yield"] or 0) for a in assets) / 100
-            presets.append({"id": p["id"], "name": p["name"], "risk": p["risk"], "desc": p["desc"], "assets": assets, "yield": round(y, 2),
+            presets.append({"id": p["id"], "group": p.get("group", "grow"), "name": p["name"], "risk": p["risk"], "desc": p["desc"], "assets": assets, "yield": round(y, 2),
                             "missing": sum(1 for a in assets if not a["yield"])})
         return {"items": items, "cats": CATS, "presets": presets, "fx": self.fx(), "tax": {"kr": TAX_KR, "us": TAX_US},
                 "goal": self.goal(), "failed": sum(1 for i in items if i.get("error")), "line": FIN_INCOME_LINE}
@@ -631,7 +856,7 @@ class Dividend:
             pays = [m + 1 for m, v in enumerate(i.get("months") or []) if v > 0.01]
             rows.append({"sym": i["sym"], "mkt": i["mkt"], "name": i["name"], "분류": i["cat_name"], "배당률%(세전, 최근 1년)": i["yield"],
                          "지급": i["freq_name"], "지급월(추정)": pays, "5년 배당성장률%": i.get("growth5"), "3년 배당성장률%": i.get("growth3"),
-                         "배당 안 줄인 연속 햇수": i.get("streak"), "설명": i.get("note")})
+                         "배당 안 줄인 연속 햇수": i.get("streak"), "기초 지수": BASE_OF.get(i["sym"]), "설명": i.get("note")})
         if len(rows) < 3:
             raise ValueError("배당 자료를 아직 받지 못했어요. 잠시 뒤 다시 해 주세요")
         try:
@@ -659,6 +884,19 @@ class Dividend:
             ask += " 이미 매달 적립 중인 플랜이 있으니, 겹치는 종목은 그 사실을 판단 글에 한 줄로 적어."
         if float(d.get("monthly_add") or 0) > 0:
             ask += " 매월 추가 투자금은 앱의 적립 플랜(국내 상장 종목만 자동 매수)으로 넣을 수 있어. 미국 종목 몫은 직접 사야 한다는 점을 notes에 적어."
+        L = d.get("live") or {}
+        try:
+            spend = float(L.get("spend") or 0) if L.get("on", True) else 0
+        except (TypeError, ValueError):
+            spend = 0
+        if spend > 0:
+            hk = "직장가입자(월급 외 소득 2천만 원 초과분만 대상)" if L.get("health") == "work" else "지역가입자(이자·배당이 연 1천만 원을 넘으면 전액 대상)"
+            data["생활비로 쓰는 계획"] = {"한 달 생활비(원, 지금 물가)": round(spend), "다른 수입(월, 원)": round(float(L.get("other") or 0)) or None,
+                                   "다른 수입이 시작되는 해": int(L.get("other_from") or 1) if L.get("other") else None, "건강보험": hk,
+                                   "건강보험료율%(장기요양 포함, 어림)": round(HEALTH_RATE * (1 + CARE_RATE / 100), 2)}
+            ask += (f" 이 돈으로 한 달 생활비 {round(spend):,}원을 쓰며 지낼 계획이야. 세금과 건강보험료를 뺀 배당이 생활비에 얼마나 닿는지 먼저 따지고, "
+                    "배당은 필요한 만큼만 만들고 남는 자금은 성장 자산에, 하락장에 버틸 현금성 자산을 몇 개월치 둘지도 정해. "
+                    "같은 지수에 몰리는지, 모자라는 돈을 팔아서 메워야 한다면 한 해에 자산의 몇 %인지도 판단 글에 적어.")
         if goal:
             ask += f" 목표는 세후 월 {round(goal):,}원이야. 이 투자금으로 가능한지, 안 되면 얼마가 더 필요하거나 몇 년 재투자해야 하는지도 말해 줘."
         return "AI 배당 포트폴리오", ask, {k: v for k, v in data.items() if v is not None}

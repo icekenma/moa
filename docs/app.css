@@ -1954,7 +1954,7 @@ html.dark-theme [data-pdv]{color:var(--n1)}
 .dd-ck{flex:0 0 auto;width:26px;height:26px;border-radius:9px;border:1.5px solid var(--line2);background:none;position:relative;cursor:pointer}
 .dd-ck[aria-checked="true"]{background:var(--ink);border-color:var(--ink)}
 .dd-ck[aria-checked="true"]::after{content:"";position:absolute;left:8.5px;top:4.5px;width:6px;height:11px;border:solid #fff;border-width:0 2.2px 2.2px 0;transform:rotate(45deg)}
-.dd-us{display:flex;flex-direction:column;gap:3px;padding:10px 11px;border-radius:12px;background:var(--bg);font-size:10.5px;line-height:1.5}
+.dd-us{display:flex;flex-direction:column;gap:3px;padding:10px 11px;border-radius:12px;background:color-mix(in srgb,var(--ink) 5%,transparent);font-size:10.5px;line-height:1.5}
 .dd-us>b{font-size:11.5px}.dd-us>span{color:var(--ink2)}
 .dd-us .lr-auto{margin-top:6px}
 .dd-sum{display:flex;align-items:baseline;justify-content:space-between;padding-top:10px;border-top:1px solid var(--line)}
@@ -2068,3 +2068,43 @@ html.dark-theme .btn.bk-danger,html.dark-theme .sheet .btn.bk-danger{color:#FFB4
 .at-tr span:not(:first-child){text-align:right;font-weight:800}
 .at-th{border-top:0;font-size:9.5px;color:var(--ink3)}
 .at-th span:not(:first-child){font-weight:700}
+
+/* ---------- v4.39 생활비로 살아 보기 ---------- */
+.dv-sets-l{margin-top:8px}
+.dv-live-in .fields{align-items:end}
+.dv-live{display:flex;flex-direction:column;gap:9px}
+.dv-live-h{display:flex;align-items:flex-start;gap:11px}
+.dv-live-h b{display:block;font-size:17px;font-weight:900;letter-spacing:-.03em;line-height:1.3}
+.dv-live-h div span{display:block;margin-top:3px;font-size:11.5px;line-height:1.5;color:var(--ink2)}
+.dv-live-tag{flex:0 0 auto;margin-top:2px;padding:4px 9px;border-radius:9px;font-size:11px;font-weight:900;background:var(--teal-s,#DFF5EE);color:var(--teal-i,#0B6B55)}
+.dv-live.is-mix .dv-live-tag{background:var(--amber-s,#FCEFCF);color:var(--amber-i,#8A5A00)}
+.dv-live.is-out .dv-live-tag{background:var(--coral-s,#FBE3DE);color:var(--coral-i,#B3261E)}
+/* 첫해 한 달 생활비를 무엇으로 대는지 */
+.dv-cov{display:flex;gap:3px;height:16px;margin-top:2px}
+.dv-cov i{display:block;min-width:6px;border-radius:5px}
+.dv-cov i.div,.dv-cov-l i.div{background:var(--sec)}
+.dv-cov i.oth,.dv-cov-l i.oth{background:var(--teal-i,#0B6B55)}
+.dv-cov i.sell,.dv-cov-l i.sell{background:repeating-linear-gradient(135deg,var(--ink3) 0 4px,transparent 4px 7px);outline:1px solid var(--ink3);outline-offset:-1px}
+.dv-cov-l{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:10.5px;color:var(--ink2)}
+.dv-cov-l span{display:inline-flex;align-items:center;gap:5px}
+.dv-cov-l i{display:inline-block;width:10px;height:10px;border-radius:3px}
+.dv-cov-l b{font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
+.dv-lg{display:inline-block;width:14px;height:0;border-top:3px solid var(--sec);border-radius:2px}
+.dv-lg.b{border-top:2px dashed var(--ink3)}
+.dv-tips{list-style:none;margin:2px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.dv-tips li{position:relative;padding:9px 11px 9px 13px;border-radius:11px;background:color-mix(in srgb,var(--ink) 5%,transparent);font-size:11.5px;line-height:1.55;color:var(--ink2)}
+.dv-tips li::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:3px;border-radius:2px;background:var(--amber-i,#8A5A00)}
+.dv-tips li.over::before,.dv-tips li.health::before{background:var(--ink3)}
+.dv-alone{padding:10px 12px;border-radius:12px;border:1px dashed var(--line2);font-size:11.5px;line-height:1.55;color:var(--ink2)}
+.dv-alone b{color:var(--ink);font-weight:900}
+html.dark-theme .dv-live-tag{background:rgba(94,234,212,.16);color:#7EEBD6}
+html.dark-theme .dv-live.is-mix .dv-live-tag{background:rgba(251,191,36,.16);color:#FCD34D}
+html.dark-theme .dv-live.is-out .dv-live-tag{background:rgba(255,140,125,.18);color:#FFB4A8}
+html.dark-theme .dv-cov i.div,html.dark-theme .dv-cov-l i.div{background:var(--n1)}
+html.dark-theme .dv-cov i.oth,html.dark-theme .dv-cov-l i.oth{background:#5EEAD4}
+html.dark-theme .dv-cov i.sell,html.dark-theme .dv-cov-l i.sell{background:repeating-linear-gradient(135deg,rgba(255,255,255,.55) 0 4px,transparent 4px 7px);outline-color:rgba(255,255,255,.4)}
+html.dark-theme .dv-lg{border-top-color:var(--n1)}html.dark-theme .dv-lg.b{border-top-color:rgba(255,255,255,.5)}
+html.dark-theme .dv-tips li{background:rgba(255,255,255,.05)}
+html.dark-theme .dv-tips li::before{background:#FCD34D}
+html.dark-theme .dv-tips li.over::before,html.dark-theme .dv-tips li.health::before{background:rgba(255,255,255,.4)}
+html.dark-theme .dv-alone{border-color:var(--glass-b)}

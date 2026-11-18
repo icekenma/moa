@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.1544";
+const UI_VERSION = "261118.1605";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1612,6 +1612,7 @@ pages.invest = {
       await aiStream({ kind: "pick", mkt: A.m, model: A.model, web_search: A.web, horizon: A.h, theme: A.h === "day" ? "" : A.theme.trim() }, (ev) => {
         if (ev.t === "status") { A.status = ev.msg; this.apDraw(); }
         else if (ev.t === "text") { A.text += ev.text; A.status = "분석 중"; if (!raf) raf = requestAnimationFrame(() => { raf = 0; this.apDraw(); }); }
+        else if (ev.t === "reset") A.text = "";
         else if (ev.t === "source") { A.src.push(ev); }
         else if (ev.t === "picks") { A.res = ev; }
         else if (ev.t === "error") { A.err = ev.msg; }
@@ -2648,6 +2649,7 @@ pages.invest = {
         goal: (D.uni || {}).goal || 0, model: D.model, web_search: D.web }, (ev) => {
         if (ev.t === "status") D.status = ev.msg;
         else if (ev.t === "text") { D.text += ev.text; D.status = "구성을 쓰는 중"; }
+        else if (ev.t === "reset") D.text = "";
         else if (ev.t === "source") D.src.push(ev);
         else if (ev.t === "plan") { if (ev.error) D.err = ev.error; else { D.plan = ev; D.plans = [ev, ...(D.plans || []).filter((x) => x.id !== ev.id)]; } }
         else if (ev.t === "done") { D.used = ev; aiMeter.clear(); }
@@ -3673,6 +3675,7 @@ function aiSheet(kind, payload = {}) {
         await aiStream({ kind, ...payload, ...extra, history: S.history }, (ev) => {
           if (ev.t === "status") st.textContent = ev.msg;
           else if (ev.t === "text") { text += ev.text; $(".ai-status", turn).hidden = true; if (!raf) raf = requestAnimationFrame(paint); }
+          else if (ev.t === "reset") { text = ""; if (!raf) raf = requestAnimationFrame(paint); }
           else if (ev.t === "source") {
             sources.push(ev);
             src.innerHTML = `<div class="tiny">찾아본 자료 ${sources.length}건</div>` + sources.map((x) => `<a href="${safeUrl(x.url)}" target="_blank" rel="noopener">${esc(x.title)}${x.age ? ` <span>${esc(x.age)}</span>` : ""}</a>`).join("");

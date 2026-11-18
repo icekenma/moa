@@ -2094,10 +2094,99 @@ def test_dividend_ai_plan_context_parse_and_stream(rt, monkeypatch):
         yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 50}}
     monkeypatch.setattr(rt.ai, "_post", post)
     evs = list(rt.ai.stream("divplan", {"amount": 300_000_000, "web_search": False}))
-    assert "배당 포트폴리오 설계" in seen["system"] and seen["max_tokens"] == 5000 and "tools" not in seen
+    assert "배당 포트폴리오 설계" in seen["system"] and seen["max_tokens"] == 8000 and "tools" not in seen
     p = next(e for e in evs if e["t"] == "plan")
     assert p["title"] == "성장+현금흐름" and len(p["assets"]) == 3 and evs[-1]["t"] == "done"
     assert rt.db.one("SELECT kind FROM ai_usage ORDER BY rowid DESC LIMIT 1")["kind"] == "divplan"
+
+
+def test_ai_stream_recovers_from_paused_empty_or_broken_answers(rt, monkeypatch):
+    """검색이 길어져 멈춘 답(pause_turn)은 이어받고, 빈 답·깨진 표는 검색 없이 한 번 더 받아 살린다. 비용은 모두 더한다."""
+    _div_rt(rt, monkeypatch)
+    rt.settings.update({"ai": {"api_key": "sk-test-key-1234567890"}})
+    good = "정리했어요.\n```json\n" + json.dumps({"title": "이어받은 구성", "summary": "s", "assets": [
+        {"sym": "SCHD", "mkt": "us", "weight": 60, "reason": "성장"}, {"sym": "JEPI", "mkt": "us", "weight": 40, "reason": "월배당"}]}, ensure_ascii=False) + "\n```"
+    calls = []
+
+    def msg(text, stop, n_in=1000, n_out=100, search=0):
+        yield {"type": "message_start", "message": {"usage": {"input_tokens": n_in, "output_tokens": 1}}}
+        if search:
+            yield {"type": "content_block_start", "index": 0, "content_block": {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}}}
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"query": "SCHD '}}
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": 'dividend"}'}}
+            yield {"type": "content_block_stop", "index": 0}
+            yield {"type": "content_block_start", "index": 1, "content_block": {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_1",
+                                                                              "content": [{"type": "web_search_result", "url": "https://ex.com/a", "title": "A"}]}}
+            yield {"type": "content_block_stop", "index": 1}
+        if text:
+            yield {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}}
+            yield {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": text}}
+            yield {"type": "content_block_stop", "index": 2}
+        yield {"type": "message_delta", "delta": {"stop_reason": stop}, "usage": {"output_tokens": n_out, "server_tool_use": {"web_search_requests": search}}}
+
+    # 1) 검색 뒤 멈춤 → 받은 블록을 그대로 돌려보내 이어받는다
+    def post1(body):
+        calls.append(json.loads(json.dumps(body)))
+        return msg("찾아보는 중 ", "pause_turn", search=2) if len(calls) == 1 else msg(good, "end_turn", n_in=3000, n_out=400)
+    monkeypatch.setattr(rt.ai, "_post", post1)
+    evs = list(rt.ai.stream("divplan", {"amount": 100_000_000, "web_search": True}))
+    assert len(calls) == 2 and "tools" in calls[1]
+    back = calls[1]["messages"][-1]
+    assert back["role"] == "assistant" and [b["type"] for b in back["content"]] == ["server_tool_use", "web_search_tool_result", "text"]
+    assert back["content"][0]["input"] == {"query": "SCHD dividend"} and back["content"][2]["text"] == "찾아보는 중"   # 끝 공백 제거
+    p = next(e for e in evs if e["t"] == "plan")
+    assert p.get("title") == "이어받은 구성" and evs[-1]["t"] == "done" and evs[-1]["searches"] == 2
+    assert evs[-1]["in"] == 4000 and evs[-1]["out"] == 500 and any(e["t"] == "status" and "이어서" in e["msg"] for e in evs)
+
+    # 2) 답이 비어 끝남(스크린샷의 경우) → 검색 없이 다시 받아 구성을 만든다
+    calls.clear()
+
+    def post2(body):
+        calls.append(json.loads(json.dumps(body)))
+        return msg("", "end_turn", n_in=30000, n_out=200, search=4) if len(calls) == 1 else msg(good, "end_turn", n_in=9000, n_out=600)
+    monkeypatch.setattr(rt.ai, "_post", post2)
+    evs = list(rt.ai.stream("divplan", {"amount": 100_000_000, "web_search": True}))
+    assert len(calls) == 2 and "tools" not in calls[1] and len(calls[1]["messages"]) == 1
+    assert next(e for e in evs if e["t"] == "plan").get("title") == "이어받은 구성" and any(e["t"] == "reset" for e in evs)
+    assert evs[-1]["in"] == 39000 and evs[-1]["searches"] == 4
+
+    # 3) 표가 깨진 답 → 쓴 글을 참고로 다시 정리. 다시 받아도 안 되면 사유와 함께 알린다
+    calls.clear()
+
+    def post3(body):
+        calls.append(json.loads(json.dumps(body)))
+        return msg("SCHD 중심으로 가요. 표는 아래에", "max_tokens") if len(calls) == 1 else msg(good, "end_turn")
+    monkeypatch.setattr(rt.ai, "_post", post3)
+    evs = list(rt.ai.stream("divplan", {"amount": 100_000_000, "web_search": False}))
+    assert [m["role"] for m in calls[1]["messages"]] == ["user", "assistant", "user"] and "SCHD 중심" in calls[1]["messages"][1]["content"]
+    assert next(e for e in evs if e["t"] == "plan").get("title") == "이어받은 구성"
+    text_after_reset = "".join(e["text"] for e in evs[max(i for i, e in enumerate(evs) if e["t"] == "reset"):] if e["t"] == "text")
+    assert text_after_reset == good
+    calls.clear()
+    monkeypatch.setattr(rt.ai, "_post", lambda body: (calls.append(1), msg("표 없이 글만", "max_tokens"))[1])
+    evs = list(rt.ai.stream("divplan", {"amount": 100_000_000, "web_search": False}))
+    p = next(e for e in evs if e["t"] == "plan")
+    assert len(calls) == 2 and "읽지 못했어요" in p["error"] and "잘렸어요" in p["error"] and evs[-1]["t"] == "done"
+
+    # 4) 끝이 잘려도 온전한 종목 줄이 둘 이상이면 다시 묻지 않고 살린다
+    calls.clear()
+    cut = good[:good.index("]}")] + ',{"sym":"SGOV","mkt":"us","wei'
+    monkeypatch.setattr(rt.ai, "_post", lambda body: (calls.append(1), msg(cut, "max_tokens"))[1])
+    evs = list(rt.ai.stream("divplan", {"amount": 100_000_000, "web_search": False}))
+    p = next(e for e in evs if e["t"] == "plan")
+    assert len(calls) == 1 and [a["sym"] for a in p["assets"]] == ["SCHD", "JEPI"] and any("잘려" in n for n in p["notes"])
+
+    # 5) 다른 화면(종목 정리 등)도 빈 답이면 한 번 더 받고, 그래도 비면 오류로 알린다(비용은 기록)
+    calls.clear()
+    monkeypatch.setattr(rt.ai, "_post", lambda body: (calls.append(body.get("model")), msg("", "refusal") if len(calls) == 1 else msg("답이에요", "end_turn"))[1])
+    evs = list(rt.ai.stream("chat", {"question": "배당이 뭐야", "model": "claude-fable-5-2", "web_search": False}))
+    assert calls == ["claude-fable-5-2", "claude-sonnet-5-5"] and "".join(e["text"] for e in evs if e["t"] == "text") == "답이에요" and evs[-1]["model"] == "claude-sonnet-5-5"
+    calls.clear()
+    n0 = rt.db.one("SELECT COUNT(*) AS n FROM ai_usage")["n"]
+    monkeypatch.setattr(rt.ai, "_post", lambda body: (calls.append(1), msg("", "end_turn"))[1])
+    evs = list(rt.ai.stream("chat", {"question": "배당이 뭐야", "web_search": False}))
+    assert len(calls) == 2 and evs[-1]["t"] == "error" and "답을 주지 않았어요" in evs[-1]["msg"]
+    assert rt.db.one("SELECT COUNT(*) AS n FROM ai_usage")["n"] == n0 + 1
 
 
 def test_dividend_slow_source_does_not_block_screen(rt, monkeypatch):

@@ -40,6 +40,56 @@ class AIError(RuntimeError):
     pass
 
 
+class Blocks:
+    """스트리밍으로 받은 답의 내용 블록을 다시 조립한다. pause_turn 뒤 '받은 그대로' 돌려보내 이어받는 데 쓴다."""
+
+    def __init__(self):
+        self.items, self.json = {}, {}
+
+    def feed(self, ev):
+        typ, i = ev.get("type"), ev.get("index")
+        if typ == "content_block_start":
+            self.items[i] = dict(ev.get("content_block") or {})
+            self.json[i] = ""
+        elif typ == "content_block_delta" and i in self.items:
+            b, dl = self.items[i], ev.get("delta") or {}
+            t = dl.get("type")
+            if t == "text_delta":
+                b["text"] = (b.get("text") or "") + dl.get("text", "")
+            elif t == "input_json_delta":
+                self.json[i] += dl.get("partial_json", "")
+            elif t == "citations_delta":
+                b.setdefault("citations", [])
+                if not isinstance(b["citations"], list):
+                    b["citations"] = []
+                b["citations"].append(dl.get("citation"))
+            elif t == "thinking_delta":
+                b["thinking"] = (b.get("thinking") or "") + dl.get("thinking", "")
+            elif t == "signature_delta":
+                b["signature"] = dl.get("signature")
+        elif typ == "content_block_stop" and i in self.items and self.json.get(i):
+            try:
+                self.items[i]["input"] = json.loads(self.json[i])
+            except ValueError:
+                self.items[i]["broken"] = True
+
+    def content(self):
+        out = []
+        for i in sorted(self.items):
+            b = dict(self.items[i])
+            if b.pop("broken", None):
+                continue
+            if b.get("type") == "text":
+                if not (b.get("text") or "").strip():
+                    continue
+                if not b.get("citations"):
+                    b.pop("citations", None)
+            out.append(b)
+        if out and out[-1].get("type") == "text":       # 마지막 글 블록은 공백으로 끝나면 안 된다
+            out[-1]["text"] = out[-1]["text"].rstrip()
+        return out
+
+
 def _model_price(model):
     for k, (_, i, o) in MODELS.items():
         if model.startswith(k):
@@ -302,7 +352,7 @@ class AI:
         div = kind == "divplan"
         if div:
             from .dividend import DIV_SYSTEM
-        body = {"model": model, "max_tokens": 9000 if pick else 5000 if div else 2500,
+        body = {"model": model, "max_tokens": 9000 if pick else 8000 if div else 2500,
                 "system": system_prompt(hzn) if pick else DIV_SYSTEM if div else SYSTEM, "messages": messages, "stream": True}
         web = d["web_search"] if isinstance(d.get("web_search"), bool) else c.get("web_search", True)
         if web and kind not in ("sweep", "learn"):
@@ -312,15 +362,45 @@ class AI:
         sources, seen = [], set()
         buf = []
         rk = "pickw" if pick and hzn != "day" else kind  # 중기 추천은 검색이 많아 비용을 따로 센다
+        state = {"blocks": []}
 
         def run(b):
+            """요청 한 번. 여러 번 부르면 사용량은 더해진다. 받은 내용 블록은 이어받기(pause_turn)용으로 모아 둔다."""
+            base = {k: usage.get(k, 0) for k in ("in", "out", "searches")}
+            u = {"in": 0, "out": 0, "searches": 0}
+            blocks = Blocks()
+            state["blocks"] = blocks
+            usage.pop("stop", None)
             for ev in self._post(b):
-                for x in self._handle(ev, usage, sources, seen):
+                blocks.feed(ev)
+                for x in self._handle(ev, u, sources, seen):
                     if x["t"] == "text":
                         buf.append(x["text"])
                     yield x
+                for k in base:
+                    usage[k] = base[k] + u[k]
+                if u.get("stop"):
+                    usage["stop"] = u["stop"]
+
+        def text():
+            return "".join(buf)
+
         try:
             yield from run(body)
+            # 웹 검색이 길어지면 서버가 중간에 멈추고(pause_turn) 돌려준다. 받은 내용을 그대로 다시 보내면 이어서 답한다.
+            for _ in range(3):
+                if usage.get("stop") != "pause_turn":
+                    break
+                content = state["blocks"].content()
+                if not content:
+                    break
+                yield {"t": "status", "msg": "검색이 길어져 이어서 받는 중"}
+                body["messages"] = body["messages"] + [{"role": "assistant", "content": content}]
+                try:
+                    yield from run(body)
+                except AIError:
+                    usage["stop"] = "pause_turn"          # 이어받기 실패: 아래에서 검색 없이 한 번 더 정리한다
+                    break
         except GeneratorExit:  # 사용자가 멈춤: 그때까지 쓴 비용은 기록
             self._record_partial(rk, model, usage)
             raise
@@ -339,6 +419,50 @@ class AI:
                 self._record_partial(rk, model, usage)
                 yield {"t": "error", "msg": str(e)}
                 return
+
+        def again(why, mdl=None):
+            """답이 비었거나 끝까지 오지 않았을 때: 검색 없이, 지금까지 쓴 글을 참고로 처음부터 다시 받는다(한 번만)."""
+            prev = text().strip()
+            msgs = list(messages)
+            if prev:
+                msgs += [{"role": "assistant", "content": prev[:6000]},
+                         {"role": "user", "content": "답이 끝까지 오지 않았어. 위에서 찾은 내용을 살려서, 정해진 출력 형식 그대로 처음부터 끝까지 다시 써 줘. 웹 검색은 하지 마."}]
+            b2 = {k: v for k, v in body.items() if k != "tools"}
+            b2.update(messages=msgs, model=mdl or model)
+            yield {"t": "status", "msg": why}
+            yield {"t": "reset"}
+            del buf[:]
+            yield from run(b2)
+
+        plan, plan_err = None, None
+        need = None
+        if not text().strip():
+            need = "AI가 이 요청에 답하지 않아 다른 엔진으로 다시 받는 중" if usage.get("stop") == "refusal" else "답이 비어 있어 검색 없이 다시 받는 중"
+        elif div:
+            try:
+                self.rt.dividend.read_plan(text())
+            except Exception as e:
+                plan_err = e
+                need = "구성 표가 끝까지 오지 않아 검색 없이 한 번 더 정리하는 중"
+        if need:
+            fb = "claude-sonnet-5-5" if usage.get("stop") == "refusal" and model != "claude-sonnet-5-5" else None
+            stop0 = usage.get("stop")
+            try:
+                yield from again(need, fb)
+                plan_err, model = None, fb or model
+            except GeneratorExit:
+                self._record_partial(rk, model, usage)
+                raise
+            except AIError as e:
+                if not div:
+                    self._record_partial(rk, model, usage)
+                    yield {"t": "error", "msg": str(e)}
+                    return
+                plan_err = plan_err or ValueError(str(e))
+            if not text().strip() and not div and not pick:
+                self._record_partial(rk, model, usage)
+                yield {"t": "error", "msg": "AI가 답을 주지 않았어요" + (f" (사유: {stop0})" if stop0 and stop0 != "end_turn" else "") + ". 다른 엔진으로 바꾸거나 잠시 뒤 다시 받아 주세요"}
+                return
         usd = self._record(rk, model, usage)
         fx = FX_DEFAULT
         try:
@@ -356,10 +480,22 @@ class AI:
                 yield {"t": "status", "msg": f"추천 결과 정리 실패: {e}"}
             yield {"t": "picks", **(res or {"picks": [], "stance": None, "view": "", "note": "AI 답이 비어 있어요. 다시 받아 보세요"})}
         if div:
-            try:
-                yield {"t": "plan", **self.rt.dividend.parse_plan("".join(buf), d, model, usd)}
-            except Exception as e:
-                yield {"t": "plan", "error": str(e) if isinstance(e, ValueError) else f"구성 정리 실패 ({type(e).__name__})"}
+            if text().strip():
+                try:
+                    plan = self.rt.dividend.parse_plan(text(), d, model, usd)
+                except Exception as e:
+                    plan_err = e
+            elif plan_err is None:
+                plan_err = ValueError("AI가 답을 주지 않았어요. 다른 엔진으로 바꾸거나 잠시 뒤 다시 받아 주세요")
+            if plan is not None:
+                yield {"t": "plan", **plan}
+            else:
+                why = str(plan_err) if isinstance(plan_err, ValueError) else f"구성 정리 실패 ({type(plan_err).__name__})"
+                stop = usage.get("stop")
+                if stop and stop not in ("end_turn", "stop_sequence"):
+                    why += {"max_tokens": " (답이 길어 중간에 잘렸어요)", "pause_turn": " (검색이 길어져 답이 끊겼어요)",
+                            "refusal": " (엔진이 답을 거절했어요. 다른 엔진으로 받아 보세요)"}.get(stop, f" (사유: {stop})")
+                yield {"t": "plan", "error": why}
         cr = self.credit()
         yield {"t": "done", "fx": fx, "credit": cr, "title": title, "usd": round(usd, 4), "krw": int(round(usd * fx)), "model": model,
                "searches": usage["searches"], "in": usage["in"], "out": usage["out"],

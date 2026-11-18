@@ -553,22 +553,47 @@ class Dividend:
             ask += f" 목표는 세후 월 {round(goal):,}원이야. 이 투자금으로 가능한지, 안 되면 얼마가 더 필요하거나 몇 년 재투자해야 하는지도 말해 줘."
         return "AI 배당 포트폴리오", ask, {k: v for k, v in data.items() if v is not None}
 
-    def parse_plan(self, text, d, model, usd):
-        m = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S) or re.findall(r"(\{\s*\"title\".*\})", text, re.S)
-        j = None
-        if m:
+    @staticmethod
+    def read_plan(text):
+        """AI 답에서 구성 JSON을 읽는다. 코드 블록이 없거나, 쉼표가 남았거나, 끝이 잘렸어도 종목 줄은 살려 낸다."""
+        text = text or ""
+        cands = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
+        i = text.find("{", max(0, text.rfind("```json")))
+        if i >= 0:
+            cands.append(text[i:text.rfind("}") + 1] if text.rfind("}") > i else text[i:])
+        k = text.find('"assets"')
+        if k >= 0 and text.rfind("{", 0, k) >= 0:
+            cands.append(text[text.rfind("{", 0, k):text.rfind("}") + 1])
+        for c in reversed(cands):
+            for fix in (c, re.sub(r",\s*([}\]])", r"\1", c)):
+                try:
+                    j = json.loads(fix)
+                except ValueError:
+                    continue
+                if isinstance(j, dict) and isinstance(j.get("assets"), list) and j["assets"]:
+                    return j
+        # 끝이 잘린 답: 온전한 종목 줄({...sym...weight...})만 모은다
+        rows = []
+        for m in re.finditer(r"\{[^{}]*\"sym\"[^{}]*\}", text, re.S):
             try:
-                j = json.loads(m[-1])
+                a = json.loads(re.sub(r",\s*}", "}", m.group(0)))
             except ValueError:
-                j = None
-        if not j or not j.get("assets"):
-            raise ValueError("AI 답에서 포트폴리오 표를 읽지 못했어요. 다시 받아 주세요")
+                continue
+            if a.get("sym") and a.get("weight") not in (None, ""):
+                rows.append(a)
+        if len(rows) >= 2:
+            pick = lambda key: (re.search(r'"%s"\s*:\s*"((?:[^"\\]|\\.)*)"' % key, text) or [None, ""])[1]
+            return {"title": pick("title"), "summary": pick("summary"), "assets": rows, "rebalance": pick("rebalance"), "partial": True}
+        raise ValueError("AI 답에서 포트폴리오 표를 읽지 못했어요. 다시 받아 주세요")
+
+    def parse_plan(self, text, d, model, usd):
+        j = self.read_plan(text)
         want = []
         for a in j["assets"][:10]:
             sym = str(a.get("sym") or "").strip().upper()
             mkt = "kr" if (a.get("mkt") == "kr" or re.fullmatch(r"\d{6}", sym)) else "us"
             try:
-                w = float(a.get("weight") or 0)
+                w = float(str(a.get("weight") or 0).replace("%", "").strip())
             except (TypeError, ValueError):
                 w = 0
             if sym and w > 0:
@@ -592,6 +617,8 @@ class Dividend:
         plan = {"title": str(j.get("title") or "AI 배당 구성")[:30], "summary": str(j.get("summary") or "")[:160], "assets": assets,
                 "yield": round(y, 2), "rebalance": str(j.get("rebalance") or "")[:160],
                 "risks": [str(r)[:160] for r in (j.get("risks") or [])][:5], "notes": [str(r)[:160] for r in (j.get("notes") or [])][:5]}
+        if j.get("partial"):
+            plan["notes"] = (plan["notes"] + ["AI 답의 끝부분이 잘려, 읽을 수 있는 종목만으로 비중을 100%에 맞췄어요"])[:5]
         keep = {k: d.get(k) for k in ("amount", "monthly_add", "years", "reinvest", "style", "region", "goal", "memo")}
         pid = self.rt.db.x("INSERT INTO div_plans(ts,model,usd,params,plan,text) VALUES(?,?,?,?,?,?)",
                            (datetime.now().isoformat(timespec="seconds"), model, usd, json.dumps(keep, ensure_ascii=False),

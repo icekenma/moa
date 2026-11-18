@@ -62,6 +62,8 @@ def create_app(rt, updater=None):
     app = Flask(__name__, static_folder=None)
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
+    err_seen = {}
+
     @app.errorhandler(Exception)
     def on_error(e):
         code = getattr(e, "code", None)
@@ -70,13 +72,25 @@ def create_app(rt, updater=None):
         known = (LedgerError, AssetError, OrderError, BT.DataError, ValueError, RuntimeError)
         if isinstance(e, known):
             return jsonify(error=str(e)), 400
-        app.logger.exception(e)
+        import time as _t
+        import requests as _rq
+        net = isinstance(e, (_rq.RequestException, ConnectionError, TimeoutError))
+        # 같은 오류가 화면 새로고침마다 되풀이될 수 있어(시세는 몇 초마다 다시 받는다) 5분에 한 번만 로그에 남긴다
+        key, now = (request.path, type(e).__name__), _t.time()
+        if now - err_seen.get(key, 0) > 300:
+            if len(err_seen) > 300:
+                err_seen.clear()
+            err_seen[key] = now
+            if not net:
+                app.logger.exception(e)
+            try:
+                rt.db.log("system", "error", f"{request.method} {request.path} 처리 실패: {type(e).__name__}: {str(e)[:300]}",
+                          datetime.now().isoformat(timespec="seconds"))
+            except Exception:
+                pass
+        if net:  # 바깥 서버(시세·증권사·AI)에 못 닿은 것: 앱 잘못이 아니므로 다시 시도하면 된다
+            return jsonify(error="바깥 서버(시세·증권사)에 연결하지 못했어요. 잠시 뒤 다시 시도해 주세요", code="upstream"), 502
         # 내부 오류 문구에는 경로·키 같은 것이 섞일 수 있어 화면에는 종류만 보내고, 자세한 내용은 로그에 남긴다
-        try:
-            rt.db.log("system", "error", f"{request.method} {request.path} 처리 실패: {type(e).__name__}: {str(e)[:300]}",
-                      datetime.now().isoformat(timespec="seconds"))
-        except Exception:
-            pass
         return jsonify(error=f"처리하지 못했어요 ({type(e).__name__}). 자세한 내용은 로그에 남겼어요"), 500
 
     def body():

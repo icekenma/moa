@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.0909";
+const UI_VERSION = "261118.1205";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -242,6 +242,7 @@ function toast(msg, err) {
 async function run(fn, okMsg) {
   try { const r = await fn(); if (okMsg) toast(okMsg); return r; }
   catch (e) {
+    try { e.shown = true; } catch (x) { /* 읽기 전용 오류 객체 */ }  // 이미 안내했다는 표시(아래 전역 처리에서 또 띄우지 않게)
     if (e instanceof Locked) { closeSheet(); throw e; }
     if (e instanceof NeedConnect) { closeSheet(); location.hash = "#connect"; }
     toast(e.message, true); throw e;
@@ -581,6 +582,17 @@ function restoreScroll() {
     [0, 250, 700].forEach((t) => setTimeout(() => window.scrollTo(0, y), t));
   } else nav.restore = "";
 }
+// 버튼을 눌렀는데 아무 일도 안 일어나는 일이 없게: 어디서도 처리하지 않은 오류는 화면에 알린다
+let lastOops = ["", 0];
+window.addEventListener("unhandledrejection", (ev) => {
+  const e = ev.reason || {};
+  if (e.shown || e instanceof Locked || e.name === "AbortError") { ev.preventDefault(); return; }
+  if (e instanceof NeedConnect) { ev.preventDefault(); if (!location.hash.startsWith("#connect")) location.hash = "#connect"; return; }
+  const msg = String(e.message || e || "").slice(0, 140);
+  if (!msg || (lastOops[0] === msg && Date.now() - lastOops[1] < 5000)) return;
+  lastOops = [msg, Date.now()];
+  try { toast(/^[가-힣]/.test(msg) ? msg : `문제가 생겼어요: ${msg}`, true); } catch (x) { /* 화면 준비 전 */ }
+});
 view.addEventListener("click", (e) => { if (e.target.closest('[data-act="retry"]')) route(); });
 // 가계부 월 이동(어느 2뎁스 화면이든 공통)
 view.addEventListener("click", (e) => {

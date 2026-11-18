@@ -303,6 +303,7 @@ class AI:
         usage = {"in": 0, "out": 0, "searches": 0}
         sources, seen = [], set()
         buf = []
+        rk = "pickw" if pick and hzn != "day" else kind  # 중기 추천은 검색이 많아 비용을 따로 센다
 
         def run(b):
             for ev in self._post(b):
@@ -312,6 +313,9 @@ class AI:
                     yield x
         try:
             yield from run(body)
+        except GeneratorExit:  # 사용자가 멈춤: 그때까지 쓴 비용은 기록
+            self._record_partial(rk, model, usage)
+            raise
         except AIError as e:
             if "tools" in body and "web_search" in str(e).lower():
                 # 조직에서 웹 검색을 안 켰으면 검색 없이 다시
@@ -320,12 +324,14 @@ class AI:
                 try:
                     yield from run(body)
                 except AIError as e2:
+                    self._record_partial(rk, model, usage)
                     yield {"t": "error", "msg": str(e2)}
                     return
             else:
+                self._record_partial(rk, model, usage)
                 yield {"t": "error", "msg": str(e)}
                 return
-        usd = self._record("pickw" if pick and hzn != "day" else kind, model, usage)  # 중기 추천은 검색이 많아 비용을 따로 센다
+        usd = self._record(rk, model, usage)
         fx = FX_DEFAULT
         try:
             fx = float(self.rt.market.yh_quote("USDKRW=X")["price"]) or FX_DEFAULT
@@ -336,7 +342,7 @@ class AI:
         if pick:
             try:
                 res = self.rt.aipick.parse("".join(buf), "us" if d.get("mkt") == "us" else "kr", model, usd,
-                                           cut=usage.get("stop") == "max_tokens", horizon=hzn, theme=d.get("theme") or "")
+                                           cut=usage.get("stop") in ("max_tokens", "pause_turn"), horizon=hzn, theme=d.get("theme") or "")
             except Exception as e:
                 res = None
                 yield {"t": "status", "msg": f"추천 결과 정리 실패: {e}"}
@@ -345,6 +351,14 @@ class AI:
         yield {"t": "done", "fx": fx, "credit": cr, "title": title, "usd": round(usd, 4), "krw": int(round(usd * fx)), "model": model,
                "searches": usage["searches"], "in": usage["in"], "out": usage["out"],
                "left": cr.get("left") if cr.get("set") else None}
+
+    def _record_partial(self, kind, model, usage):
+        """도중에 실패했어도 그때까지 쓴 만큼은 청구되므로, 잔액 표시가 어긋나지 않게 기록해 둔다."""
+        try:
+            if usage.get("in") or usage.get("out") or usage.get("searches"):
+                self._record(kind, model, usage)
+        except Exception:
+            pass
 
     def _handle(self, ev, usage, sources, seen):
         typ = ev.get("type")
@@ -407,13 +421,21 @@ class AI:
                     529: "Claude가 바빠요. 잠시 뒤 다시"}.get(r.status_code, "")
             raise AIError(f"Claude 오류({r.status_code}): {msg} {hint}".strip())
         r.encoding = "utf-8"
-        for line in r.iter_lines(decode_unicode=True):
-            if not line or not line.startswith("data:"):
-                continue
+        try:
+            for line in r.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data:"):
+                    continue
+                try:
+                    yield json.loads(line[5:].strip())
+                except ValueError:
+                    continue
+        except requests.RequestException as e:  # 답을 받는 도중 끊김(시간 초과·연결 끊김)
+            raise AIError(f"Claude의 답을 받는 도중 연결이 끊겼어요. 다시 받아 주세요 ({type(e).__name__})")
+        finally:
             try:
-                yield json.loads(line[5:].strip())
-            except ValueError:
-                continue
+                r.close()
+            except Exception:
+                pass
 
     def test(self):
         """키 확인: 아주 짧은 요청 한 번."""

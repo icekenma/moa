@@ -942,8 +942,9 @@ def _eval_swing(self, r, now, path_only=False):
         day0 = json.loads(r.get("d0") or "null")
     except ValueError:
         day0 = None
-    if ph == "open" and not path_only and now < ts + timedelta(days=2):
-        # 추천 뒤 그날 장이 끝날 때까지의 고가·저가·종가(5분봉은 며칠 뒤엔 사라지므로 있을 때 적어 둔다)
+    if ph == "open" and not path_only and mkt_date(mkt) == d0s:
+        # 추천 뒤 그날 장이 끝날 때까지의 고가·저가·종가. 5분봉은 다음 날이면 앞부분부터 사라지므로,
+        # 추천 당일에만 받아 적고(그날 본 가장 넓은 범위를 유지) 날짜가 바뀌면 그대로 굳힌다
         try:
             start = ts.replace(second=0, microsecond=0)
             seg = []
@@ -953,7 +954,9 @@ def _eval_swing(self, r, now, path_only=False):
                     continue
                 seg.append(dict(b, o=b["c"], h=b["c"], l=b["c"]) if dt < start else b)
             if seg:
-                day0 = {"t": d0s, "o": seg[0]["o"], "h": max(b["h"] for b in seg), "l": min(b["l"] for b in seg), "c": seg[-1]["c"]}
+                old = day0 or {}
+                day0 = {"t": d0s, "o": old.get("o") or seg[0]["o"], "h": max([b["h"] for b in seg] + [old.get("h") or 0]),
+                        "l": min([b["l"] for b in seg] + ([old["l"]] if old.get("l") else [])), "c": seg[-1]["c"]}
                 db.x("UPDATE ai_outcomes SET d0=? WHERE pick_id=? AND idx=?", (json.dumps(day0), *key))
         except Exception:
             pass
@@ -986,11 +989,17 @@ def _eval_swing(self, r, now, path_only=False):
             db.x("UPDATE ai_outcomes SET status='done', result='자료 없음', pathd=1, updated_at=? WHERE pick_id=? AND idx=?",
                  (now.isoformat(timespec="seconds"), *key))
         return
-    if entry0 and abs(bars[0]["o"] / entry0 - 1) > 0.5:
-        # 추천가와 일봉의 가격대가 크게 다르면(액면분할·병합, 다른 종목의 봉 등) 엉뚱한 손익이 나오므로 채점하지 않는다
-        if done:
-            db.x("UPDATE ai_outcomes SET status='done', result='자료 없음', pathd=1, src='가격대 불일치', updated_at=? WHERE pick_id=? AND idx=?",
-                 (now.isoformat(timespec="seconds"), *key))
+    lim = 0.35 if mkt == "kr" else 0.6  # 국내는 하루 ±30%가 한계. 그보다 큰 틈은 시세가 아니라 자료 문제다
+    prev, broken = entry0, False
+    for b in bars:
+        if prev and abs(b["o"] / prev - 1) > lim:
+            broken = True
+            break
+        prev = b["c"]
+    if broken:
+        # 추천가와 일봉의 가격대가 크게 다르면(액면분할·병합, 수정주가 반영 등) 엉뚱한 손익이 나오므로 채점에서 뺀다
+        db.x("UPDATE ai_outcomes SET status='done', result='자료 없음', pathd=1, src='가격대 불일치', updated_at=? WHERE pick_id=? AND idx=?",
+             (now.isoformat(timespec="seconds"), *key))
         return
     result, entry, exit_, mfe, mae, filled, n = judge(bars, entry0, r["target_pct"], r["stop_pct"], "market", gap=True)
     ret = (exit_ / entry - 1) * 100 if entry and exit_ else None

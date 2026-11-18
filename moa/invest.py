@@ -3,7 +3,7 @@
 국내는 키움 REST(실시간), 미국은 키움(연결 시) → 안 되면 공개 시세(Yahoo, 지연)로 받는다.
 키움 호출 한도를 지키려고 market.Cache(짧은 저장 + 지난 값 먼저 주기)를 같이 쓴다.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
 from .broker.kiwoom import num, snum
 from .market import YH, MarketError
@@ -133,24 +133,33 @@ class Invest:
                 out = [x for x in out if x["c"]]
                 out.sort(key=lambda x: x["t"])
                 return {"tf": tf, "bars": out[-120:], "source": "키움"}
-            return self.cache.get(("cd", sym, tf), 3 if tf.startswith("m") else 60, load, stale=600)
+            return self.cache.get(("cd", sym, tf), 3 if self.TF[tf][1] == "minute" else 60, load, stale=600)
         ysym = sym if mkt == "us" else sym + (".KQ" if self.m.kr_market(sym) == "코스닥" else ".KS")
         rng, iv = {"m1": ("1d", "1m"), "m5": ("5d", "5m"), "d": ("6mo", "1d"), "w": ("2y", "1wk"), "mo": ("10y", "1mo")}[tf]
 
         def load_y():
             res = self.m._yh_chart(ysym, rng, iv)
             q = ((res.get("indicators") or {}).get("quote") or [{}])[0]
-            fmt = "%m/%d %H:%M" if tf.startswith("m") else "%Y-%m-%d"
+            minute = self.TF[tf][1] == "minute"
+            off = (res.get("meta") or {}).get("gmtoffset")
             out = []
             for i, t in enumerate(res.get("timestamp") or []):
                 c = (q.get("close") or [None])[i] if i < len(q.get("close") or []) else None
                 if c is None:
                     continue
                 g = lambda k: (q.get(k) or [None] * (i + 1))[i]
-                out.append({"t": datetime.fromtimestamp(t).strftime(fmt), "o": g("open") or c, "h": g("high") or c,
+                if minute:  # 분봉: 이 PC 시각(한국 시간)으로
+                    label = datetime.fromtimestamp(t).strftime("%m/%d %H:%M")
+                elif off is not None:
+                    # 일·주·월봉: 그 거래소의 날짜로. 진행 중인 오늘 봉은 시각이 '마지막 체결 시각'이라
+                    # 한국 시간으로 바꾸면 미국 봉이 다음 날짜로 밀린다(채점에서 추천 전 움직임이 섞이는 원인)
+                    label = datetime.fromtimestamp(t + off, timezone.utc).strftime("%Y-%m-%d")
+                else:
+                    label = datetime.fromtimestamp(t).strftime("%Y-%m-%d")
+                out.append({"t": label, "o": g("open") or c, "h": g("high") or c,
                             "l": g("low") or c, "c": c, "v": int(g("volume") or 0)})
             return {"tf": tf, "bars": out[-120:], "source": "공개 시세(지연)"}
-        return self.cache.get(("cdy", ysym, tf), 20 if tf.startswith("m") else 600, load_y, stale=3600)
+        return self.cache.get(("cdy", ysym, tf), 20 if self.TF[tf][1] == "minute" else 600, load_y, stale=3600)
 
     # ---------- 종목 정보(기본) ----------
     def info(self, mkt, sym):

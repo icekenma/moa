@@ -1,5 +1,5 @@
 /* 화면 파일만 저장해 두고(오프라인에서도 앱이 열리게), 데이터 요청은 항상 서버로 보낸다. */
-const CACHE = "moa-261118.0909";
+const CACHE = "moa-261118.1205";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener("activate", (e) => {
@@ -17,5 +17,6 @@ self.addEventListener("fetch", (e) => {
     caches.open(CACHE).then((c) => c.put(u.href, copy)).catch(() => {});
     return r;
   }).catch(() => caches.match(u.href, { ignoreSearch: e.request.mode === "navigate" })
-    .then((r) => r || caches.match("index.html")).then((r) => r || fetch(e.request))));
+    // 저장본도 없을 때: 화면 이동이면 첫 화면을, 스크립트·그림이면 원래 요청을 그대로(스크립트 자리에 HTML을 주면 안 된다)
+    .then((r) => r || (e.request.mode === "navigate" ? caches.match("index.html") : null)).then((r) => r || fetch(e.request))));
 });

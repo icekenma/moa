@@ -1650,7 +1650,7 @@ def test_swing_outcomes_graded_on_daily_bars(rt, monkeypatch):
     rt.db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text,horizon,theme,lv) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             ("2026-11-02T10:00:00", "kr", "m", 0, "보통", "", json.dumps([{"sym": "000001", "name": "분할", "price": 1000, "target_pct": 10, "stop_pct": 5, "horizon": "month"}]), "", "month", "", 0))
     rt.aipick.evaluate(force=True)
-    assert rt.db.one("SELECT result FROM ai_outcomes WHERE COALESCE(horizon,'day')='month'")["result"] in ("자료 없음", None)
+    assert rt.db.one("SELECT result FROM ai_outcomes WHERE COALESCE(horizon,'day')='month'")["result"] == "자료 없음"
     assert rt.aipick.stats(horizon="month")["all"]["done"] == 0
     c2 = create_app(rt).test_client()
     assert c2.get("/api/ai/stats?h=swing").get_json()["all"]["n"] == 3
@@ -1794,3 +1794,75 @@ def test_ai_context_explains_small_orderable_cash(rt, monkeypatch):
     assert rt.aipick._cash("us")[0] == 18.5
     monkeypatch.setattr(rt.account, "configured", lambda: False)
     assert rt.aipick._cash("kr") == (None, None)
+
+
+def test_swing_pick_day_range_is_frozen_after_that_day(rt, monkeypatch):
+    """추천 당일의 5분봉 범위는 그날에만 받아 적는다. 다음 날엔 5분봉 앞부분이 사라져 범위가 좁아지기 때문."""
+    import moa.aipick as AP
+    _swing_fixture(rt, monkeypatch, ts="2026-11-02T10:00:00")
+    rt.aipick.stats()
+    seen = []
+
+    def candles(m, s, tf):
+        seen.append(tf)
+        if tf == "m5":
+            return {"bars": [{"t": "11/02 10:00", "o": 100, "h": 104, "l": 99, "c": 103, "v": 1}, {"t": "11/02 15:00", "o": 103, "h": 103, "l": 101, "c": 102, "v": 1}]}
+        return {"bars": [_dbar("2026-11-02", 97, 104, 96, 102)]}
+    monkeypatch.setattr(rt.invest, "candles", candles)
+    monkeypatch.setattr(AP, "mkt_date", lambda m: "2026-11-02")
+    r = rt.db.one("SELECT * FROM ai_outcomes WHERE sym='000003'")
+    AP._eval_swing(rt.aipick, r, datetime(2026, 11, 2, 15, 45))
+    d0 = json.loads(rt.db.one("SELECT d0 FROM ai_outcomes WHERE sym='000003'")["d0"])
+    assert d0["h"] == 104 and d0["l"] == 99 and d0["c"] == 102
+    # 다음 날: 5분봉에는 전날 끝부분만 남아 있다 → 다시 받지 않고 적어 둔 값을 쓴다
+    seen.clear()
+    monkeypatch.setattr(AP, "mkt_date", lambda m: "2026-11-03")
+    r = rt.db.one("SELECT * FROM ai_outcomes WHERE sym='000003'")
+    AP._eval_swing(rt.aipick, r, datetime(2026, 11, 3, 10, 0))
+    assert "m5" not in seen and json.loads(rt.db.one("SELECT d0 FROM ai_outcomes WHERE sym='000003'")["d0"])["h"] == 104
+
+
+def test_yahoo_daily_bars_use_exchange_date(rt, monkeypatch):
+    """미국 일봉의 진행 중인 오늘 봉은 시각이 '마지막 체결 시각'이라, 한국 시간으로 바꾸면 날짜가 하루 밀린다."""
+    from datetime import datetime as D, timezone as TZ
+    t_done = int(D(2026, 11, 16, 14, 30, tzinfo=TZ.utc).timestamp())     # 11/16 장 시작(뉴욕 09:30)
+    t_live = int(D(2026, 11, 17, 20, 15, tzinfo=TZ.utc).timestamp())     # 11/17 뉴욕 15:15 = 한국 11/18 05:15
+    res = {"meta": {"gmtoffset": -18000}, "timestamp": [t_done, t_live],
+           "indicators": {"quote": [{"open": [10, 11], "high": [12, 13], "low": [9, 10], "close": [11, 12], "volume": [5, 6]}]}}
+    monkeypatch.setattr(rt.market, "_yh_chart", lambda sym, rng, iv, prepost=False: res)
+    bars = rt.invest.candles("us", "TESTX", "d")["bars"]
+    assert [b["t"] for b in bars] == ["2026-11-16", "2026-11-17"]
+    assert len(rt.invest.candles("us", "TESTX", "mo")["bars"][0]["t"]) == 10      # 월봉을 분봉처럼 적던 문제
+
+
+def test_upstream_network_errors_are_502_and_logged_once(rt):
+    import requests
+    app = create_app(rt)
+
+    @app.get("/api/net")
+    def net():
+        raise requests.ConnectionError("proxy down at http://secret-host")
+    c = app.test_client()
+    for _ in range(5):
+        r = c.get("/api/net")
+        assert r.status_code == 502 and "secret-host" not in r.get_json()["error"] and r.get_json()["code"] == "upstream"
+    n = rt.db.one("SELECT COUNT(*) AS n FROM engine_log WHERE msg LIKE '%/api/net%'")["n"] if rt.db.one("SELECT name FROM sqlite_master WHERE name='engine_log'") else 1
+    assert n == 1                                   # 몇 초마다 되풀이돼도 로그는 한 번
+
+
+def test_ai_stream_records_cost_when_cut_midway(rt, monkeypatch):
+    import requests
+    from moa.ai import AIError
+    rt.settings.update({"ai": {"api_key": "sk-test-key-1234567890"}})
+
+    def post(body):
+        yield {"type": "message_start", "message": {"usage": {"input_tokens": 9000, "output_tokens": 1}}}
+        yield {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "앞부분"}}
+        raise AIError("Claude의 답을 받는 도중 연결이 끊겼어요. 다시 받아 주세요 (ChunkedEncodingError)")
+    monkeypatch.setattr(rt.ai, "_post", post)
+    monkeypatch.setattr(rt.ai, "context", lambda kind, d: ("t", "q", {}))
+    before = rt.db.one("SELECT COUNT(*) AS n FROM ai_usage")["n"]
+    evs = list(rt.ai.stream("chat", {"question": "x"}))
+    assert evs[-1]["t"] == "error" and "끊겼어요" in evs[-1]["msg"]
+    row = rt.db.one("SELECT * FROM ai_usage ORDER BY rowid DESC LIMIT 1")
+    assert rt.db.one("SELECT COUNT(*) AS n FROM ai_usage")["n"] == before + 1 and row["in_tok"] == 9000 and row["usd"] > 0

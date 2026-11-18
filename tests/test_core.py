@@ -2326,6 +2326,202 @@ def test_stock_search_by_name_without_master_and_quick_picks(rt, monkeypatch):
     assert c.get("/api/market/search?mkt=kr&q=tiger").get_json()[0]["sym"] == "360750"
 
 
+def _ledger_n(db):
+    return db.one("SELECT COUNT(*) AS n FROM transactions")["n"]
+
+
+def _add_tx(db, memo, amount=1000):
+    db.x("INSERT INTO transactions(date,kind,amount,memo,created_at) VALUES('2026-11-01','out',?,?,'2026-11-01T00:00:00')", (amount, memo))
+
+
+def test_backup_create_list_auto_prune_and_extra_folder(rt, tmp_path):
+    """백업은 쓰는 중에도 통째로 복사하고, 하루 한 번 자동으로 남기며, 종류마다 정해 둔 개수만 남긴다."""
+    from datetime import datetime as DT, timedelta
+    import sqlite3
+    bk = rt.backup
+    bk.dir = str(tmp_path / "backups")
+    assert bk.status()["items"] == [] and bk.status()["last"] is None and bk.conf() == {"auto": True, "keep": 14, "extra_dir": ""}
+    _add_tx(rt.db, "백업 전 내역")
+    rt.dca.save_plan({"code": "005930", "amount": 100000, "day": 5})
+    m = bk.create("manual", note="테스트", now=DT(2026, 11, 18, 9, 0, 0))
+    assert m["name"] == "moa-20261118-090000-manual.db" and m["kind_name"] == "직접" and m["ts"] == "2026-11-18T09:00:00" and m["note"] == "테스트"
+    assert m["counts"]["transactions"] == 1 and m["counts"]["dca_plans"] == 1 and m["counts"]["last"] == "2026-11-01" and m["size"] > 4096
+    f = tmp_path / "backups" / m["name"]
+    raw = f.read_bytes()
+    assert raw[:16] == b"SQLite format 3\x00" and raw[18:20] == b"\x01\x01"                 # WAL이 아닌 보통 파일(하나만 옮겨도 온전)
+    assert sorted(x.name for x in (tmp_path / "backups").iterdir()) == [m["name"], m["name"] + ".json"]   # 임시 파일이 남지 않는다
+    con = sqlite3.connect(str(f))
+    assert con.execute("SELECT memo FROM transactions").fetchone()[0] == "백업 전 내역" and con.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    con.close()
+    assert bk.create("manual", now=DT(2026, 11, 18, 9, 0, 0))["name"] == m["name"] and len(bk.list()) == 1   # 같은 초에 두 번 눌러도 하나
+    # 자동: 하루에 한 번만. 꺼 두면 만들지 않는다
+    d1 = DT(2026, 11, 19, 3, 0, 0)
+    a = bk.auto_due(d1)
+    assert a and a["kind"] == "auto" and bk.auto_due(d1 + timedelta(hours=5)) is None
+    bk._day = None
+    assert bk.auto_due(d1 + timedelta(hours=6)) is None and len([i for i in bk.list() if i["kind"] == "auto"]) == 1   # 다시 켜져도 오늘 것이 있으면 넘어간다
+    bk.set_conf({"auto": False})
+    assert bk.auto_due(d1 + timedelta(days=1)) is None
+    bk.set_conf({"auto": True, "keep": 7})
+    for i in range(2, 12):
+        bk._day = None
+        bk.auto_due(d1 + timedelta(days=i))
+    autos = [i for i in bk.list() if i["kind"] == "auto"]
+    assert len(autos) == 7 and autos[0]["ts"][:10] == "2026-11-30" and autos[-1]["ts"][:10] == "2026-11-24"   # 오래된 것부터 지운다
+    assert [i["kind"] for i in bk.list()].count("manual") == 1                                                  # 직접 만든 것은 자동 정리에 안 걸린다
+    for i in range(7):
+        bk.create("prerestore", now=DT(2026, 12, 1, 0, 0, i))
+    assert len([i for i in bk.list() if i["kind"] == "prerestore"]) == 5
+    st = bk.status()
+    assert st["last"]["kind"] == "prerestore" and st["total_size"] == sum(i["size"] for i in st["items"]) and "2026-11-18" in st["days"]
+    with pytest.raises(ValueError):
+        bk.set_conf({"keep": 3})
+    # 지우기: 이름은 정해진 꼴만 받는다(다른 파일을 건드릴 수 없다)
+    for bad in ("../moa.db", "moa.db", "moa-20261118-090000-manual.db/../x", "", None, "moa-20261118-090000-evil.db"):
+        with pytest.raises(ValueError):
+            bk.path(bad)
+    bk.delete(m["name"])
+    assert not f.exists() and not (tmp_path / "backups" / (m["name"] + ".json")).exists()
+    # 다른 폴더에도 복사: 노트북에서만 정할 수 있고, 없는 폴더는 받지 않는다
+    extra = tmp_path / "cloud"
+    with pytest.raises(PermissionError):
+        bk.set_conf({"extra_dir": str(extra)}, local=False)
+    with pytest.raises(ValueError):
+        bk.set_conf({"extra_dir": str(extra)}, local=True)
+    with pytest.raises(ValueError):
+        bk.set_conf({"extra_dir": bk.dir}, local=True)
+    extra.mkdir()
+    assert bk.set_conf({"extra_dir": str(extra)}, local=True)["extra_dir"] == str(extra)
+    m2 = bk.create("manual", now=DT(2026, 12, 2, 8, 0, 0))
+    assert m2["copied"] is True and (extra / m2["name"]).read_bytes() == (tmp_path / "backups" / m2["name"]).read_bytes() and bk.status()["extra_ok"]
+    import shutil
+    shutil.rmtree(extra)
+    m3 = bk.create("manual", now=DT(2026, 12, 2, 8, 0, 1))                                  # 폴더가 사라져도 기본 백업은 만들어진다
+    assert "copy_error" in m3 and not m3.get("copied") and bk.status()["extra_ok"] is False
+    assert bk.set_conf({"extra_dir": ""}, local=True)["extra_dir"] == ""
+
+
+def test_backup_download_strips_keys_and_restore_keeps_connection(rt, tmp_path):
+    """내려받는 사본에는 키·토큰·비밀번호가 없고, 되돌려도 지금 연결(토큰·비밀번호·열린 기기)은 그대로다."""
+    import io
+    import sqlite3
+    from moa.app import access_token
+    bk = rt.backup
+    bk.dir = str(tmp_path / "backups")
+    c, h = _remote(rt)
+    token = access_token(rt.db)
+    sid = c.post("/api/auth/setup", json={"password": "gagyebu!7"}, headers=h).get_json()["session"]
+    hs = {**h, "X-Moa-Session": sid}
+    rt.settings.update({"ai": {"api_key": "sk-ant-SECRETKEY-1234567890"}, "kiwoom": {"dca": {"appkey": "APPKEY-DCA-777", "secretkey": "KIWOOMSECRET-888"}},
+                        "ntfy_topic": "my-private-topic-999", "allowed_origins": ["https://old.example"], "networth_goal": 111})
+    _add_tx(rt.db, "남아야 하는 내역")
+    assert c.get("/api/backup", headers={"X-Forwarded-For": "100.64.0.2"}).status_code == 401 and c.get("/api/backup", headers=h).status_code == 401      # 토큰·잠금 해제 없이는 못 본다
+    b1 = c.post("/api/backup", json={"note": "되돌릴 지점"}, headers=hs).get_json()
+    st = c.get("/api/backup", headers=hs).get_json()
+    assert st["items"][0]["name"] == b1["name"] and st["need_password"] is True and st["local"] is False and st["can_restart"] is False
+    # 내려받기(기본): 비밀 값이 파일 어디에도 없다
+    r = c.post(f"/api/backup/{b1['name']}/download", json={}, headers=hs)
+    safe = r.data
+    assert r.status_code == 200 and r.headers["Content-Type"] == "application/octet-stream" and b1["name"] in r.headers["Content-Disposition"]
+    hash_now = rt.db.get_setting("auth")["hash"]
+    for secret in ("sk-ant-SECRETKEY-1234567890", "KIWOOMSECRET-888", "APPKEY-DCA-777", "my-private-topic-999", token, hash_now):
+        assert secret.encode() not in safe
+    assert "남아야 하는 내역".encode() in safe
+    full_raw = (tmp_path / "backups" / b1["name"]).read_bytes()
+    assert b"sk-ant-SECRETKEY-1234567890" in full_raw and token.encode() in full_raw                             # 노트북에 둔 원본은 전체 사본
+    assert sorted(x.name for x in (tmp_path / "backups").iterdir()) == [b1["name"], b1["name"] + ".json"]       # 임시 사본은 지운다
+    # 전체 사본과 되돌리기는 비밀번호를 한 번 더 확인한다
+    assert c.post(f"/api/backup/{b1['name']}/download", json={"full": True}, headers=hs).status_code == 403
+    bad = c.post(f"/api/backup/{b1['name']}/download", json={"full": True, "password": "wrong-pw"}, headers=hs)
+    assert bad.status_code == 403 and bad.get_json()["code"] == "password"
+    assert c.post(f"/api/backup/{b1['name']}/download", json={"full": True, "password": "gagyebu!7"}, headers=hs).data == full_raw
+    assert c.post(f"/api/backup/{b1['name']}/restore", json={"password": "nope-nope"}, headers=hs).status_code == 403
+    for bad_name in ("moa.db", "moa-20261118-090000-evil.db", "..%2Fmoa.db"):
+        assert c.post(f"/api/backup/{bad_name}/download", json={}, headers=hs).status_code in (400, 404, 405)
+        assert c.delete(f"/api/backup/{bad_name}", headers=hs).status_code in (400, 404, 405)
+    # 다른 폴더는 휴대폰에서 못 바꾼다(노트북에서만)
+    assert c.put("/api/backup/config", json={"extra_dir": str(tmp_path)}, headers=hs).status_code == 403
+    assert c.put("/api/backup/config", json={"keep": 30, "auto": False}, headers=hs).get_json() == {"auto": False, "keep": 30, "extra_dir": ""}
+
+    # 백업 뒤에 바뀐 것들
+    _add_tx(rt.db, "백업 뒤에 넣은 내역")
+    rt.settings.update({"networth_goal": 999, "allowed_origins": ["https://now.example"], "ai": {"api_key": "sk-ant-NEWKEY-000"}})
+    rt.dca.save_plan({"code": "005930", "amount": 100000, "day": 5})
+    assert _ledger_n(rt.db) == 2
+    # 1) 전체 백업으로 되돌리기: 데이터와 키는 백업 것으로, 연결 설정은 지금 것으로
+    out = c.post(f"/api/backup/{b1['name']}/restore", json={"password": "gagyebu!7"}, headers=hs).get_json()
+    assert out["restored"]["name"] == b1["name"] and out["restart"] is False and out["pre"].endswith("-prerestore.db")
+    assert _ledger_n(rt.db) == 1 and rt.dca.plans() == [] and rt.settings.get("networth_goal") == 111
+    assert rt.settings.get("ai")["api_key"] == "sk-ant-SECRETKEY-1234567890" and rt.settings.get("allowed_origins") == ["https://now.example"]
+    assert access_token(rt.db) == token and rt.db.get_setting("auth")["hash"] == hash_now
+    assert c.get("/api/backup", headers=hs).status_code == 200                                    # 같은 기기에서 그대로 이어 쓴다
+    pre = sqlite3.connect(str(tmp_path / "backups" / out["pre"]))
+    assert pre.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 2                     # 되돌리기 전 상태가 남아 있어 다시 돌아갈 수 있다
+    pre.close()
+    assert "되돌렸어요" in rt.db.one("SELECT msg FROM engine_log ORDER BY id DESC LIMIT 1")["msg"]
+    # 2) 올린 파일(키를 뺀 사본)로 되돌리기: 키는 지금 것을 그대로 쓴다
+    rt.settings.update({"ai": {"api_key": "sk-ant-CURRENT-555"}})
+    _add_tx(rt.db, "또 넣은 내역")
+    up = c.post("/api/backup/upload", data={"file": (io.BytesIO(safe), "moa-backup.db")}, headers=hs, content_type="multipart/form-data").get_json()
+    assert up["kind"] == "upload" and up["keyless"] is True and up["counts"]["transactions"] == 1
+    out = c.post(f"/api/backup/{up['name']}/restore", json={"password": "gagyebu!7"}, headers=hs).get_json()
+    assert out["restored"]["kind"] == "upload" and _ledger_n(rt.db) == 1
+    s = rt.settings.all()
+    assert s["ai"]["api_key"] == "sk-ant-CURRENT-555" and s["kiwoom"]["dca"]["secretkey"] == "KIWOOMSECRET-888" and s["ntfy_topic"] == "my-private-topic-999"
+    assert rt.db.get_setting("backup_keyless") is None and access_token(rt.db) == token and c.get("/api/backup", headers=hs).status_code == 200
+    # moa 백업이 아닌 파일은 받지 않는다
+    for junk in (b"hello", b"SQLite format 3\x00" + b"\x00" * 200):
+        r = c.post("/api/backup/upload", data={"file": (io.BytesIO(junk), "x.db")}, headers=hs, content_type="multipart/form-data")
+        assert r.status_code == 400
+    other = tmp_path / "other.db"
+    con = sqlite3.connect(str(other)); con.execute("CREATE TABLE t(x)"); con.commit(); con.close()
+    assert c.post("/api/backup/upload", data={"file": (io.BytesIO(other.read_bytes()), "o.db")}, headers=hs, content_type="multipart/form-data").status_code == 400
+    assert c.post("/api/backup/upload", headers=hs).status_code == 400
+    assert not [x.name for x in (tmp_path / "backups").iterdir() if x.name.endswith(".part")]
+    # 단타 엔진이 돌고 있으면 되돌리지 않는다
+    rt.settings.update({"scalp_state": "running"})
+    r = c.post(f"/api/backup/{b1['name']}/restore", json={"password": "gagyebu!7"}, headers=hs)
+    assert r.status_code == 400 and "멈춘 뒤" in r.get_json()["error"]
+
+
+def test_backup_restore_on_wal_file_and_restart_hook(tmp_path):
+    """실제처럼 파일(WAL) DB에서: 되돌린 뒤에도 그대로 읽고 쓰이고, 다시 열어도 온전하다. 되돌리면 서버를 다시 띄운다."""
+    from moa.broker import kiwoom as _kw
+    _kw._SHARED.clear()
+    path = str(tmp_path / "moa.db")
+    r = Runtime(DB(path), start_thread=False, data_dir=str(tmp_path))
+    try:
+        assert r.backup.dir == str(tmp_path / "backups")
+        _add_tx(r.db, "첫 내역")
+        b = r.backup.create("manual")
+        for i in range(300):
+            _add_tx(r.db, f"뒤에 넣은 내역 {i}")
+        calls = []
+
+        class Up:
+            exit_fn = staticmethod(lambda: calls.append("exit"))
+            state = {}
+
+            def status(self):
+                return {}
+        c = create_app(r, Up()).test_client()
+        out = c.post(f"/api/backup/{b['name']}/restore", json={}).get_json()       # 노트북에서는 비밀번호를 묻지 않는다
+        assert out["restart"] is True and r._stop.is_set()
+        import time as _t
+        _t.sleep(1.3)
+        assert calls == ["exit"]
+        assert _ledger_n(r.db) == 1
+        _add_tx(r.db, "되돌린 뒤 내역")
+        assert _ledger_n(r.db) == 2
+    finally:
+        r.stop()
+        r.db.conn.close()
+    d2 = DB(path)                                                                   # 다시 시작한 것처럼 새로 연다
+    assert _ledger_n(d2) == 2 and d2.conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    assert d2.conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    d2.conn.close()
+
+
 def test_dividend_slow_source_does_not_block_screen(rt, monkeypatch):
     """바깥 서버가 느리면 기다리지 않고 '받는 중'으로 돌려준다. 그 종목은 저장하지 않아 다음에 다시 받는다."""
     import time as _t

@@ -39,6 +39,8 @@ class Runtime:
         self.dividend = Dividend(self)
         from .trading.sweep import SweepJob
         self.sweep = SweepJob(self, data_dir or ".")
+        from .backup import Backup
+        self.backup = Backup(self, data_dir)
         self.assets = Assets(db, self.value_of, kiwoom_on=lambda: self.account.configured())
         self.feed = None
         self.brokers = {}
@@ -140,6 +142,10 @@ class Runtime:
                             self.fixed.run()  # 고정 지출 자동 기록·알림(5분마다)
                         except Exception as e:
                             self.db.log("system", "error", f"고정 지출 처리 오류: {e}", datetime.now().isoformat(timespec="seconds"))
+                        try:
+                            self.backup.auto_due()  # 하루 한 번 자동 백업
+                        except Exception as e:
+                            self.db.log("system", "error", f"자동 백업 오류: {e}", datetime.now().isoformat(timespec="seconds"))
                         self.dca.run_due(datetime.now())
                         if datetime.now().strftime("%H:%M") >= "15:40":
                             self.dca.snapshot(date.today())

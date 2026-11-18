@@ -214,6 +214,70 @@ def create_app(rt, updater=None):
         auth.reset()
         return jsonify(ok=True)
 
+    # ---------- 백업·되돌리기 ----------
+    def confirm_password():
+        """되돌리기·전체 사본처럼 무거운 일은 바깥(휴대폰)에서 할 때 비밀번호를 한 번 더 확인한다."""
+        if is_local_direct() or not auth.is_set():
+            return None
+        try:
+            auth.verify(body().get("password"))
+        except AuthError as e:
+            return jsonify(error=str(e), code="password", wait=e.wait), 403
+        return None
+
+    @app.get("/api/backup")
+    def backup_status():
+        return jsonify({**rt.backup.status(), "local": is_local_direct(), "need_password": auth.is_set() and not is_local_direct(),
+                        "can_restart": bool(updater)})
+
+    @app.post("/api/backup")
+    def backup_create():
+        return jsonify(rt.backup.create("manual", note=body().get("note") or ""))
+
+    @app.put("/api/backup/config")
+    def backup_config():
+        try:
+            return jsonify(rt.backup.set_conf(body(), local=is_local_direct()))
+        except PermissionError as e:
+            return jsonify(error=str(e)), 403
+
+    @app.delete("/api/backup/<name>")
+    def backup_delete(name):
+        rt.backup.delete(name)
+        return jsonify(ok=True)
+
+    @app.post("/api/backup/<name>/download")
+    def backup_download(name):
+        full = bool(body().get("full"))
+        if full:
+            bad = confirm_password()
+            if bad:
+                return bad
+        data = rt.backup.export(name, full=full)
+        resp = make_response(data)
+        resp.headers["Content-Type"] = "application/octet-stream"
+        resp.headers["Content-Disposition"] = f'attachment; filename="{name}"'
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    @app.post("/api/backup/upload")
+    def backup_upload():
+        f = request.files.get("file")
+        if not f:
+            return jsonify(error="백업 파일(.db)을 골라 주세요"), 400
+        return jsonify(rt.backup.upload(f.stream))
+
+    @app.post("/api/backup/<name>/restore")
+    def backup_restore(name):
+        bad = confirm_password()
+        if bad:
+            return bad
+        out = rt.backup.restore(name)
+        if updater:                            # 되돌린 데이터로 모든 기능을 새로 띄운다(run.bat이 바로 다시 실행)
+            rt.stop()
+            threading.Timer(1.0, updater.exit_fn).start()
+        return jsonify({**out, "restart": bool(updater)})
+
     # ---------- 화면(GitHub Pages와 같은 파일을 이 서버도 그대로 준다) ----------
     @app.get("/")
     def index():

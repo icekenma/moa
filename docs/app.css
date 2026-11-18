@@ -1990,3 +1990,36 @@ html.dark-theme .dd-us{background:rgba(255,255,255,.05)}
 html.dark-theme .sp-chip{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.14)}
 html.dark-theme .sp-one{background:rgba(var(--n-rgb),.10);border-color:rgba(var(--n-rgb),.45)}
 html.dark-theme .sp-hint.warn{color:#FFB4A8}
+
+/* ---------- v4.37 백업 ---------- */
+.bk-hero{display:flex;flex-direction:column;gap:11px}
+.bk-top{display:flex;align-items:center;gap:13px}
+.bk-top b{display:block;font-size:15.5px;font-weight:900;letter-spacing:-.02em}
+.bk-top div span{display:block;margin-top:2px;font-size:11.5px;line-height:1.5;color:var(--ink2)}
+.bk-hero.off .sc-shield{background:var(--coral-s);color:var(--coral-i)}
+/* 최근 14일 가운데 백업이 남아 있는 날 */
+.bk-days{display:grid;grid-template-columns:repeat(14,1fr);gap:4px}
+.bk-days i{display:block;height:22px;border-radius:6px;background:color-mix(in srgb,var(--ink) 9%,transparent)}
+.bk-days i.on{background:var(--teal-i,var(--sec))}
+.bk-days i.today{outline:1.5px solid var(--ink3);outline-offset:1.5px}
+.bk-days-l{display:flex;justify-content:space-between;font-size:9.5px;font-weight:600;color:var(--ink3);margin-top:-6px}
+.bk-dl{display:flex;flex-direction:column;gap:6px;margin:0}
+.bk-dl div{display:flex;gap:10px;font-size:11px;line-height:1.45}
+.bk-dl dt{flex:0 0 62px;color:var(--ink3);font-weight:700}
+.bk-dl dd{flex:1;min-width:0;margin:0;word-break:break-all;font-weight:600}
+.bk-dirf{display:flex;gap:6px;margin-top:9px}
+.bk-dirf input{flex:1;min-width:0;height:38px;padding:0 10px;border:1px solid var(--line2);border-radius:10px;background:#fff;color:var(--ink);font-size:12px}
+.bk-dirf .btn{flex:0 0 auto}
+.bk-hero .notice,.card .bk-dl+.tiny{margin-top:8px}
+button.bk-row{width:100%;border-left:0;border-right:0;border-bottom:0;background:none;text-align:left;font:inherit;color:inherit;cursor:pointer}
+button.bk-row:first-child{border-top:0}
+.bk-row .end{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.bk-up{display:flex;align-items:center;justify-content:center;cursor:pointer;margin-top:9px}
+.bk-sh{display:flex;flex-direction:column;gap:9px}
+.bk-sh .lr-h{margin-top:6px}
+.btn.bk-danger{border-color:color-mix(in srgb,var(--coral-i,#B3261E) 55%,transparent);color:var(--coral-i,#B3261E)}
+html.dark-theme .bk-days i{background:rgba(255,255,255,.09)}
+html.dark-theme .bk-days i.on{background:var(--n1)}
+html.dark-theme .bk-days i.today{outline-color:rgba(255,255,255,.55)}
+html.dark-theme .bk-dirf input{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.14)}
+html.dark-theme .btn.bk-danger,html.dark-theme .sheet .btn.bk-danger{color:#FFB4A8!important;border-color:rgba(255,140,125,.55)!important}

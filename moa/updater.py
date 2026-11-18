@@ -112,6 +112,10 @@ class Updater:
         if not ok:
             self.state["message"] = why
             return False, why
+        try:                                   # 새 버전이 데이터를 건드리기 전에 지금 상태를 남겨 둔다
+            self.rt.backup.create("preupdate", note=f"v{self.state.get('latest_version') or ''} 받기 전")
+        except Exception as e:
+            self.rt.db.log("system", "warn", f"업데이트 전 백업 실패: {e}", datetime.now().isoformat(timespec="seconds"))
         with self._lock:
             req = os.path.join(self.base, "requirements.txt")
             before = _hash(req)

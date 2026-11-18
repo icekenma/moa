@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.1715";
+const UI_VERSION = "261118.1732";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -507,7 +507,7 @@ const MENU = {
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
   invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["dca", "적립"], ["dividend", "배당"]], extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
   // 설정: 자주 바꾸는 것부터. 한 번만 맞추면 되는 서버 연결은 뒤로.
-  settings: { title: "설정", subs: [["all", "전체"], ["theme", "화면"], ["ai", "AI"], ["accounts", "계좌"], ["trading", "주문·알림"], ["security", "보안"], ["connect", "서버"], ["app", "앱 정보"]] },
+  settings: { title: "설정", subs: [["all", "전체"], ["theme", "화면"], ["ai", "AI"], ["accounts", "계좌"], ["trading", "주문·알림"], ["security", "보안"], ["backup", "백업"], ["connect", "서버"], ["app", "앱 정보"]] },
 };
 const lastSub = {};
 function resolveSub(h) {
@@ -4405,6 +4405,53 @@ function dcaDraftSheet(src) {
 // =====================================================================
 // 설정
 // =====================================================================
+// ---------- 백업 화면 도우미 ----------
+const bkSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + "MB" : Math.max(1, Math.round((n || 0) / 1024)) + "KB");
+const bkWhen = (ts) => `${+ts.slice(5, 7)}월 ${+ts.slice(8, 10)}일 ${ts.slice(11, 16)}`;
+// now: 서버 시각(휴대폰과 노트북의 시간대가 달라도 맞게)
+function bkAgo(ts, now) {
+  const m = Math.max(0, Math.round(((now ? new Date(now).getTime() : Date.now()) - new Date(ts).getTime()) / 60000));
+  return m < 2 ? "방금" : m < 60 ? `${m}분 전` : m < 1440 ? `${Math.floor(m / 60)}시간 전` : `${Math.floor(m / 1440)}일 전`;
+}
+// 파일로 내려받는 요청(응답이 JSON이 아니라 파일 내용)
+async function apiBlob(url, body) {
+  if (lock.on) throw new Locked("잠겨 있어요");
+  let res;
+  try { res = await fetch(apiBase() + url, { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(body || {}) }); }
+  catch (e) { throw new Error("서버에 연결하지 못했어요"); }
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    if (res.status === 401 && (d.code === "locked" || d.code === "setup")) { lock.show("unlock"); throw new Locked(d.error || "잠겨 있어요"); }
+    throw new Error(d.error || `요청이 실패했어요 (${res.status})`);
+  }
+  return res.blob();
+}
+// 휴대폰은 공유 창(파일에 저장), PC는 바로 내려받기
+async function bkSave(blob, name) {
+  const file = new window.File([blob], name, { type: "application/octet-stream" });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return; }
+    catch (e) { if (e && e.name === "AbortError") return; }
+  }
+  const a = document.createElement("a"), u = URL.createObjectURL(blob);
+  a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(u), 60000);
+  toast("내려받았어요");
+}
+// 되돌린 뒤: 서버가 다시 뜰 때까지 기다렸다가 화면을 새로 연다
+async function bkAfterRestore(r) {
+  view.innerHTML = `<section class="card old-srv"><h2>백업으로 되돌렸어요</h2>
+    <div class="tiny">${esc(bkWhen(r.restored.ts))} 시점으로 바꿨어요. 되돌리기 직전 상태도 백업 목록에 남겨 뒀어요.</div>
+    <div class="empty small loading" id="bkWait">${r.restart ? "노트북의 앱을 다시 띄우는 중" : "화면을 새로 여는 중"}</div></section>`;
+  if (!r.restart) { toast("되돌렸어요. 노트북에서 앱을 한 번 껐다 켜 주세요"); setTimeout(() => location.reload(), 1800); return; }
+  await new Promise((ok) => setTimeout(ok, 3000));
+  for (let n = 0; n < 60; n++) {
+    try { const p = await fetch(apiBase() + "/api/ping", { headers: authHeaders(), cache: "no-store" }); if (p.ok) return location.reload(); } catch (e) { /* 아직 다시 뜨는 중 */ }
+    await new Promise((ok) => setTimeout(ok, 1500));
+  }
+  if ($("#bkWait")) { $("#bkWait").classList.remove("loading"); $("#bkWait").textContent = "앱이 다시 뜨지 않았어요. 노트북에서 run.bat을 실행해 주세요."; }
+}
+
 pages.settings = {
   every: 5000,
   async refresh(h) {  // 계좌 연결 화면에서는 키움 카드만 몇 초마다 새로(입력란은 그대로)
@@ -4426,7 +4473,7 @@ pages.settings = {
     const row = (id, ico, cls, title, state, tag = "") => `<a class="item st-row" href="#settings/${id}"><span class="ico ${cls}">${I(ico)}</span>
       <span class="main"><b>${title}</b><span class="sub">${state}</span></span>${tag}</a>`;
     const th = THEMES[store.get("theme") || "neon"] || THEMES.neon, fs = (FONT_SIZES.find((x) => x[0] === (store.get("fontSize") || "s")) || FONT_SIZES[0])[1];
-    const draw = (s, st, ping, up, au) => {
+    const draw = (s, st, ping, up, au, bk) => {
       const tm = s ? s.trade_mode : null, kw = s ? s.kiwoom : null;
       const acct = (k) => !tm ? "" : tm[k] === "kiwoom" ? (kw[k].mock ? "키움 모의투자" : "키움 실전") : "앱 내 모의";
       const cr = st && st.credit;
@@ -4440,6 +4487,9 @@ pages.settings = {
           ${row("security", '<path d="M12 3l7.5 3v5.6c0 4.6-3.1 7.9-7.5 9.4-4.4-1.5-7.5-4.8-7.5-9.4V6z"/><path d="M8.8 12.2l2.3 2.3 4.2-4.4"/>', "h-sky", "보안",
             !au ? "잠금 상태를 확인하는 중" : !au.set ? "비밀번호를 만들면 앱을 열 때 물어요" : `비밀번호 잠금 켜짐 · ${LOCK_LABEL[au.lock_after]} 뒤 자동 잠금`,
             au && !au.set ? `<span class="tag warn">설정 필요</span>` : au && au.fails ? `<span class="tag warn">틀린 시도 ${au.fails}번</span>` : "")}
+          ${row("backup", '<path d="M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z"/><path d="M4 7v5c0 1.7 3.6 3 8 3s8-1.3 8-3V7"/><path d="M4 12v5c0 1.7 3.6 3 8 3s8-1.3 8-3v-5"/>', "h-teal", "백업",
+            !bk ? "백업 상태를 확인하는 중" : !bk.last ? "아직 백업이 없어요" : `마지막 백업 ${bkAgo(bk.last.ts, bk.now)} · 자동 백업 ${bk.auto ? "켜짐" : "꺼짐"}`,
+            bk && (!bk.last || new Date(bk.now).getTime() - new Date(bk.last.ts).getTime() > 3 * 864e5) ? `<span class="tag warn">백업 필요</span>` : "")}
         </div></section>
         <div class="sec-title">계좌와 주문</div>
         <section class="card tight"><div class="list">
@@ -4453,9 +4503,135 @@ pages.settings = {
         </div></section>
         <div class="tiny" style="padding:0 3px">아래 메뉴는 자주 쓰는 순서예요. 서버 연결은 처음 한 번만 맞추면 돼서 뒤에 뒀어요.</div>`;
     };
-    draw(null, null, null, null, null);
-    const [s, st, ping, up, au] = await Promise.all([GET("/api/settings").catch(() => null), GET("/api/ai/status").catch(() => null), GET("/api/ping").catch(() => null), GET("/api/update").catch(() => null), GET("/api/auth/state").catch(() => null)]);
-    if (location.hash.replace(/^#/, "").startsWith("settings/all") || location.hash === "#settings") draw(s, st, ping, up, au);
+    draw(null, null, null, null, null, null);
+    const [s, st, ping, up, au, bk] = await Promise.all([GET("/api/settings").catch(() => null), GET("/api/ai/status").catch(() => null), GET("/api/ping").catch(() => null), GET("/api/update").catch(() => null), GET("/api/auth/state").catch(() => null), GET("/api/backup").catch(() => null)]);
+    if (location.hash.replace(/^#/, "").startsWith("settings/all") || location.hash === "#settings") draw(s, st, ping, up, au, bk);
+  },
+  // 백업: 지금 백업, 자동 백업, 내려받기, 되돌리기
+  async backup() {
+    let B;
+    try { B = await GET("/api/backup"); } catch (e) {
+      if (e.code !== "old_server") throw e;
+      return oldServerBox(view, () => this.backup());
+    }
+    if (!location.hash.startsWith("#settings/backup")) return;
+    const I = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+    const last = B.last, stale = !last || new Date(B.now).getTime() - new Date(last.ts).getTime() > 3 * 864e5;
+    // 최근 14일: 백업이 남아 있는 날
+    const days = Array.from({ length: 14 }, (_, i) => { const d = new Date(B.today + "T00:00:00"); d.setDate(d.getDate() - (13 - i)); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; });
+    const has = new Set(B.days), kept = days.filter((d) => has.has(d)).length;
+    const cnt = (c) => [c.transactions != null ? `내역 ${won(c.transactions)}건` : "", c.accounts ? `계좌 ${c.accounts}` : "", c.dca_plans ? `적립 ${c.dca_plans}` : ""].filter(Boolean).join(" · ");
+    view.innerHTML = `
+      <section class="card bk-hero ${stale ? "off" : "on"}">
+        <div class="bk-top"><span class="sc-shield">${I('<path d="M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z"/><path d="M4 7v5c0 1.7 3.6 3 8 3s8-1.3 8-3V7"/><path d="M4 12v5c0 1.7 3.6 3 8 3s8-1.3 8-3v-5"/>')}</span>
+          <div><b>${last ? `마지막 백업 ${bkAgo(last.ts, B.now)}` : "아직 백업이 없어요"}</b>
+            <span>${last ? `${bkWhen(last.ts)} · ${esc(last.kind_name)} · ${bkSize(last.size)}` : "지금 한 번 만들어 두면, 잘못 지우거나 고장 나도 되돌릴 수 있어요"}</span></div></div>
+        <div class="bk-days" role="img" aria-label="최근 14일 가운데 ${kept}일의 백업이 남아 있어요">${days.map((d) => `<i class="${has.has(d) ? "on" : ""} ${d === B.today ? "today" : ""}"></i>`).join("")}</div>
+        <div class="bk-days-l"><span>14일 전</span><span>최근 14일 중 ${kept}일</span><span>오늘</span></div>
+        <button type="button" class="btn dark wide" id="bkNow">지금 백업</button>
+      </section>
+      <section class="card">
+        <div class="card-head"><div><h2>자동 백업</h2><div class="tiny">하루 한 번, 노트북이 켜져 있을 때 만들어요. 업데이트 전과 되돌리기 전에도 따로 남겨요.</div></div>
+          <button type="button" class="switch" role="switch" id="bkAuto" aria-checked="${B.auto}" aria-label="자동 백업"><span></span></button></div>
+        <div class="dv-lab">자동 백업 보관</div>${seg("bkKeep", B.keep_choices.map((n) => [String(n), `${n}일치`]), String(B.keep), "on-card")}
+      </section>
+      <section class="card">
+        <h2>저장 위치</h2>
+        <dl class="bk-dl"><div><dt>노트북</dt><dd>${esc(B.dir)}</dd></div>
+          <div><dt>다른 폴더</dt><dd>${B.extra_dir ? `${esc(B.extra_dir)}${B.extra_ok ? "" : ` <span class="tag warn">폴더 없음</span>`}` : "정하지 않았어요"}</dd></div></dl>
+        ${B.local ? `<form id="bkDirF" class="bk-dirf" novalidate><input id="bkDir" autocomplete="off" spellcheck="false" value="${esc(B.extra_dir)}" placeholder="예: D:\\백업 또는 OneDrive 폴더 경로" aria-label="다른 폴더 경로"><button type="submit" class="btn">저장</button></form>
+          <div class="tiny">클라우드와 맞춰지는 폴더(OneDrive 등)나 USB를 정해 두면 백업할 때마다 그곳에도 복사해요. 비우고 저장하면 꺼요.</div>`
+          : `<div class="tiny">다른 폴더(클라우드·USB)는 노트북에서 이 화면을 열어 정할 수 있어요.</div>`}
+        ${!B.extra_dir ? `<div class="notice">백업은 노트북 안에만 있어요. 노트북이 고장 나면 함께 사라지니, 가끔 휴대폰에 내려받거나 다른 폴더를 정해 두세요.</div>` : ""}
+      </section>
+      <div class="sec-title">백업 목록 · ${B.items.length}개 · ${bkSize(B.total_size)}</div>
+      <section class="card tight"><div class="list">${B.items.length ? B.items.map((i) => `<button type="button" class="item bk-row" data-bk="${esc(i.name)}">
+        <span class="ico">${i.ts.slice(5, 10).replace("-", ".")}</span>
+        <span class="main"><b>${bkWhen(i.ts)}</b><span class="sub">${esc(cnt(i.counts) || "내용 요약 없음")}${i.note && i.kind !== "upload" ? ` · ${esc(i.note)}` : ""}</span></span>
+        <span class="end"><span class="tag ${i.kind === "auto" ? "" : i.kind === "manual" ? "v" : "y"}">${esc(i.kind_name)}</span><span class="tiny">${bkSize(i.size)}</span></span></button>`).join("")
+        : `<div class="empty">아직 백업이 없어요</div>`}</div></section>
+      <section class="card">
+        <h2>파일에서 되돌리기</h2>
+        <div class="tiny">휴대폰이나 다른 PC에 내려받아 둔 백업 파일(.db)을 올려요. 올린 뒤 내용을 확인하고 되돌릴 수 있어요.</div>
+        <label class="btn wide bk-up"><input type="file" id="bkFile" accept=".db,application/octet-stream,application/x-sqlite3" hidden>백업 파일 고르기</label>
+      </section>
+      <div class="tiny" style="padding:0 3px">백업에는 가계부·자산·투자 기록과 설정이 모두 들어 있어요${B.db_size ? `(지금 데이터 ${bkSize(B.db_size)})` : ""}. 종목 목록 같은 다시 받을 수 있는 자료는 빼요.</div>`;
+    const again = () => this.backup();
+    $("#bkNow").onclick = async (e) => {
+      const b = e.currentTarget; b.disabled = true; b.textContent = "백업하는 중";
+      try { const m = await run(() => api("POST", "/api/backup", {})); toast(m.copy_error ? `백업했어요. ${m.copy_error}` : `백업했어요 · ${bkSize(m.size)}${m.copied ? " · 다른 폴더에도 복사" : ""}`, !!m.copy_error); } catch (err) { /* 안내함 */ }
+      again();
+    };
+    $("#bkAuto").onclick = async () => { await run(() => api("PUT", "/api/backup/config", { auto: !B.auto }), B.auto ? "자동 백업을 껐어요" : "자동 백업을 켰어요").catch(() => null); again(); };
+    bindSeg(view, "bkKeep", async (v) => { await run(() => api("PUT", "/api/backup/config", { keep: Number(v) }), `자동 백업을 ${v}일치 남겨요`).catch(() => null); again(); });
+    if ($("#bkDirF")) $("#bkDirF").onsubmit = async (e) => {
+      e.preventDefault();
+      const v = $("#bkDir").value.trim();
+      const r = await run(() => api("PUT", "/api/backup/config", { extra_dir: v }), v ? "백업할 때마다 이 폴더에도 복사해요" : "다른 폴더 복사를 껐어요").catch(() => null);
+      if (r) again();
+    };
+    $("#bkFile").onchange = async (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const fd = new FormData(); fd.append("file", f);
+      let m;
+      try { m = await run(() => api("POST", "/api/backup/upload", fd, true), "파일을 올렸어요. 내용을 확인해 주세요"); } catch (err) { e.target.value = ""; return; }
+      await this.backup();
+      this.backupSheet(m, { ...B, items: [m, ...B.items] });
+    };
+    view.onclick = (e) => { const r = e.target.closest("[data-bk]"); if (r) this.backupSheet(B.items.find((i) => i.name === r.dataset.bk), B); };
+  },
+  // 백업 하나: 내용 요약, 내려받기, 되돌리기, 지우기
+  backupSheet(i, B) {
+    if (!i) return;
+    const c = i.counts || {}, pw = B.need_password;
+    const S = { blob: null, full: false };
+    openSheet(bkWhen(i.ts), `<div class="bk-sh">
+      <div class="chips"><span class="tag ${i.kind === "auto" ? "" : i.kind === "manual" ? "v" : "y"}">${esc(i.kind_name)}</span>${i.version ? `<span class="tag">v${esc(i.version)}</span>` : ""}${i.keyless ? `<span class="tag y">키 뺀 사본</span>` : ""}<span class="tag">${bkSize(i.size)}</span></div>
+      <dl class="dv-dl">${[["가계부 내역", c.transactions, "건"], ["계좌·자산", c.accounts, "개"], ["적립 플랜", c.dca_plans, "개"], ["AI 추천", c.ai_picks, "건"], ["주문 기록", c.orders, "건"]].filter((x, n) => x[1] != null && (x[1] > 0 || n === 0)).map(([k, v, u]) => `<div><dt>${k}</dt><dd>${won(v)}${u}</dd></div>`).join("")}
+        ${c.last ? `<div><dt>내역 기간</dt><dd>${esc(c.first)} ~ ${esc(c.last)}</dd></div>` : ""}</dl>
+      <h3 class="lr-h">내려받기</h3>
+      <div class="tiny">이 기기에 파일로 남겨요. 기본 사본에는 API 키·접속 토큰·비밀번호를 넣지 않아서, 파일이 새어도 계좌에 접근할 수 없어요.</div>
+      <div class="lr-auto"><span><b>키까지 포함한 전체 사본</b><small>새 노트북으로 옮길 때만. 파일을 안전한 곳에 두세요${pw ? " · 비밀번호 확인" : ""}</small></span>
+        <button type="button" class="switch" role="switch" id="bkFull" aria-checked="false" aria-label="키까지 포함한 전체 사본"><span></span></button></div>
+      <button type="button" class="btn wide" id="bkDown">내려받을 파일 만들기</button>
+      <h3 class="lr-h">되돌리기</h3>
+      <div class="tiny">지금 데이터를 이 백업 시점으로 바꿔요. 이 뒤에 넣은 내역은 사라지지만, 되돌리기 직전 상태를 자동으로 백업해 두니 다시 돌아올 수 있어요. 접속 토큰과 비밀번호는 지금 것을 그대로 써요.</div>
+      ${pw ? `<label class="field" id="bkPwF">앱 비밀번호<input id="bkPw" type="password" autocomplete="current-password" placeholder="되돌리기·전체 사본에 필요해요"></label>` : ""}
+      <button type="button" class="btn wide bk-danger" id="bkRestore">이 백업으로 되돌리기</button>
+      <button type="button" class="btn sm soft wide" id="bkDel">이 백업 지우기</button></div>`, (box) => {
+      const pwv = () => ($("#bkPw", box) ? $("#bkPw", box).value : "");
+      const needPw = () => { if (pw && !pwv()) { toast("앱 비밀번호를 넣어 주세요", true); $("#bkPw", box).focus(); return true; } return false; };
+      $("#bkFull", box).onclick = (e) => { S.full = !S.full; e.currentTarget.setAttribute("aria-checked", String(S.full)); S.blob = null; $("#bkDown", box).textContent = "내려받을 파일 만들기"; };
+      // 두 단계: 파일을 받아 온 뒤, 한 번 더 눌러 저장할 곳을 고른다(휴대폰의 공유 창은 누른 직후에만 열린다)
+      $("#bkDown", box).onclick = async (e) => {
+        const b = e.currentTarget;
+        if (S.blob) return bkSave(S.blob, i.name.replace(/\.db$/, S.full ? "-full.db" : ".db"));
+        if (S.full && needPw()) return;
+        b.disabled = true; b.textContent = "파일을 만드는 중";
+        try {
+          S.blob = await apiBlob(`/api/backup/${encodeURIComponent(i.name)}/download`, { full: S.full, password: pwv() });
+          b.textContent = `저장할 곳 고르기 · ${bkSize(S.blob.size)}`; b.classList.add("dark");
+        } catch (err) { if (err instanceof Locked) { closeSheet(); throw err; } toast(err.message, true); b.textContent = "내려받을 파일 만들기"; }
+        b.disabled = false;
+      };
+      $("#bkRestore", box).onclick = async (e) => {
+        const b = e.currentTarget;
+        if (needPw()) return;
+        if (!confirmTap(b, "한 번 더 누르면 되돌려요")) return;
+        b.disabled = true; b.textContent = "되돌리는 중";
+        let r;
+        try { r = await run(() => api("POST", `/api/backup/${encodeURIComponent(i.name)}/restore`, { password: pwv() })); }
+        catch (err) { b.disabled = false; b.textContent = "이 백업으로 되돌리기"; return; }
+        closeSheet(); purgeCache();
+        bkAfterRestore(r);
+      };
+      $("#bkDel", box).onclick = async (e) => {
+        if (!confirmTap(e.currentTarget, "한 번 더 누르면 지워요")) return;
+        try { await run(() => api("DELETE", `/api/backup/${encodeURIComponent(i.name)}`), "백업을 지웠어요"); } catch (err) { return; }
+        closeSheet(); this.backup();
+      };
+    });
   },
   // 보안: 잠금 상태, 자동 잠금 시간, 비밀번호 바꾸기, 점검표
   async security() {
@@ -4623,6 +4799,7 @@ pages.settings = {
     if (h.sub === "theme") return this.theme();  // 색상은 서버 연결 없이도 바꿀 수 있게
     if (h.sub === "ai") return this.ai();
     if (h.sub === "security") return this.security();
+    if (h.sub === "backup") return this.backup();
     if (h.sub === "kiwoom") h.sub = "accounts";
     const sub = h.sub;
     let s;

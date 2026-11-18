@@ -53,6 +53,8 @@ DEFAULTS = {
            "admin_key": "",            # 선택: Admin API 키(sk-ant-admin...)면 콘솔 전체 사용액까지 반영
            "credit": {"usd": None, "at": None, "base_admin": 0.0}},  # 콘솔에서 본 잔액과 그 시각
     "inbox_auto": {"card": True, "income": False, "outflow": False},
+    # 백업: 하루 한 번 자동(노트북이 켜져 있을 때), 자동 백업 보관 개수, 함께 복사해 둘 다른 폴더(클라우드·USB 등)
+    "backup": {"auto": True, "keep": 14, "extra_dir": ""},
     # 내 계좌 보기(조회 전용): 주문은 절대 나가지 않는다
     "kiwoom_view": {"appkey": "", "secretkey": "", "mock": False},            # GitHub에 새 버전이 올라오면 노트북 서버가 알아서 받아 다시 시작
 }

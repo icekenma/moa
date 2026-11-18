@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.0805";
+const UI_VERSION = "261119.0819";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -381,9 +381,35 @@ function usLine(d) {  // 미국 주식·달러가 총자산에 합쳐졌을 때 
   if (!u || u.error || !(u.eval || u.usd_krw)) return "";
   return `<div class="tiny">국내 ${won(d.kr_total)}원 + 미국 주식 ${won(u.eval)}원${u.usd ? ` + 달러 ${usd(u.usd)}(약 ${won(u.usd_krw)}원)` : ""}${u.fx ? ` · 환율 ${won(u.fx)}원` : ""}</div>`;
 }
+// 키움이 'IP가 등록되지 않았다'고 할 때: 노트북의 지금 공인 IP와 등록하는 곳을 바로 보여 준다(휴대폰에서도 등록할 수 있게)
+const IPH = { ip: null, at: 0, busy: false, err: null };
+function ipHelp(err) {
+  if (!/8010|8050|IP/i.test(String(err || ""))) return "";
+  if (!IPH.busy && Date.now() - IPH.at > 60000) {
+    IPH.busy = true;
+    api("GET", "/api/net/ip").then((r) => { IPH.ip = r.ip; IPH.err = null; }).catch((e) => { IPH.err = e.message; })
+      .finally(() => { IPH.busy = false; IPH.at = Date.now(); $$("[data-iphelp]").forEach((x) => { x.outerHTML = ipHelpHtml(); }); });
+  }
+  return ipHelpHtml();
+}
+function ipHelpHtml() {
+  return `<div class="ip-help" data-iphelp>
+    <div class="ip-row"><span>노트북의 지금 인터넷 주소(IP)</span>${IPH.ip ? `<b>${esc(IPH.ip)}</b><button type="button" class="chip" data-ipcopy="${esc(IPH.ip)}">복사</button>` : `<b class="muted">${IPH.err ? "확인 실패" : "확인 중…"}</b>`}</div>
+    ${IPH.err && !IPH.ip ? `<div class="ip-step">${esc(IPH.err)}</div>` : ""}
+    <div class="ip-step">이 주소를 키움에 등록하면 다시 연결돼요. 휴대폰 브라우저로도 할 수 있어요.<br>키움 REST API 홈페이지 로그인 → API 사용신청 → 계좌 APP Key 관리 → IP 추가</div>
+    <a class="btn sm" href="https://openapi.kiwoom.com" target="_blank" rel="noopener noreferrer">키움 REST API 홈페이지 열기</a>
+  </div>`;
+}
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-ipcopy]");
+  if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  try { await navigator.clipboard.writeText(b.dataset.ipcopy); toast("IP를 복사했어요"); } catch (err) { toast("복사하지 못했어요. 숫자를 길게 눌러 복사해 주세요", true); }
+}, true);
+
 function kwCardHtml(d) {
   if (!d || !d.configured) return `<h2>키움 계좌</h2><div class="small muted">아래 키움증권(조회 전용)에 앱키·시크릿키를 넣고 연결 확인을 누르면 여기서 언제든 계좌를 볼 수 있어요.</div>`;
-  if (d.total == null) return `<div class="kw-top"><b>키움증권</b></div><div class="notice warn">${esc(d.error || "불러오는 중")}</div>`;
+  if (d.total == null) return `<div class="kw-top"><b>키움증권</b></div><div class="notice warn">${esc(d.error || "불러오는 중")}${ipHelp(d.error)}</div>`;
   const live = d.ok !== false, H = d.holdings || [];
   const when = (d.updated_at || "").replace("T", " ");
   const stateTxt = live ? "실시간" : d.offline ? "서버 꺼짐 · 마지막 조회값" : "연결 끊김 · 마지막 조회값";
@@ -397,7 +423,7 @@ function kwCardHtml(d) {
     ${usLine(d)}
     ${H.length ? `<div class="kw-list">${H.slice(0, 6).map((h) => `<div><span class="kw-nm">${esc(h.name)}<i>${won(h.qty)}주</i></span><b>${won(h.value)}</b><em class="${tone(h.pnl)}">${pct(h.pnl_pct, 2)}</em></div>`).join("")}
       ${H.length > 6 ? `<div class="kw-more">외 ${H.length - 6}종목</div>` : ""}</div>` : `<div class="kw-more">보유 종목 없음</div>`}
-    ${!live && d.error ? `<div class="kw-err">${esc(d.error)}</div>` : ""}
+    ${!live && d.error ? `<div class="kw-err">${esc(d.error)}</div>${ipHelp(d.error)}` : ""}
     <div class="kw-foot"><span>${esc(when.slice(5, 19))} 기준</span>
       <span><button type="button" class="kw-btn" id="kwReload">새로고침</button><a class="kw-btn" href="#invest/account">전체 보기</a></span></div>`;
 }
@@ -2374,7 +2400,7 @@ pages.invest = {
         <a class="btn dark" href="#settings/accounts">설정으로 가기</a></section>`;
       return;
     }
-    const err = d.error ? `<div class="notice warn">${esc(d.error)}${/8010/.test(d.error) ? "<br>노트북 인터넷 주소(IP)가 바뀐 것 같아요. 키움 REST API 홈페이지 → 계좌 App Key 관리에서 현재 IP를 추가해 주세요." : ""}</div>` : "";
+    const err = d.error ? `<div class="notice warn">${esc(d.error)}${ipHelp(d.error)}</div>` : "";
     if (d.total == null) { box.innerHTML = err || `<div class="empty loading">불러오는 중</div>`; return; }
     const H = d.holdings || [];
     const mixTotal = H.reduce((s2, h) => s2 + h.value, 0) + (d.cash || 0);
@@ -2485,7 +2511,7 @@ pages.invest = {
   },
   openHtml(d) {
     if (!d) return "";
-    const err = Object.values(d.errors || {}).map((m) => `<div class="notice warn">${esc(m)}</div>`).join("");
+    const err = Object.values(d.errors || {}).map((m) => `<div class="notice warn">${esc(m)}${ipHelp(m)}</div>`).join("");
     if (!d.items.length) return err;
     return `${err}<div class="sec-title">미체결 주문 ${d.items.length}건</div>
       <section class="card tight"><div class="list">${d.items.map((o, i) => `<div class="item">
@@ -5337,7 +5363,7 @@ pages.settings = {
       <section class="card" id="kvSec"><h2>키움증권(조회 전용) <span class="tag ${kwState[1]}" style="vertical-align:2px">${kwState[0]}</span></h2>
         <div class="small muted">보유액·예수금·종목을 보기만 해요. 이 키로는 주문 기능이 아예 꺼져 있어요.<br>
           <b>다른 계좌로 바꾸려면</b> 키움 REST API 홈페이지에서 그 계좌의 앱키·시크릿키를 받아 아래에 덮어쓰고 연결 확인을 누르세요. 앱키는 계좌마다 따로 발급돼요.</div>
-        ${kw.error ? `<div class="notice warn">${esc(kw.error)}</div>` : ""}
+        ${kw.error ? `<div class="notice warn">${esc(kw.error)}${ipHelp(kw.error)}</div>` : ""}
         <label class="field">앱키<input data-kv="appkey" value="${esc(s.kiwoom_view.appkey)}" autocomplete="off" autocapitalize="off"></label>
         <label class="field">시크릿키<input data-kv="secretkey" type="password" value="${esc(s.kiwoom_view.secretkey)}" autocomplete="off"></label>
         <label class="check"><input type="checkbox" data-kv="mock" ${s.kiwoom_view.mock ? "checked" : ""}> 모의투자 계좌 키예요</label>

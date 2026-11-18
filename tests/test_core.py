@@ -2626,3 +2626,25 @@ def test_dividend_slow_source_does_not_block_screen(rt, monkeypatch):
     assert _t.time() - t0 < 0.5 and a["yield"] == 3.75 and b["pending"] and b["error"] and b["yield"] is None and b["sym"] == "JEPI"
     _t.sleep(0.7)                                   # 뒤에서 마저 받아 둔다
     assert dv.info("us", "JEPI")["freq"] == 12 and not dv.info("us", "JEPI").get("pending")
+
+
+def test_public_ip_for_kiwoom_registration(monkeypatch):
+    """키움 IP 등록 안내에 쓰는 노트북 공인 IP: 첫 서비스가 죽어도 다음에서 받고, 이상한 답은 버린다."""
+    from moa import netinfo
+
+    class R:
+        def __init__(self, text, code=200):
+            self.text, self.status_code = text, code
+    calls = []
+
+    def get(url, **kw):
+        calls.append(url)
+        if "ipify" in url:
+            raise OSError("down")
+        return R("<html>nope</html>") if "amazonaws" in url else R("203.0.113.7\n")
+    netinfo._cache.update(ip=None, at=0.0)
+    ip, at = netinfo.public_ip(get=get)
+    assert ip == "203.0.113.7" and at > 0 and len(calls) == 3
+    assert netinfo.public_ip(get=lambda *a, **k: 1 / 0)[0] == "203.0.113.7"          # 잠깐은 기억해 둔 값을 쓴다
+    netinfo._cache.update(ip=None, at=0.0)
+    assert netinfo.public_ip(get=lambda *a, **k: R("999.1.1.1")) == (None, 0)

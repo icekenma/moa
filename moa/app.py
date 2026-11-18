@@ -843,6 +843,15 @@ def create_app(rt, updater=None):
         return app.response_class(json.dumps(rt.market.diag(), ensure_ascii=False, default=str, indent=1),
                                   mimetype="application/json")
 
+    # ---------- 노트북의 공인 IP(키움 IP 등록용) ----------
+    @app.get("/api/net/ip")
+    def net_ip():
+        from .netinfo import public_ip
+        ip, at = public_ip(force=request.args.get("force") == "1")
+        if not ip:
+            raise ValueError("노트북의 인터넷 주소를 알아내지 못했어요. 노트북 인터넷 연결을 확인해 주세요")
+        return jsonify(ip=ip, at=datetime.fromtimestamp(at).isoformat(timespec="seconds"))
+
     # ---------- 내 계좌(조회 전용) ----------
     @app.get("/api/myaccount")
     def myaccount():

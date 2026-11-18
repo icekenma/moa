@@ -130,7 +130,7 @@ class AI:
 
     # 화면 공통 비용 표시: 예상 비용 + 현재 잔액
     KIND_TOK = {"stock": (9000, 1500), "portfolio": (7000, 1600), "review": (9000, 1500), "sweep": (7000, 1500),
-                "chat": (6000, 1200), "pick": (16000, 2200), "pickw": (18000, 2600), "learn": (14000, 1500), "test": (30, 10)}
+                "chat": (6000, 1200), "pick": (16000, 2200), "pickw": (18000, 2600), "learn": (14000, 1500), "divplan": (15000, 2600), "test": (30, 10)}
 
     def fx(self):
         try:
@@ -252,6 +252,11 @@ class AI:
                 return self.rt.aipick.context(d)
             except ValueError as e:
                 raise AIError(str(e))
+        if kind == "divplan":
+            try:
+                return self.rt.dividend.ai_context(d)
+            except ValueError as e:
+                raise AIError(str(e))
         if kind == "chat":
             q = (d.get("question") or "").strip()
             if not q:
@@ -294,8 +299,11 @@ class AI:
         pick = kind == "pick"
         from .aipick import hz, system_prompt
         hzn = hz(d.get("horizon"))
-        body = {"model": model, "max_tokens": 9000 if pick else 2500, "system": system_prompt(hzn) if pick else SYSTEM,
-                "messages": messages, "stream": True}
+        div = kind == "divplan"
+        if div:
+            from .dividend import DIV_SYSTEM
+        body = {"model": model, "max_tokens": 9000 if pick else 5000 if div else 2500,
+                "system": system_prompt(hzn) if pick else DIV_SYSTEM if div else SYSTEM, "messages": messages, "stream": True}
         web = d["web_search"] if isinstance(d.get("web_search"), bool) else c.get("web_search", True)
         if web and kind not in ("sweep", "learn"):
             body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": (3 if hzn == "day" else 6) if pick else 4,
@@ -347,6 +355,11 @@ class AI:
                 res = None
                 yield {"t": "status", "msg": f"추천 결과 정리 실패: {e}"}
             yield {"t": "picks", **(res or {"picks": [], "stance": None, "view": "", "note": "AI 답이 비어 있어요. 다시 받아 보세요"})}
+        if div:
+            try:
+                yield {"t": "plan", **self.rt.dividend.parse_plan("".join(buf), d, model, usd)}
+            except Exception as e:
+                yield {"t": "plan", "error": str(e) if isinstance(e, ValueError) else f"구성 정리 실패 ({type(e).__name__})"}
         cr = self.credit()
         yield {"t": "done", "fx": fx, "credit": cr, "title": title, "usd": round(usd, 4), "krw": int(round(usd * fx)), "model": model,
                "searches": usage["searches"], "in": usage["in"], "out": usage["out"],

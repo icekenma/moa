@@ -1038,6 +1038,47 @@ def create_app(rt, updater=None):
     def ai_guard_del(gid):
         return jsonify(rt.aipick.cancel_guard(gid))
 
+    # ---------- 배당 ----------
+    @app.get("/api/div/universe")
+    def div_universe():
+        return jsonify(rt.dividend.universe(force=request.args.get("refresh") == "1"))
+
+    @app.get("/api/div/info/<mkt>/<sym>")
+    def div_info(mkt, sym):
+        return jsonify(rt.dividend.info(mkt, sym, force=request.args.get("refresh") == "1"))
+
+    @app.post("/api/div/custom")
+    def div_custom_add():
+        d = body()
+        return jsonify(rt.dividend.add_custom(d.get("mkt"), d.get("sym"), d.get("name") or ""))
+
+    @app.delete("/api/div/custom/<mkt>/<sym>")
+    def div_custom_del(mkt, sym):
+        rt.dividend.remove_custom(mkt, sym)
+        return jsonify(ok=True)
+
+    @app.get("/api/div/mine")
+    def div_mine():
+        return jsonify(rt.dividend.mine())
+
+    @app.post("/api/div/simulate")
+    def div_simulate():
+        return jsonify(rt.dividend.run_sim(body()))
+
+    @app.put("/api/div/goal")
+    def div_goal():
+        rt.dividend.set_goal(body().get("goal"))
+        return jsonify(goal=rt.dividend.goal())
+
+    @app.get("/api/div/plans")
+    def div_plans():
+        return jsonify(rt.dividend.plans())
+
+    @app.delete("/api/div/plans/<int:pid>")
+    def div_plan_del(pid):
+        rt.dividend.delete_plan(pid)
+        return jsonify(ok=True)
+
     # AI 요청은 화면 연결과 따로 뒤에서 끝까지 돈다(작업). 휴대폰이 화면을 끄거나 연결이 잠깐 끊겨도
     # 결과(추천 저장·비용 기록)가 사라지지 않고, 화면은 같은 작업에 다시 붙어 이어 받는다.
     import threading

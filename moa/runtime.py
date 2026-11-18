@@ -35,6 +35,8 @@ class Runtime:
         self.ai = AI(self)
         from .aipick import AIPick
         self.aipick = AIPick(self)
+        from .dividend import Dividend
+        self.dividend = Dividend(self)
         from .trading.sweep import SweepJob
         self.sweep = SweepJob(self, data_dir or ".")
         self.assets = Assets(db, self.value_of, kiwoom_on=lambda: self.account.configured())

@@ -140,9 +140,11 @@ class Market:
         return self.watch()
 
     # ---------- 미국(공개 시세) ----------
-    def _yh_chart(self, sym, rng="1d", interval="5m", prepost=False):
-        r = self.http.get(f"{YH}/v8/finance/chart/{requests.utils.quote(sym)}",
-                          params={"range": rng, "interval": interval, "includePrePost": "true" if prepost else "false"}, timeout=8)
+    def _yh_chart(self, sym, rng="1d", interval="5m", prepost=False, events=None):
+        params = {"range": rng, "interval": interval, "includePrePost": "true" if prepost else "false"}
+        if events:  # "div": 배당 내역을 함께 받는다
+            params["events"] = events
+        r = self.http.get(f"{YH}/v8/finance/chart/{requests.utils.quote(sym)}", params=params, timeout=8)
         if r.status_code != 200:
             raise MarketError(f"미국 시세 응답 오류({r.status_code})")
         res = ((r.json().get("chart") or {}).get("result") or [None])[0]

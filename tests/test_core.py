@@ -4,6 +4,7 @@ import sys
 from datetime import date, datetime
 
 import pytest
+import re
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -1866,3 +1867,253 @@ def test_ai_stream_records_cost_when_cut_midway(rt, monkeypatch):
     assert evs[-1]["t"] == "error" and "끊겼어요" in evs[-1]["msg"]
     row = rt.db.one("SELECT * FROM ai_usage ORDER BY rowid DESC LIMIT 1")
     assert rt.db.one("SELECT COUNT(*) AS n FROM ai_usage")["n"] == before + 1 and row["in_tok"] == 9000 and row["usd"] > 0
+
+
+# ---------- 배당 ----------
+def _yh_div(price, divs, kind="ETF", off=-18000, cur="USD"):
+    """야후 차트 응답(배당 내역 포함) 흉내. divs: [(YYYY-MM-DD, 금액)]"""
+    from datetime import datetime as D, timezone as TZ
+    ev = {}
+    for d, a in divs:
+        y, m, dd = map(int, d.split("-"))
+        ts = int(D(y, m, dd, 14, 30, tzinfo=TZ.utc).timestamp())
+        ev[str(ts)] = {"amount": a, "date": ts}
+    return {"meta": {"regularMarketPrice": price, "currency": cur, "instrumentType": kind, "gmtoffset": off, "shortName": "Y"},
+            "timestamp": [], "indicators": {"quote": [{"close": []}]}, "events": {"dividends": ev}}
+
+
+def test_dividend_analyze_yield_frequency_months_growth():
+    import moa.dividend as DV
+    from datetime import date
+    today = date(2026, 11, 18)
+    # 분기 배당 ETF: 3·6·9·12월 배당락, 해마다 10%씩 증가
+    divs = []
+    for y in range(2019, 2027):
+        base = 0.5 * 1.1 ** (y - 2019)
+        for m in (3, 6, 9, 12):
+            if date(y, m, 20) < today:
+                divs.append((date(y, m, 20), round(base, 4)))
+    a = DV.analyze(divs, 100.0, "us", "ETF", today)
+    assert a["freq"] == 4 and a["count"] == len(divs)
+    assert abs(a["ttm"] - (0.5 * 1.1 ** 6 + 3 * 0.5 * 1.1 ** 7)) < 1e-3 and a["yield"] == round(a["ttm"], 2)
+    assert [i + 1 for i, v in enumerate(a["months"]) if v > 0] == [3, 6, 9, 12] and abs(sum(a["months"]) - 1) < 0.01
+    assert a["growth5"] == 10.0 and a["growth3"] == 10.0 and a["streak"] == 6      # 끝난 해(2019~2025)만 비교
+    assert a["last"]["date"] == "2026-09-20" and a["next_ex"] > "2026-11-18"
+    # 미국 주식은 3주 뒤 지급 → 다음 달로 넘어간다 / 국내 결산배당은 이듬해 4월
+    assert DV.pay_date("us", "EQUITY", date(2026, 3, 20)).month == 4
+    assert DV.pay_date("kr", "EQUITY", date(2025, 12, 29)) == date(2026, 4, 15)
+    assert DV.pay_date("kr", "EQUITY", date(2026, 6, 29)).month == 8 and DV.pay_date("kr", "ETF", date(2026, 6, 29)).month == 7
+    # 월배당
+    md = [(date(2025 + (m > 12), (m - 1) % 12 + 1, 5), 0.1) for m in range(12, 24)]
+    m = DV.analyze(md, 20.0, "us", "ETF", today)
+    assert m["freq"] == 12 and all(v > 0 for v in m["months"]) and m["yield"] == 6.0
+    e = DV.analyze([], 10, "us", "ETF", today)
+    assert e["yield"] is None and e["freq"] == 0 and DV.default_growth(e) == 0
+    assert DV.default_growth({"growth5": 23.0}) == 10.0 and DV.default_growth({"growth5": -4, "growth3": 2}) == 0.0
+    # 기본 후보·예시 구성의 짜임새
+    keys = {(u[0], u[1]) for u in DV.UNIVERSE}
+    assert len(keys) == len(DV.UNIVERSE) and all(u[3] in DV.CATS for u in DV.UNIVERSE)
+    assert all(re.fullmatch(r"\d{6}", u[1]) for u in DV.UNIVERSE if u[0] == "kr")
+    for p in DV.PRESETS:
+        assert sum(w for _, _, w in p["assets"]) == 100 and all((m, s) in keys for m, s, _ in p["assets"])
+
+
+def test_dividend_simulation_math():
+    import moa.dividend as DV
+    from datetime import date
+    flat = [1 / 12] * 12
+    A = lambda **k: {"mkt": "kr", "sym": "A", "name": "A", "cat": "kr_stock", "weight": 100, "yield": 6.0, "growth": 0, "months": flat, **k}
+    base = dict(amount=300_000_000, years=10, price_growth=0, growth_scale=1, tax_kr=15.4, tax_us=15, fx_change=0)
+    # 재투자 안 함 + 성장 0: 매달 3억 × 6% ÷ 12 × (1 − 15.4%) = 1,269,000원이 그대로
+    r = DV.simulate(dict(base, reinvest=False, assets=[A()]), today=date(2026, 11, 18))
+    assert r["start"] == "2026-12-01" and r["months"][0]["ym"] == "2026-12" and r["months"][1]["ym"] == "2027-01"
+    assert all(m["net"] == 1_269_000 for m in r["months"]) and r["summary"]["first_monthly"] == 1_269_000 == r["summary"]["last_monthly"]
+    assert r["yearly"][0]["gross"] == 18_000_000 and r["yearly"][0]["tax"] == 2_772_000 and r["yearly"][-1]["value"] == 300_000_000
+    assert r["summary"]["yield"] == 6.0 and r["summary"]["yield_net"] == 5.08 and r["summary"]["over_line_year"] is None
+    # 재투자: 달마다 세후 배당률만큼 주식이 늘어난다 → 10년 뒤 (1 + 0.06×0.846/12)^120배
+    r2 = DV.simulate(dict(base, reinvest=True, assets=[A()]), today=date(2026, 11, 18))
+    k = (1 + 0.06 * 0.846 / 12) ** 120
+    assert abs(r2["yearly"][-1]["value"] / (300_000_000 * k) - 1) < 1e-6
+    assert r2["summary"]["last_monthly"] > 2_000_000 > r2["summary"]["other_last_monthly"] == 1_269_000
+    ms = {m["target"]: m for m in r2["milestones"]}
+    assert ms[1_000_000]["year"] == 1 and ms[2_000_000]["year"] in (9, 10) and ms[2_000_000]["other"] is None and ms[5_000_000]["year"] is None
+    assert r2["summary"]["over_line_year"] == 3                                    # 세전 연 2천만 원을 넘는 첫 해
+    # 배당 성장 5%: 재투자 없이도 해마다 5%씩
+    r3 = DV.simulate(dict(base, reinvest=False, assets=[A(growth=5)]), today=date(2026, 11, 18))
+    assert round(r3["yearly"][1]["net"] / r3["yearly"][0]["net"], 4) == 1.05 and round(r3["yearly"][5]["net"] / r3["yearly"][0]["net"], 3) == round(1.05 ** 5, 3)
+    # 6년차부터는 과거 성장률을 그대로 잇지 않는다: 주가 상승률(0%) + 1%p까지만 → 배당률이 끝없이 부풀지 않게
+    assert round(r3["yearly"][9]["net"] / r3["yearly"][5]["net"], 3) == round(1.01 ** 4, 3)
+    r3b = DV.simulate(dict(base, reinvest=False, price_growth=7, assets=[A(growth=5)]), today=date(2026, 11, 18))
+    assert round(r3b["yearly"][9]["net"] / r3b["yearly"][0]["net"], 3) == round(1.05 ** 9, 3)       # 주가가 더 빨리 오르면 그대로
+    assert r3["scenarios"][0]["last"] < r3["scenarios"][1]["last"] < r3["scenarios"][2]["last"] and r3["scenarios"][1]["last"] == r3["summary"]["last_monthly"]
+    assert r3["cut"]["first"] == round(1_269_000 * 0.75)
+    # 분기 배당은 그 달에만, 미국 종목은 15% 세율과 환율을 탄다
+    q = [0, 0, .25, 0, 0, .25, 0, 0, .25, 0, 0, .25]
+    r4 = DV.simulate(dict(base, reinvest=False, years=1, assets=[A(weight=50, months=q), A(sym="U", mkt="us", cat="us_etf", weight=50, **{"yield": 4.0})]), today=date(2026, 11, 18))
+    by = {m["ym"]: m for m in r4["months"]}
+    us_m = round(150_000_000 * 0.04 / 12 * 0.85)
+    assert by["2027-01"]["net"] == us_m and by["2027-03"]["net"] == us_m + round(150_000_000 * 0.06 * 0.25 * 0.846)
+    assert r4["summary"]["us_weight"] == 50 and r4["summary"]["min_month"] == us_m and r4["summary"]["yield"] == 5.0
+    fx = {x["chg"]: x["monthly"] for x in r4["fx"]}
+    assert fx[0] == r4["summary"]["first_monthly"] and fx[10] > fx[0] > fx[-10]
+    share = us_m * 12 / r4["yearly"][0]["net"]
+    assert abs(fx[10] / fx[0] - (1 + share * 0.1)) < 1e-3
+    # 매월 추가 투자와 주가 상승(채권류는 주가 상승을 적용하지 않음)
+    r5 = DV.simulate(dict(base, reinvest=False, monthly_add=1_000_000, years=2, price_growth=5, assets=[A(cat="us_bond", mkt="us", **{"yield": 4})]), today=date(2026, 11, 18))
+    assert r5["yearly"][0]["invested"] == 311_000_000 and r5["yearly"][1]["invested"] == 323_000_000 and r5["yearly"][1]["value"] == 323_000_000
+    assert r5["yearly"][1]["net"] > r5["yearly"][0]["net"]
+    with pytest.raises(ValueError):
+        DV.simulate(dict(base, assets=[]))
+    with pytest.raises(ValueError):
+        DV.simulate(dict(base, amount=0, assets=[A()]))
+
+
+def _div_rt(rt, monkeypatch):
+    """야후 응답을 가짜로 바꾼 배당 모듈."""
+    from datetime import date, timedelta
+    today = date.today()
+    def gen(n, step, amt, years=7, grow=1.0):
+        out, d = [], today - timedelta(days=10)
+        for i in range(n * years):
+            out.append((d.isoformat(), round(amt * grow ** -(i // n), 4)))
+            d -= timedelta(days=step)
+        return out
+    data = {"SCHD": _yh_div(80.0, gen(4, 91, 0.75, grow=1.08)), "SGOV": _yh_div(100.0, gen(12, 30, 0.35)),
+            "JEPI": _yh_div(56.0, gen(12, 30, 0.38)), "458730.KS": _yh_div(12000, gen(12, 30, 35), off=32400, cur="KRW"),
+            "005930.KS": _yh_div(100000, gen(4, 91, 361), kind="EQUITY", off=32400, cur="KRW")}
+    calls = []
+
+    def chart(sym, rng="1d", interval="5m", prepost=False, events=None):
+        calls.append(sym)
+        if sym == "USDKRW=X":
+            return {"meta": {"regularMarketPrice": 1400.0}, "timestamp": [1], "indicators": {"quote": [{"close": [1400.0]}]}}
+        if sym not in data:
+            raise RuntimeError("no data")
+        return data[sym]
+    monkeypatch.setattr(rt.market, "_yh_chart", chart)
+    monkeypatch.setattr(rt.market, "yh_quote", lambda s: {"price": 1400.0})
+    monkeypatch.setattr(rt.market, "kr_market", lambda s: "코스피")
+    return calls
+
+
+def test_dividend_info_cache_universe_and_custom(rt, monkeypatch):
+    calls = _div_rt(rt, monkeypatch)
+    dv = rt.dividend
+    i = dv.info("us", "schd")
+    assert i["sym"] == "SCHD" and i["name"].startswith("Schwab") and i["cat"] == "us_etf" and i["freq"] == 4 and i["freq_name"] == "분기"
+    assert i["yield"] == 3.75 and i["growth"] > 0 and i["kind"] == "ETF" and i["price"] == 80.0
+    n = len(calls)
+    assert dv.info("us", "SCHD")["yield"] == 3.75 and len(calls) == n                       # 하루 동안은 저장본
+    dv._mem.clear()
+    assert dv.info("us", "SCHD")["yield"] == 3.75 and len(calls) == n                       # 서버를 껐다 켜도 DB에서
+    bad = dv.info("us", "NOPE")
+    assert bad["error"] and bad["yield"] is None and bad["months"] == [0] * 12
+    u = dv.universe()
+    assert len(u["items"]) == len(__import__("moa.dividend", fromlist=["x"]).UNIVERSE) and u["fx"] == 1400.0 and u["failed"] > 0
+    pres = {p["id"]: p for p in u["presets"]}
+    assert pres["stable"]["assets"][0]["sym"] == "SCHD" and pres["stable"]["yield"] > 0 and pres["stable"]["missing"] == 1   # VYM은 가짜 자료에 없음
+    kr = next(x for x in u["items"] if x["sym"] == "458730")
+    assert kr["freq"] == 12 and kr["currency"] == "KRW" and kr["yield"] == 3.5
+    # 직접 넣은 종목
+    x = dv.add_custom("kr", "005930", "삼성전자")
+    assert x["custom"] and x["name"] == "삼성전자" and x["freq"] == 4 and x["kind"] == "EQUITY"
+    assert any(i["sym"] == "005930" for i in dv.universe()["items"])
+    dv.remove_custom("kr", "005930")
+    assert not any(i["sym"] == "005930" for i in dv.universe()["items"])
+    with pytest.raises(ValueError):
+        dv.add_custom("kr", "12")
+    c = create_app(rt).test_client()
+    assert c.get("/api/div/info/us/JEPI").get_json()["freq"] == 12
+    assert c.put("/api/div/goal", json={"goal": 2500000}).get_json()["goal"] == 2500000 and c.get("/api/div/universe").get_json()["goal"] == 2500000
+
+
+def test_dividend_mine_and_api_simulation(rt, monkeypatch):
+    _div_rt(rt, monkeypatch)
+    dv = rt.dividend
+    assert dv.mine()["configured"] is False
+    monkeypatch.setattr(rt.account, "configured", lambda: True)
+    monkeypatch.setattr(rt.account, "snapshot", lambda force=False: {"ok": True, "total": 30_000_000, "us": {"fx": 1400.0}, "holdings": [
+        {"code": "SCHD", "name": "SCHD", "market": "us", "qty": 100, "avg_price": 70.0, "price": 80.0, "value": 11_200_000},
+        {"code": "005930", "name": "삼성전자", "qty": 50, "avg_price": 80000, "price": 100000, "value": 5_000_000},
+        {"code": "000001", "name": "무배당", "qty": 10, "avg_price": 1000, "price": 1000, "value": 10_000}]})
+    dv.set_goal(1_000_000)
+    m = dv.mine()
+    schd, sam = m["rows"][0], m["rows"][1]
+    assert schd["sym"] == "SCHD" and schd["gross"] == round(100 * 3.0 * 1400) and schd["net"] == round(100 * 3.0 * 1400 * 0.85)
+    assert schd["yoc"] == round(3.0 / 70 * 100, 2) and sam["net"] == round(50 * 1444 * 0.846)
+    assert m["annual_net"] == schd["net"] + sam["net"] and sum(m["months"]) in range(m["annual_net"] - 12, m["annual_net"] + 12)
+    assert m["payers"] == 2 and m["goal_pct"] == round(m["annual_net"] / 12 / 1_000_000 * 100, 1) and m["need"] > 0
+    assert m["rows"][2]["net"] == 0 and m["rows"][2]["error"]
+    c = create_app(rt).test_client()
+    assert c.get("/api/div/mine").get_json()["annual_net"] == m["annual_net"]
+    # 화면은 종목·비중만 보내고, 배당률·지급월은 서버가 실제 자료에서 붙인다. 사용자가 고친 값은 그 값을 쓴다
+    r = c.post("/api/div/simulate", json={"amount": 300_000_000, "years": 10, "reinvest": True,
+                                          "assets": [{"mkt": "us", "sym": "SCHD", "weight": 70}, {"mkt": "us", "sym": "SGOV", "weight": 30}]}).get_json()
+    assert r["summary"]["yield"] == round(0.7 * 3.75 + 0.3 * 4.2, 2) and len(r["months"]) == 12 and len(r["yearly"]) == 10 and r["fx_now"] == 1400.0
+    assert r["summary"]["last_monthly"] > r["summary"]["first_monthly"] > 0 and r["assets"][0]["growth"] > 0 and r["summary"]["us_weight"] == 100
+    assert any(ms["goal"] and ms["target"] == 1_000_000 for ms in r["milestones"])
+    r2 = c.post("/api/div/simulate", json={"amount": 100_000_000, "years": 5, "reinvest": False, "assets": [{"mkt": "us", "sym": "NOPE", "weight": 100, "yield": 5}]}).get_json()
+    assert r2["summary"]["yield"] == 5.0 and r2["assets"][0]["edited"] and r2["summary"]["first_monthly"] == round(100_000_000 * 0.05 * 0.85 / 12)
+    r3 = c.post("/api/div/simulate", json={"amount": 100_000_000, "assets": [{"mkt": "us", "sym": "NOPE", "weight": 100}]}).get_json()
+    assert r3["summary"]["missing"] == ["NOPE"] and r3["summary"]["first_monthly"] == 0
+    assert c.post("/api/div/simulate", json={"amount": 1, "assets": []}).status_code == 400
+
+
+def test_dividend_ai_plan_context_parse_and_stream(rt, monkeypatch):
+    _div_rt(rt, monkeypatch)
+    dv = rt.dividend
+    title, ask, data = dv.ai_context({"amount": 300_000_000, "style": "income", "region": "us", "goal": 1_500_000, "memo": "달러 자산 위주"})
+    rows = data["후보 목록(실제 최근 1년 지급 기준)"]
+    assert "배당" in title and "300,000,000원" in ask and "1,500,000원" in ask and data["사용자 메모"] == "달러 자산 위주"
+    assert {r["sym"] for r in rows} == {"SCHD", "SGOV", "JEPI", "458730"} and all(r["배당률%(세전, 최근 1년)"] for r in rows)
+    with pytest.raises(ValueError):
+        dv.ai_context({"amount": 0})
+    text = "SCHD를 중심으로 짰어요.\n- 이유\n```json\n" + json.dumps({"title": "성장+현금흐름", "summary": "SCHD 중심", "assets": [
+        {"sym": "SCHD", "mkt": "us", "name": "SCHD", "weight": 50, "role": "핵심", "reason": "배당 성장"},
+        {"sym": "jepi", "mkt": "us", "weight": 30, "role": "현금흐름", "reason": "월배당"},
+        {"sym": "458730", "name": "TIGER 미국배당다우존스", "weight": 10, "role": "성장", "reason": "원화"},
+        {"sym": "ZZZZ", "mkt": "us", "weight": 10, "role": "완충", "reason": "없는 종목"}],
+        "rebalance": "1년에 한 번", "risks": ["환율"], "notes": ["2천만 원 기준"]}, ensure_ascii=False) + "\n```"
+    plan = dv.parse_plan(text, {"amount": 300_000_000, "style": "income"}, "claude-sonnet-5-5", 0.2)
+    assert [a["sym"] for a in plan["assets"]] == ["SCHD", "JEPI", "458730"]                 # 자료 없는 후보 밖 종목은 뺀다
+    assert abs(sum(a["weight"] for a in plan["assets"]) - 100) < 0.2 and plan["assets"][2]["mkt"] == "kr" and plan["assets"][0]["months"]
+    assert plan["yield"] > 0 and plan["id"] and plan["params"]["amount"] == 300_000_000 and "```" not in dv.plans()[0]["text"]
+    assert dv.plans()[0]["title"] == "성장+현금흐름" and dv.plans()[0]["assets"][0]["role"] == "핵심"
+    with pytest.raises(ValueError):
+        dv.parse_plan("표 없음", {}, "m", 0)
+    c = create_app(rt).test_client()
+    assert len(c.get("/api/div/plans").get_json()) == 1 and c.delete(f"/api/div/plans/{plan['id']}").get_json()["ok"] and dv.plans() == []
+    # AI 스트림에 연결: divplan 종류는 배당 전용 지침으로 묻고, 끝나면 plan 이벤트를 낸다
+    rt.settings.update({"ai": {"api_key": "sk-test-key-1234567890"}})
+    seen = {}
+
+    def post(body):
+        seen.update(body)
+        yield {"type": "message_start", "message": {"usage": {"input_tokens": 100, "output_tokens": 1}}}
+        yield {"type": "content_block_delta", "delta": {"type": "text_delta", "text": text}}
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 50}}
+    monkeypatch.setattr(rt.ai, "_post", post)
+    evs = list(rt.ai.stream("divplan", {"amount": 300_000_000, "web_search": False}))
+    assert "배당 포트폴리오 설계" in seen["system"] and seen["max_tokens"] == 5000 and "tools" not in seen
+    p = next(e for e in evs if e["t"] == "plan")
+    assert p["title"] == "성장+현금흐름" and len(p["assets"]) == 3 and evs[-1]["t"] == "done"
+    assert rt.db.one("SELECT kind FROM ai_usage ORDER BY rowid DESC LIMIT 1")["kind"] == "divplan"
+
+
+def test_dividend_slow_source_does_not_block_screen(rt, monkeypatch):
+    """바깥 서버가 느리면 기다리지 않고 '받는 중'으로 돌려준다. 그 종목은 저장하지 않아 다음에 다시 받는다."""
+    import time as _t
+    _div_rt(rt, monkeypatch)
+    dv = rt.dividend
+    real = dv._fetch
+
+    def slow(mkt, sym):
+        if sym == "JEPI":
+            _t.sleep(0.6)
+        return real(mkt, sym)
+    monkeypatch.setattr(dv, "_fetch", slow)
+    t0 = _t.time()
+    a, b = dv.many([("us", "SCHD"), ("us", "JEPI")], deadline=0.15)
+    assert _t.time() - t0 < 0.5 and a["yield"] == 3.75 and b["pending"] and b["error"] and b["yield"] is None and b["sym"] == "JEPI"
+    _t.sleep(0.7)                                   # 뒤에서 마저 받아 둔다
+    assert dv.info("us", "JEPI")["freq"] == 12 and not dv.info("us", "JEPI").get("pending")

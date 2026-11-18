@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.1539";
+const UI_VERSION = "261118.1544";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -69,8 +69,43 @@ async function api(method, url, body, isForm) {
     if (data.code === "locked" || data.code === "setup") { lock.show(data.code === "setup" ? "setup" : "unlock"); throw new Locked(data.error || "잠겨 있어요"); }
     throw new NeedConnect(data.error || "접속 토큰이 맞지 않아요");
   }
+  if (res.status === 404 && data.error === "없는 주소예요") {
+    // 화면은 새 버전인데 노트북 서버가 아직 예전 버전일 때: 서버가 이 기능의 주소를 모른다
+    const err = new Error("노트북 서버가 아직 새 버전을 받지 못했어요"); err.code = "old_server"; throw err;
+  }
   if (!res.ok) { const err = new Error(data.error || `요청이 실패했어요 (${res.status})`); err.wait = data.wait || 0; err.code = data.code || ""; throw err; }
   return data;
+}
+// 서버가 화면보다 예전 버전일 때 보여 주는 안내. 서버가 새 버전이 되면 알아서 다시 그린다(retry).
+let oldSrvT = 0;
+function oldServerBox(el, retry) {
+  if (!el) return;
+  clearInterval(oldSrvT);
+  el.innerHTML = `<section class="card old-srv"><h2>노트북 서버를 업데이트하고 있어요</h2>
+    <div class="tiny" id="osMsg">이 화면은 새 버전인데, 노트북의 가계부S가 아직 예전 버전이에요. 노트북은 5분마다 새 버전을 확인해 스스로 받아요. 받으면 이 화면이 자동으로 열려요.</div>
+    <div class="ai-status"><span class="ai-dot"></span><span id="osState">서버 버전을 확인하는 중</span></div>
+    <button type="button" class="btn dark wide" id="osNow">지금 바로 업데이트</button></section>`;
+  let first = "", busy = false;
+  const done = () => { clearInterval(oldSrvT); retry(); };
+  const tick = async () => {
+    if (!el.isConnected || !el.querySelector("#osState")) return clearInterval(oldSrvT);
+    try {
+      const p = await GET("/api/ping");
+      if (!first) first = p.build || p.version;
+      else if ((p.build || p.version) !== first) return done();
+      if (!busy) el.querySelector("#osState").textContent = `지금 서버 v${p.version} · 새 버전을 기다리는 중`;
+    } catch (e) { if (el.querySelector("#osState")) el.querySelector("#osState").textContent = "서버가 다시 시작하는 중"; }
+  };
+  tick(); oldSrvT = setInterval(tick, 4000);
+  el.querySelector("#osNow").onclick = async (e) => {
+    const b = e.currentTarget; b.disabled = true; busy = true;
+    el.querySelector("#osState").textContent = "새 버전을 받는 중";
+    try {
+      const r = await api("POST", "/api/update/check", { apply: true });
+      if (r.applied) el.querySelector("#osState").textContent = "받았어요. 서버가 다시 시작하는 중(10초쯤)";
+      else { busy = false; b.disabled = false; el.querySelector("#osMsg").textContent = r.msg || "지금은 업데이트할 수 없어요. 잠시 뒤 다시 눌러 주세요."; }
+    } catch (err) { busy = false; b.disabled = false; el.querySelector("#osMsg").textContent = err.message; }
+  };
 }
 const GET = (u) => api("GET", u);
 
@@ -561,6 +596,7 @@ async function route() {
   catch (e) {
     if (e instanceof Locked) { view.innerHTML = ""; return; }
     if (e instanceof NeedConnect && h.name !== "connect") { location.hash = "#connect"; return; }
+    if (e.code === "old_server") { view.innerHTML = `<div id="osHost"></div>`; return oldServerBox($("#osHost"), route); }
     view.innerHTML = `<div class="notice warn">${esc(e.message)}</div><button class="btn wide" data-act="retry">다시 시도</button>`;
   }
   if (page.refresh) timer = setInterval(() => { if (current === page && !document.hidden && !sheet.open) page.refresh(h).catch(() => {}); }, page.every || 3000);
@@ -2141,6 +2177,7 @@ pages.invest = {
       return await this.dvAi();
     } catch (e) {
       if (e instanceof Locked || e instanceof NeedConnect) throw e;
+      if (e.code === "old_server") return oldServerBox($("#dvBody"), () => this.dvTab());
       if ($("#dvBody")) $("#dvBody").innerHTML = `<div class="notice warn">${esc(e.message)}</div><button type="button" class="btn wide" id="dvRetry">다시 시도</button>`;
       if ($("#dvRetry")) $("#dvRetry").onclick = () => this.dvTab();
     }

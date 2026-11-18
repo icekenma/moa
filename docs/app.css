@@ -1907,3 +1907,4 @@ html.dark-theme .dv-plan,html.dark-theme .dv-pa button{border-color:var(--glass-
 .dv-pl-a{display:flex;gap:9px;font-size:10px}
 @media (prefers-reduced-motion:reduce){#view.enter .dv-bar>span{animation:none}}
 .dv-strip-u{font-size:8.5px;font-weight:700;color:var(--ink3);text-align:right;margin:2px 0 -4px}
+.old-srv{display:flex;flex-direction:column;gap:9px}

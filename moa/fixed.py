@@ -229,8 +229,8 @@ class Fixed:
                   "ON CONFLICT(rec_id,due_date) DO UPDATE SET tx_id=excluded.tx_id, status=excluded.status, amount=excluded.amount",
                   (rid, due.isoformat(), tid, status, amount, datetime.now().isoformat(timespec="seconds")))
 
-    def _notify(self, today):
-        if datetime.now().hour < 8:
+    def _notify(self, today, hour=None):
+        if (datetime.now().hour if hour is None else hour) < 8:  # 아침 8시 전에는 알림을 보내지 않는다
             return
         for r in self.db.q("SELECT * FROM recurring WHERE active=1 AND notify_days>=0"):
             for due in self.dues(r, today, today + timedelta(days=int(r["notify_days"]))):

@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.0850";
+const UI_VERSION = "261118.0909";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1426,7 +1426,7 @@ pages.invest = {
         ${a && a.total != null ? `<div class="ih-lbl">내 투자 · 키움 ${esc(a.server || "")}</div>
           <div class="ih-total">${won(a.total)}<small>원</small></div>
           <div class="ih-day ${tone(d.day_pnl)}">오늘 ${signed(d.day_pnl)}원 (${pct(d.day_pct, 2)})</div>
-          <div class="ih-sub"><span>평가손익 <b class="${tone(a.pnl)}">${signed(a.pnl)}</b> (${pct(a.pnl_pct, 2)})</span><span>주문 가능 <b>${won(a.orderable)}</b></span>${us ? `<span>달러 <b>${usd(a.us.usd)}</b></span>` : ""}</div>`
+          <div class="ih-sub"><span>평가손익 <b class="${tone(a.pnl)}">${signed(a.pnl)}</b> (${pct(a.pnl_pct, 2)})</span><span class="ih-cash" role="button" tabindex="0" data-cashwhy>주문 가능 <b>${won(a.orderable)}</b> ›</span>${us ? `<span>달러 <b>${usd(a.us.usd)}</b></span>` : ""}</div>`
         : `<div class="ih-lbl">내 투자</div><div class="ih-empty">키움 계좌를 연결하면 총자산·오늘 손익·보유 종목이 여기 보여요 <a href="#settings/accounts">연결하기</a></div>`}
       </section>
       <div class="ss-row">${sessionChip("kr")}${sessionChip("us")}<a href="#invest/market" class="tiny">장 시간 ›</a></div>
@@ -3115,6 +3115,24 @@ document.addEventListener("click", (e) => {
 
 // ---------- 목록 → 상세: 어떤 줄이든 누르면 이어서 볼 수 있게 ----------
 const DT = [];
+// '주문 가능'이 왜 그 금액인지: 총자산이 어디에 들어가 있는지 풀어서 보여 준다
+function cashDetail(a) {
+  const c = a.cash_detail || {}, u = a.us || {}, W = (n) => (n == null ? null : won(n) + "원");
+  const krEval = Math.max(0, (a.eval || 0) - (u.eval || 0)), tied = Math.max(0, (a.cash || 0) - (a.orderable || 0));
+  const why = [];
+  if (krEval + (u.eval || 0) > 0) why.push(`주식에 ${won(krEval + (u.eval || 0))}원이 들어가 있어요.`);
+  if (u.usd_krw) why.push(`달러로 ${usd(u.usd)}(약 ${won(u.usd_krw)}원)가 있어요. 달러는 국내 주식 주문 가능 금액에 들어가지 않아요.`);
+  if (c.margin) why.push(`매수 주문의 증거금으로 ${won(c.margin)}원이 묶여 있어요(아직 체결 안 된 주문이나 결제 전인 매수). 미체결 주문이면 주문 탭에서 취소하면 풀려요.`);
+  else if (tied > 0) why.push(`예수금 중 ${won(tied)}원은 지금 주문에 쓸 수 없어요(결제 전 금액·미수 등).`);
+  if (c.unpaid) why.push(`미수금 ${won(c.unpaid)}원이 있어요.`);
+  if (!why.length) why.push("예수금이 거의 그대로 주문 가능 금액이에요. 다른 계좌에 돈이 있다면, 설정 → 계좌 연결에 넣은 키의 계좌가 맞는지 확인해 보세요.");
+  return { title: "주문 가능 금액", head: `<b style="font-size:22px">${won(a.orderable)}원</b><div class="tiny">키움이 알려 준 '국내 주식을 지금 바로 살 수 있는 원화'예요${a.acct_no ? ` · 계좌 ${esc(String(a.acct_no).slice(0, 4))}••••` : ""}</div>`,
+    rows: [["총자산", W(a.total)], ["국내 주식 평가", W(krEval)], u.eval ? ["미국 주식 평가", W(u.eval)] : null, ["원화 예수금", W(a.cash)],
+      u.usd ? ["달러 예수금", `${usd(u.usd)}${u.usd_krw ? ` (약 ${won(u.usd_krw)}원)` : ""}`] : null, u.usd_orderable != null && u.usd ? ["달러 주문 가능", usd(u.usd_orderable)] : null,
+      c.margin ? ["매수 주문에 묶인 돈(증거금)", W(c.margin)] : null, c.d2 != null ? ["이틀 뒤 예수금(추정)", W(c.d2)] : null,
+      c.withdrawable != null ? ["출금 가능", W(c.withdrawable)] : null, ["주문 가능(원화)", W(a.orderable), "up"]],
+    note: why.join("\n"), links: [["주문·미체결 보기", "#invest/trade"], ["계좌 연결 확인", "#settings/accounts"]] };
+}
 function dt(o) { DT.push(o); if (DT.length > 600) DT.splice(0, 200); return `data-dt="${DT.indexOf(o)}"`; }
 function detailSheet(o) {
   if (o.run) return o.run();
@@ -3125,6 +3143,12 @@ function detailSheet(o) {
     <div class="dt-links">${(o.links || []).filter(Boolean).map(([l, h, cls]) => `<a class="btn ${cls || ""}" href="${h}" data-close>${esc(l)}</a>`).join("")}</div>`,
   (box) => box.addEventListener("click", (e) => { if (e.target.closest("[data-close]")) closeSheet(); }));
 }
+document.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.matches && e.target.matches('[data-cashwhy]')) e.target.click(); });
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("[data-cashwhy]")) return;
+  const h = memo.get("ihome");
+  if (h && h.account) detailSheet(cashDetail(h.account));
+});
 document.addEventListener("click", (e) => {
   const r = e.target.closest("[data-dt]");
   if (!r || e.target.closest("button:not([data-dt]), a:not([data-dt]), .switch, input")) return;

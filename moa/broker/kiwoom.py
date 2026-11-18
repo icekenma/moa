@@ -430,6 +430,10 @@ class KiwoomClient:
             "eval": num(top.get("tot_evlt_amt")), "buy": num(top.get("tot_pur_amt")),
             "pnl": snum(top.get("tot_evlt_pl")), "pnl_pct": snum(top.get("tot_prft_rt")),
             "cash": cash, "cash_d2": num(dep.get("d2_entra")), "orderable": num(dep.get("ord_alow_amt")),
+            # 주문 가능 금액이 왜 그 값인지 풀어 볼 수 있게(예수금 중 주문·미수에 묶인 돈, 결제 전 금액 등)
+            "cash_detail": {"margin": num(dep.get("profa_ch")), "d1": num(dep.get("d1_entra")), "d2": num(dep.get("d2_entra")),
+                            "withdrawable": num(dep.get("pymn_alow_amt")), "ord100": num(dep.get("100stk_ord_alow_amt")),
+                            "unpaid": num(dep.get("ch_uncla")), "us_krw_hold": num(dep.get("fc_stk_krw_repl_set_amt"))},
             "holdings": items,
         }
 

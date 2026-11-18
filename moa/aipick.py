@@ -299,16 +299,10 @@ class AIPick:
             idx = [{k: i.get(k) for k in ("name", "price", "change_pct")} for i in idx]
         except Exception:
             idx = []
-        cash = None
-        try:
-            snap = rt.account.snapshot() if rt.account.configured() else None
-            if snap:
-                cash = snap.get("orderable") if mkt == "kr" else (snap.get("us") or {}).get("usd")
-        except Exception:
-            pass
+        cash, acct = self._cash(mkt)
         data = {"시장": "국내(KRX)" if mkt == "kr" else "미국", "기준시각(한국)": ss["kst"], "현지시각": ss["local"],
                 "정규장_진행중": ss["open"], "정규장_남은분": ss["left_min"], "정규장_마감(한국시간)": ss["close_kst"],
-                "지수": idx, "주문가능금액": cash, "통화": "원" if mkt == "kr" else "달러",
+                "지수": idx, "주문가능금액": cash, "통화": "원" if mkt == "kr" else "달러", "계좌(참고)": acct,
                 "후보_상세(오늘 흐름)": deep, "실시간 순위": rank_dump}
         ask = (f"지금({ss['kst']} 한국시간) {'국내' if mkt == 'kr' else '미국'} 시장에서 바로 매수해 오늘 안에 수익으로 끝낼 "
                "확률이 가장 높은 종목을 골라 줘. 후보_상세를 중심으로 판단하고, 필요하면 오늘 뉴스·공시를 확인해.")
@@ -323,6 +317,23 @@ class AIPick:
         if not ss["open"]:
             ask += " (지금은 정규장이 아니야. 다음 정규장 시작 직후 기준으로 판단하고, 그 점을 첫 줄에 밝혀.)"
         return f"AI 종목 추천({'국내' if mkt == 'kr' else '미국'})", ask, data
+
+    def _cash(self, mkt):
+        """주문 가능 금액과, 그 값이 어디서 나왔는지 AI가 오해하지 않게 붙이는 계좌 요약."""
+        try:
+            snap = self.rt.account.snapshot() if self.rt.account.configured() else None
+        except Exception:
+            snap = None
+        if not snap or snap.get("total") is None:
+            return None, None
+        us = snap.get("us") or {}
+        cash = snap.get("orderable") if mkt == "kr" else us.get("usd")
+        cd = snap.get("cash_detail") or {}
+        acct = {"총자산(원)": snap.get("total"), "주식 평가(원)": snap.get("eval"), "원화 예수금": snap.get("cash"),
+                "원화 주문가능": snap.get("orderable"), "주문·미수에 묶인 증거금(원)": cd.get("margin"),
+                "달러 예수금": us.get("usd"), "달러 주문가능": us.get("usd_orderable"),
+                "설명": "주문가능금액은 그 시장 통화로 지금 바로 살 수 있는 돈이야. 총자산보다 훨씬 작으면 돈이 주식·다른 통화·미체결 주문에 들어가 있는 것이니, 살 수 없다고 단정하지 말고 비중만 그 금액에 맞춰."}
+        return cash, {k: v for k, v in acct.items() if v is not None}
 
     # ---------- 중기(1주·1달) 추천 자료 ----------
     def index_state(self, mkt, sym=""):
@@ -397,17 +408,11 @@ class AIPick:
             idx = [{k: i.get(k) for k in ("name", "price", "change_pct")} for i in idx]
         except Exception:
             idx = []
-        cash = None
-        try:
-            snap = rt.account.snapshot() if rt.account.configured() else None
-            if snap:
-                cash = snap.get("orderable") if mkt == "kr" else (snap.get("us") or {}).get("usd")
-        except Exception:
-            pass
+        cash, acct = self._cash(mkt)
         where = "국내" if mkt == "kr" else "미국"
         data = {"시장": "국내(KRX)" if mkt == "kr" else "미국", "기준시각(한국)": ss["kst"], "현지시각": ss["local"],
                 "보유 기간": f"약 {H['days']}거래일({H['label']})", "정규장_진행중": ss["open"], "지수": idx, "지수_추세(일봉)": ix,
-                "주문가능금액": cash, "통화": "원" if mkt == "kr" else "달러",
+                "주문가능금액": cash, "통화": "원" if mkt == "kr" else "달러", "계좌(참고)": acct,
                 "후보_상세(일봉 흐름)": deep, "실시간 순위": rank_dump}
         ask = (f"지금({ss['kst']} 한국시간) {where} 시장에서 매수해 앞으로 약 {H['days']}거래일({H['label']}) 들고 갈 종목을 골라 줘. "
                f"먼저 앞으로 {H['label']} 안에 주가를 움직일 재료(정책·예산·실적·수주·일정이 정해진 이벤트·수급)를 찾고, 그 수혜 종목을 골라. "

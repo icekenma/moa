@@ -1718,3 +1718,5 @@ html.dark-theme .lr-ver>div{border-color:var(--glass-b)}
 .pk-path small{font-size:9px;color:var(--ink3);font-weight:700}
 .pk-path b{font-size:12.5px;font-weight:900}
 html.dark-theme .pk-path span{background:rgba(255,255,255,.06)}
+.ih-cash{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
+.ih-cash:focus-visible{outline:2px solid #fff;outline-offset:2px;border-radius:4px}

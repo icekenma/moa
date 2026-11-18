@@ -1065,7 +1065,9 @@ def test_fixed_recurring_match_post_absorb_and_suggest(rt):
     # 결제 전 알림(ntfy)
     sent = []
     rt.notify = lambda m: sent.append(m)
-    F._notify(date(2026, 12, 9))
+    F._notify(date(2026, 12, 9), hour=7)
+    assert sent == []                               # 아침 8시 전에는 조용히
+    F._notify(date(2026, 12, 9), hour=9)            # 테스트를 도는 시각과 무관하게
     assert any("넷플릭스" in m and "내일" in m for m in sent)
 
 
@@ -1779,3 +1781,16 @@ def test_ai_job_sends_heartbeat_while_quiet(rt, monkeypatch):
     gate.set()
     rest = [json.loads(x) for x in it]
     assert rest[-1] == {"t": "done"}
+
+
+def test_ai_context_explains_small_orderable_cash(rt, monkeypatch):
+    """주문 가능 금액이 총자산보다 훨씬 작을 때, AI가 '살 수 없다'고 오해하지 않게 계좌 요약을 함께 준다."""
+    monkeypatch.setattr(rt.account, "configured", lambda: True)
+    monkeypatch.setattr(rt.account, "snapshot", lambda force=False: {
+        "total": 205000, "eval": 120000, "cash": 60000, "orderable": 8139, "cash_detail": {"margin": 51861},
+        "us": {"usd": 18.5, "usd_orderable": 18.5, "usd_krw": 25000}})
+    cash, acct = rt.aipick._cash("kr")
+    assert cash == 8139 and acct["총자산(원)"] == 205000 and acct["주문·미수에 묶인 증거금(원)"] == 51861 and acct["달러 예수금"] == 18.5
+    assert rt.aipick._cash("us")[0] == 18.5
+    monkeypatch.setattr(rt.account, "configured", lambda: False)
+    assert rt.aipick._cash("kr") == (None, None)

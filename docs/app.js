@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.1621";
+const UI_VERSION = "261118.1715";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2569,23 +2569,20 @@ pages.invest = {
         <span class="end"><b>${i.yield == null ? "-" : i.yield + "%"}</b><span class="tiny ${tone(i.growth5 ?? i.growth3)}">${(i.growth5 ?? i.growth3) == null ? "" : "성장 " + pct(i.growth5 ?? i.growth3, 1)}</span></span></button>`).join("") || `<div class="empty">조건에 맞는 종목이 없어요</div>`}</div></section>
       <section class="card">
         <h2>다른 종목 넣기</h2>
-        <form id="dvAddF" class="dv-addf" novalidate>${seg("배당시장", [["us", "미국"], ["kr", "국내"]], D.addM || "us", "on-card")}
-          <span class="dv-unit"><input id="dvAddSym" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="12" placeholder="${(D.addM || "us") === "us" ? "티커 (예: MSFT)" : "종목 코드 6자리"}"></span>
-          <button type="submit" class="btn dark">넣기</button></form>
-        <div class="tiny">넣으면 최근 10년 배당 내역을 받아 배당률·성장률·지급월을 계산해요.</div>
+        ${seg("배당시장", [["us", "미국"], ["kr", "국내"]], D.addM || "us", "on-card")}
+        <div id="dvAddPick"></div>
+        <div class="tiny">이름으로 찾아 누르면 바로 넣어요. 최근 10년 배당 내역을 받아 배당률·성장률·지급월을 계산해요.</div>
       </section>
       <div class="tiny" style="padding:0 3px">배당률은 최근 1년 실제 지급액 ÷ 현재가(세전)예요. 하루에 한 번 갱신하고, 종목 설명은 참고용이에요. 배당률이 유난히 높은 종목은 주가가 떨어졌거나 배당이 깎일 위험이 있는 경우가 많아요.</div>`;
     bindSeg(el, "배당정렬", (v) => { D.sort = v; this.dvList(); });
-    bindSeg(el, "배당시장", (v) => { D.addM = v; $("#dvAddSym").placeholder = v === "us" ? "티커 (예: MSFT)" : "종목 코드 6자리"; });
-    $("#dvAddF").onsubmit = async (e) => {
-      e.preventDefault();
-      const sym = $("#dvAddSym").value.trim();
-      if (!sym) return toast("종목을 넣어 주세요", true);
+    const addPk = stockPick($("#dvAddPick"), { mkt: D.addM || "us", onChange: async (it) => {
+      if (!it.length) return;
       let i;
-      try { i = await run(() => api("POST", "/api/div/custom", { mkt: D.addM || "us", sym })); } catch (err) { return; }
+      try { i = await run(() => api("POST", "/api/div/custom", { mkt: D.addM || "us", sym: it[0].sym, name: it[0].name === it[0].sym ? "" : it[0].name })); } catch (err) { return addPk.setMkt(D.addM || "us"); }
       D.uni = null; await this.dvList();
-      if (i.error) toast(`${i.sym}: ${i.error}`, true); else this.dvDetail(i.mkt, i.sym);
-    };
+      if (i.error) toast(`${it[0].name}: ${i.error}`, true); else this.dvDetail(i.mkt, i.sym);
+    } });
+    bindSeg(el, "배당시장", (v) => { D.addM = v; addPk.setMkt(v); });
     el.onclick = async (e) => {
       const f = e.target.closest("[data-f]");
       if (f) { D.f = f.dataset.f; return this.dvList(); }
@@ -2902,17 +2899,21 @@ pages.invest = {
         <div class="fields">
           <label class="field">기간(영업일)<select id="swDays">${[20, 40, 60, 90].map((n) => `<option value="${n}" ${n == F.days ? "selected" : ""}>${n}일</option>`).join("")}</select></label>
           <label class="field">조건 수<input id="swN" value="${GRID_N[F.strategy] || ""}개" disabled></label></div>
-        <label class="field">종목(6자리, 쉼표로 · 최대 12개)<input id="swCodes" value="${esc(F.codes)}" inputmode="numeric"></label>
+        <div class="field">종목(최대 12개)<div id="swPick"></div></div>
         <button class="btn dark wide" id="swGo">훑기 시작</button>
         <div class="tiny">처음엔 vectorbt 설치와 분봉 받기로 몇 분 걸려요. 받은 분봉은 저장해 두고 다음부터 다시 써요.</div>
       </section>
       <div id="swOut" style="display:flex;flex-direction:column;gap:8.5px"></div>`;
-    const keep = () => { F.strategy = $("#swStrat").value; F.days = num($("#swDays").value); F.codes = $("#swCodes").value; };
+    const keep = () => { F.strategy = $("#swStrat").value; F.days = num($("#swDays").value); };
+    F.names = F.names || {};
+    stockPick($("#swPick"), { mkt: "kr", multi: true, max: 12, value: F.codes.split(/[,\s]+/).filter(Boolean).slice(0, 12).map((x) => ({ sym: x, name: F.names[x] || (d.names || {})[x] || x })),
+      onChange: (it) => { F.codes = it.map((x) => x.sym).join(", "); it.forEach((x) => (F.names[x.sym] = x.name)); } });
     $("#swStrat").onchange = () => { keep(); $("#swN").value = (GRID_N[F.strategy] || "") + "개"; };
     bindSeg(view, "분봉", (v) => { keep(); F.source = v; });
     $("#swGo").onclick = async () => {
       keep();
       const codes = F.codes.split(/[,\s]+/).map((x) => x.replace(/\D/g, "")).filter((x) => x.length === 6);
+      if (!codes.length) return toast("훑어볼 종목을 이름으로 찾아 넣어 주세요", true);
       const r = await run(() => api("POST", "/api/sweep", { strategy: F.strategy, source: F.source, days: F.days, codes }));
       this.swRender(r);
     };
@@ -3011,13 +3012,15 @@ pages.invest = {
           <div class="small muted">한 번 틀렸을 때 잃을 돈을 먼저 정하고 손절폭에 맞춰 수량을 계산해요. 목표수익이 비용을 충분히 넘지 않으면 신호가 나도 사지 않아요.</div>
           <div class="fields">${inputs("risk", c.risk)}</div></section>
         <section class="card"><h2>감시 종목</h2>
-          <label class="field">종목코드(쉼표나 줄바꿈)<textarea id="wl" rows="5" inputmode="numeric">${esc(c.watchlist.join("\n"))}</textarea></label>
-          <div class="tiny">${c.watchlist.map((x) => esc(d.names[x] || x)).join(", ")} · 10개 안팎을 권해요</div></section>
+          <div id="wlPick"></div>
+          <div class="tiny">이름으로 찾아 넣고, ×로 빼요. 10개 안팎을 권해요.</div></section>
         <button class="btn dark wide" id="saveRules">규칙 저장</button>`;
+      stockPick($("#wlPick"), { mkt: "kr", multi: true, max: 30, value: c.watchlist.map((x) => ({ sym: x, name: d.names[x] || x })),
+        onChange: (it) => { c.watchlist = it.map((x) => x.sym); it.forEach((x) => (d.names[x.sym] = x.name)); } });
       bindSeg(view, "전략", (v) => { collect(); strat = v; draw(); });
       $("#saveRules").onclick = async () => {
         collect();
-        await run(() => api("PUT", "/api/scalp/config", { strategy: { ...c.strategy, name: strat }, exit: c.exit, risk: c.risk, watchlist: $("#wl").value.split(/[\s,]+/).filter(Boolean) }), "규칙을 저장했어요");
+        await run(() => api("PUT", "/api/scalp/config", { strategy: { ...c.strategy, name: strat }, exit: c.exit, risk: c.risk, watchlist: c.watchlist }), "규칙을 저장했어요");
         location.hash = "#invest/scalp";
       };
     };
@@ -4046,7 +4049,7 @@ function orderSheet(o) {
     const mode = a ? a.mode_label : null, realOrder = mode === "키움 실전", isKiwoom = mode && mode.startsWith("키움");
     const gap = demo && S.q && S.real && Math.abs(S.real.price - S.q.price) / S.real.price > 0.005;
     const usBlocked = US && a && !a.error && !isKiwoom;
-    const qtxt = !S.q ? (US ? "기호(예: AAPL)를 넣고 현재가를 확인하세요" : "종목코드를 넣고 현재가를 확인하세요")
+    const qtxt = !S.q ? "종목을 고르면 현재가를 보여 드려요"
       : US ? `${esc(S.q.name)}${S.q.exchange ? " · " + esc(S.q.exchange) : ""} 현재가 <b>${usd(S.q.price)}</b>${S.q.fx ? ` · 약 ${won(S.q.price * S.q.fx)}원` : ""}${S.q.live ? "" : ` <span class="tag">지연 시세</span>`}`
       : `${esc(S.q.name)} 주문 기준가 <b style="color:${gap ? "var(--up)" : "var(--ink)"}">${won(S.q.price)}원</b>${gap ? " (가상 시세)" : ""}`;
     const Q = US ? S.q : (S.real && !demo ? { ...S.q, ...S.real, price: (S.q || S.real).price } : S.q), nm = (Q && Q.name) || S.name || S.code;
@@ -4180,22 +4183,111 @@ function orderSheet(o) {
 }
 
 // ---------- 적립 플랜 시트 ----------
+// 종목 고르기: 코드를 외워 넣는 대신 이름으로 찾아 고른다. 빈 칸에서는 관심종목·적립 중인 종목을 바로 보여 준다.
+// host: 빈 요소. opts: { mkt, multi, value: [{sym, name}], max, onChange(items) }
+function stockPick(host, opts = {}) {
+  const S = { mkt: opts.mkt === "us" ? "us" : "kr", multi: !!opts.multi, max: opts.max || 30, seq: 0, t: 0, sug: null,
+    items: (opts.value || []).filter((x) => x && x.sym).map((x) => ({ sym: String(x.sym), name: x.name || String(x.sym) })) };
+  const US = () => S.mkt === "us";
+  host.classList.add("sp");
+  host.innerHTML = `<div class="sp-chips"></div>
+    <label class="op-search sp-q"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input type="search" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" aria-label="종목 이름으로 찾기"></label>
+    <div class="sp-res" aria-live="polite"></div>`;
+  const chips = $(".sp-chips", host), bar = $(".sp-q", host), q = $("input", bar), res = $(".sp-res", host);
+  const fire = () => opts.onChange && opts.onChange(S.items.slice());
+  const chipDraw = () => {
+    chips.innerHTML = S.multi ? S.items.map((x, i) => `<span class="sp-chip"><b>${esc(x.name)}</b>${x.name !== x.sym ? `<small>${esc(x.sym)}</small>` : ""}<button type="button" data-sprm="${i}" aria-label="${esc(x.name)} 빼기">×</button></span>`).join("")
+      : S.items.length ? `<div class="sp-one"><span><b>${esc(S.items[0].name)}</b>${S.items[0].name !== S.items[0].sym ? `<small>${esc(S.items[0].sym)}</small>` : ""}</span><button type="button" class="btn sm soft" data-spchg="1">바꾸기</button></div>` : "";
+    bar.hidden = !S.multi && S.items.length > 0;
+    q.placeholder = S.multi && S.items.length ? "이름으로 찾아 더 넣기" : US() ? "회사 이름이나 티커로 찾기 (apple, MSFT)" : "종목 이름으로 찾기 (삼성전자, TIGER)";
+  };
+  const rows = (list, head) => (list.length ? `${head ? `<div class="op-h">${esc(head)}</div>` : ""}<div class="list">${list.map((x) => { const has = S.items.some((y) => y.sym === x.sym);
+    return `<button type="button" class="item op-row" data-spk="${esc(x.sym)}" data-name="${esc(x.name)}" ${has ? "disabled" : ""}><span class="main"><b>${esc(x.name)}</b><span class="sub">${[x.name !== x.sym ? x.sym : "", x.exchange || x.tag || ""].filter(Boolean).map(esc).join(" · ")}</span></span><span class="end tiny">${has ? "담김" : ""}</span></button>`; }).join("")}</div>` : "");
+  // 코드·티커를 아는 사람은 그대로 넣을 수도 있다(검색에 안 나올 때)
+  const direct = (v, found) => (US() ? /^[A-Za-z][A-Za-z.-]{0,6}$/.test(v) : /^\d{6}$/.test(v)) && !found.some((x) => x.sym === v.toUpperCase()) ? [{ sym: v.toUpperCase(), name: v.toUpperCase(), exchange: US() ? "이 티커로 넣기" : "이 코드로 넣기" }] : [];
+  const suggest = async () => {
+    const my = S.seq;
+    if (S.sug == null) { S.sug = []; try { S.sug = (await GET(`/api/market/picks?mkt=${S.mkt}`)).picks || []; } catch (e) { /* 바로 고르기만 생략 */ } }
+    if (my === S.seq && !q.value.trim() && host.isConnected && !bar.hidden) res.innerHTML = rows(S.sug.filter((x) => !S.items.some((y) => y.sym === x.sym)).slice(0, 8), "바로 고르기");
+  };
+  const go = async () => {
+    const v = q.value.trim(), my = ++S.seq;
+    if (!v) return suggest();
+    res.innerHTML = `<div class="empty small loading">찾는 중</div>`;
+    try {
+      const r = await GET(`/api/market/search?mkt=${S.mkt}&q=${encodeURIComponent(v)}`);
+      if (my !== S.seq) return;
+      res.innerHTML = rows(r.length ? r : direct(v, r)) || `<div class="empty small">찾는 종목이 없어요. ${US() ? "영문 이름이나 티커로 넣어 보세요" : "이름 일부만 넣어도 찾아요"}</div>`;
+    } catch (e) {
+      if (e instanceof Locked) throw e;
+      if (my === S.seq) res.innerHTML = `<div class="notice warn">${esc(e.message)}</div>` + rows(direct(v, []));
+    }
+  };
+  q.addEventListener("input", () => { clearTimeout(S.t); S.t = setTimeout(go, 280); });
+  q.addEventListener("focus", () => { if (!q.value.trim()) suggest(); });
+  q.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); clearTimeout(S.t); go(); } });
+  host.addEventListener("click", (e) => {
+    let b;
+    if ((b = e.target.closest("[data-spk]"))) {
+      if (b.disabled) return;
+      if (S.multi && S.items.length >= S.max) return toast(`${S.max}개까지 넣을 수 있어요`, true);
+      const it = { sym: b.dataset.spk, name: b.dataset.name || b.dataset.spk };
+      S.items = S.multi ? [...S.items, it] : [it];
+      q.value = ""; res.innerHTML = ""; S.seq++; chipDraw(); fire();
+      if (S.multi) q.focus();
+    } else if ((b = e.target.closest("[data-sprm]"))) { S.items.splice(+b.dataset.sprm, 1); chipDraw(); fire(); }
+    else if (e.target.closest("[data-spchg]")) { S.items = []; chipDraw(); fire(); q.focus(); }
+  });
+  chipDraw();
+  // 코드만 아는 종목(예전에 코드로 저장한 것)은 이름을 받아 와 바꿔 보여 준다
+  const bare = S.items.filter((x) => x.name === x.sym && !US()).map((x) => x.sym);
+  if (bare.length) GET(`/api/market/picks?mkt=${S.mkt}&syms=${encodeURIComponent(bare.join(","))}`).then((r) => {
+    S.sug = S.sug || r.picks || [];
+    let hit = false;
+    S.items.forEach((x) => { const n = (r.names || {})[x.sym]; if (n && n !== x.sym && x.name === x.sym) { x.name = n; hit = true; } });
+    if (hit && host.isConnected) chipDraw();
+  }).catch(() => { /* 이름 표시만 생략 */ });
+  return { items: () => S.items.slice(), codes: () => S.items.map((x) => x.sym), focus: () => q.focus(),
+    setMkt(m) { S.mkt = m === "us" ? "us" : "kr"; S.sug = null; S.items = []; q.value = ""; res.innerHTML = ""; S.seq++; chipDraw(); } };
+}
 function planSheet(e, pre, after) {
   const done = after || (() => pages.invest.fill());
   openSheet(e ? "플랜 고치기" : "플랜 만들기", `
-    <div class="fields"><label class="field">종목코드<input id="pCode" maxlength="6" inputmode="numeric" value="${esc(e?.code || pre?.code || "")}" placeholder="360750"></label>
-      <label class="field">이름<input id="pName" value="${esc(e?.name || pre?.name || "")}" placeholder="비우면 자동"></label></div>
+    <div class="field">종목<div id="pPick"></div></div>
     <label class="field">매달 금액<input id="pAmt" class="r" inputmode="numeric" value="${e ? won(e.amount) : ""}" placeholder="500,000"></label>
+    <div class="tiny sp-hint" id="pHint" hidden></div>
     <div class="fields"><label class="field">매수일<select id="pDay">${Array.from({ length: 28 }, (_, i) => i + 1).map((n) => `<option value="${n}" ${(e?.day || 25) === n ? "selected" : ""}>매월 ${n}일</option>`).join("")}</select></label>
       <label class="field">목표 비중(%)<input id="pW" class="r" inputmode="decimal" value="${e?.target_weight || ""}" placeholder="선택"></label></div>
     <button class="btn dark wide" id="pSave">${e ? "고친 내용 저장" : "플랜 저장"}</button>
     ${e ? `<div class="btns"><button class="btn" id="pRun">지금 매수</button><button class="btn soft" id="pDel">지우기</button></div>` : `<div class="tiny">저장만 해요. 매수일에 자동 매수가 사요.</div>`}`, (box) => {
     moneyInput($("#pAmt", box));
+    // 고른 종목의 1주 값을 보여 준다(한 달 금액이 1주 값보다 적으면 그 달은 사지 못한다)
+    let price = 0, pseq = 0;
+    const hint = () => {
+      const h = $("#pHint", box), amt = num($("#pAmt", box).value);
+      if (!h) return;
+      h.hidden = !price;
+      if (!price) return;
+      h.classList.toggle("warn", amt > 0 && amt < price);
+      h.textContent = `1주 약 ${won(price)}원` + (!amt ? "" : amt < price ? " · 이 금액으로는 1주를 못 사 그 달은 건너뛰어요" : ` · 한 번에 약 ${Math.floor(amt / price)}주`);
+    };
+    const quote = async (it) => {
+      const my = ++pseq; price = 0; hint();
+      if (!it.length) return;
+      try { const r = await GET(`/api/market/quote/kr/${encodeURIComponent(it[0].sym)}`); if (my === pseq) { price = Number(r.price) || 0; hint(); } } catch (err) { /* 안내만 생략 */ }
+    };
+    const start = e ? [{ sym: e.code, name: e.name }] : pre && pre.code ? [{ sym: pre.code, name: pre.name || pre.code }] : [];
+    const pk = stockPick($("#pPick", box), { mkt: "kr", value: start, onChange: (it) => { quote(it); if (it.length) $("#pAmt", box).focus(); } });
+    $("#pAmt", box).addEventListener("input", hint);
+    quote(start);
     if (pre && !e) setTimeout(() => $("#pAmt", box)?.focus(), 80);
     box.onclick = async (ev) => {
       const id = ev.target.id;
       if (id === "pSave") {
-        await run(() => api("POST", "/api/dca/plans", { id: e?.id, code: $("#pCode").value, name: $("#pName").value, amount: num($("#pAmt").value), day: num($("#pDay").value), target_weight: num($("#pW").value), enabled: e ? !!e.enabled : true }), "플랜을 저장했어요");
+        const it = pk.items()[0];
+        if (!it) { toast("종목을 이름으로 찾아 골라 주세요", true); return pk.focus(); }
+        await run(() => api("POST", "/api/dca/plans", { id: e?.id, code: it.sym, name: it.name === it.sym ? "" : it.name, amount: num($("#pAmt").value), day: num($("#pDay").value), target_weight: num($("#pW").value), enabled: e ? !!e.enabled : true }), "플랜을 저장했어요");
         closeSheet(); done();
       } else if (id === "pDel") {
         if (!confirmTap(ev.target, "한 번 더 누르면 지워요")) return;

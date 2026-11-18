@@ -1966,3 +1966,27 @@ html.dark-theme .dd-ck{border-color:rgba(255,255,255,.3)}
 html.dark-theme .dd-ck[aria-checked="true"]{background:var(--n1);border-color:var(--n1)}
 html.dark-theme .dd-ck[aria-checked="true"]::after{border-color:#14101c}
 html.dark-theme .dd-us{background:rgba(255,255,255,.05)}
+
+/* ---------- v4.36 이름으로 종목 고르기 ---------- */
+.sp{display:flex;flex-direction:column;gap:7px;margin-top:5px;font-weight:400}
+.sp-chips{display:flex;flex-wrap:wrap;gap:6px}
+.sp-chips:empty{display:none}
+.sp-chip{display:inline-flex;align-items:center;gap:5px;min-height:32px;padding:0 4px 0 11px;border-radius:16px;background:color-mix(in srgb,var(--ink) 7%,transparent);border:1px solid var(--line2);max-width:100%}
+.sp-chip b{font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
+.sp-chip small{font-size:9.5px;color:var(--ink3);font-variant-numeric:tabular-nums}
+.sp-chip button{flex:0 0 auto;width:26px;height:26px;border:0;border-radius:13px;background:none;color:var(--ink3);font-size:16px;line-height:1;cursor:pointer}
+.sp-one{display:flex;align-items:center;gap:10px;width:100%;min-height:46px;padding:6px 8px 6px 13px;border-radius:14px;border:1.5px solid color-mix(in srgb,var(--sec) 45%,var(--line2));background:color-mix(in srgb,var(--sec) 7%,transparent)}
+.sp-one span{flex:1;min-width:0;display:flex;flex-direction:column}
+.sp-one b{font-size:14px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
+.sp-one small{font-size:10px;color:var(--ink3);font-variant-numeric:tabular-nums}
+.sp-q[hidden]{display:none}
+.sp-res:empty{display:none}
+.sp-res{display:flex;flex-direction:column;gap:4px}
+.sp-res .list{border-radius:14px;background:color-mix(in srgb,var(--ink) 4%,transparent);padding:0 11px;max-height:264px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.sp-res .op-row:first-child{border-top:0}
+.sp-res .op-row[disabled]{opacity:.5}
+.sp-hint{margin-top:-4px}
+.sp-hint.warn{color:var(--coral-i,#B3261E);font-weight:700}
+html.dark-theme .sp-chip{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.14)}
+html.dark-theme .sp-one{background:rgba(var(--n-rgb),.10);border-color:rgba(var(--n-rgb),.45)}
+html.dark-theme .sp-hint.warn{color:#FFB4A8}

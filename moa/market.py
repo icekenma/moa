@@ -424,23 +424,79 @@ class Market:
         except Exception:
             return ""
 
+    def kr_local(self):
+        """종목 목록(키움)을 못 받았을 때도 이름으로 찾을 수 있게, 앱이 이미 아는 국내 종목 이름을 모은다."""
+        out = {}
+        try:
+            from .broker.demo import NAMES
+            out.update({c: v[0] for c, v in NAMES.items()})
+        except Exception:
+            pass
+        try:
+            from .dividend import UNIVERSE
+            out.update({u[1]: u[2] for u in UNIVERSE if u[0] == "kr"})
+            out.update({c["sym"]: c["name"] for c in self.rt.dividend.custom() if c["mkt"] == "kr" and c.get("name")})
+        except Exception:
+            pass
+        try:
+            out.update({p["code"]: p["name"] for p in self.rt.dca.plans() if p.get("name") and p["name"] != p["code"]})
+        except Exception:
+            pass
+        return out
+
+    def kr_label(self, code):
+        """화면에 보여 줄 종목 이름(없으면 빈 글자)."""
+        return self.kr_name(code) or self.kr_local().get(code, "")
+
     def kr_search(self, q):
         q = q.strip()
         m = self.kr_master(wait=True)
-        if not m:  # 키움 연결 전: 공개 검색으로 국내 종목 찾기
-            out = []
-            for x in self._yh_search_raw(q):
+        if not m:  # 키움 연결 전: 앱이 아는 이름 + 공개 검색으로 국내 종목 찾기
+            ql, out, seen = q.lower(), [], set()
+            for c, n in self.kr_local().items():
+                if ql in n.lower() or c.startswith(q):
+                    out.append({"sym": c, "name": n, "exchange": ""})
+                    seen.add(c)
+            out.sort(key=lambda x: (not x["name"].lower().startswith(ql), len(x["name"])))
+            try:
+                raw = self._yh_search_raw(q)
+            except Exception:
+                if out:
+                    return out[:15]
+                raise
+            for x in raw:
                 sym = x.get("symbol") or ""
-                if sym.endswith((".KS", ".KQ")) and sym[:6].isdigit():
+                if sym.endswith((".KS", ".KQ")) and sym[:6].isdigit() and sym[:6] not in seen:
+                    seen.add(sym[:6])
                     out.append({"sym": sym[:6], "name": x.get("shortname") or x.get("longname") or sym[:6],
                                 "exchange": "코스닥" if sym.endswith(".KQ") else "코스피"})
-            return out[:10]
+            return out[:15]
         if q.isdigit() and len(q) == 6:
             return [{"sym": q, "name": (m.get(q) or {}).get("name") or q, "exchange": (m.get(q) or {}).get("market", "")}]
         ql = q.lower()
         hits = [(c, v) for c, v in m.items() if ql in v["name"].lower() or c.startswith(q)]
         hits.sort(key=lambda cv: (not cv[1]["name"].lower().startswith(ql), len(cv[1]["name"])))
         return [{"sym": c, "name": v["name"], "exchange": v["market"]} for c, v in hits[:15]]
+
+    def picks(self, mkt, syms=()):
+        """종목 고르기 칸의 바로 고르기 목록(관심종목 + 적립 중인 종목)과, 코드만 아는 종목들의 이름."""
+        us = mkt == "us"
+        label = (lambda c: c) if us else (lambda c: self.kr_label(c) or c)
+        out, seen = [], set()
+
+        def add(sym, tag):
+            if sym and sym not in seen:
+                seen.add(sym)
+                out.append({"sym": sym, "name": label(sym), "tag": tag})
+        for sym in (self.watch().get(mkt) or []):
+            add(sym, "관심")
+        if not us:
+            try:
+                for p in self.rt.dca.plans():
+                    add(p["code"], "적립 중")
+            except Exception:
+                pass
+        return {"picks": out[:12], "names": {c: label(c) for c in list(syms)[:40]}}
 
     # ---------- 화면용 ----------
     def overview(self, mkt):

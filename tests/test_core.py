@@ -2300,6 +2300,32 @@ def test_dca_links_with_dividend_and_ai(rt, monkeypatch):
         rt.ai.context("dca", {})
 
 
+def test_stock_search_by_name_without_master_and_quick_picks(rt, monkeypatch):
+    """코드를 외우지 않아도 되게: 종목 목록(키움)이 없어도 앱이 아는 이름으로 찾고, 바로 고르기 목록과 코드→이름을 준다."""
+    m = rt.market
+    monkeypatch.setattr(m, "kr_master", lambda wait=False: {})
+    monkeypatch.setattr(m, "_yh_search_raw", lambda q: (_ for _ in ()).throw(RuntimeError("blocked")))
+    r = m.kr_search("미국배당")
+    assert "458730" in [x["sym"] for x in r] and all("미국배당" in x["name"] for x in r)          # 공개 검색이 막혀도 아는 이름으로 찾는다
+    assert m.kr_search("tiger 미국s")[0]["name"] == "TIGER 미국S&P500" and m.kr_search("0059")[0]["sym"] in ("005930", "005935")
+    with pytest.raises(RuntimeError):
+        m.kr_search("없는이름zz")
+    monkeypatch.setattr(m, "_yh_search_raw", lambda q: [{"symbol": "005930.KS", "shortname": "Samsung Electronics"}, {"symbol": "091990.KQ", "shortname": "Celltrion HC"},
+                                                         {"symbol": "AAPL", "shortname": "Apple"}])
+    r = m.kr_search("삼성전자")
+    assert [x["sym"] for x in r] == ["005930", "005935", "091990"] and r[0]["name"] == "삼성전자" and r[2]["exchange"] == "코스닥"   # 아는 이름 먼저, 겹치면 한 번만
+    monkeypatch.setattr(m, "kr_master", lambda wait=False: {"005930": {"name": "삼성전자", "market": "코스피"}, "360750": {"name": "TIGER 미국S&P500", "market": "코스피"}})
+    assert m.kr_search("tiger")[0] == {"sym": "360750", "name": "TIGER 미국S&P500", "exchange": "코스피"}
+    rt.settings.update({"watch": {"kr": ["005930", "999999"], "us": ["NVDA"]}})
+    rt.dca.save_plan({"code": "458730", "name": "TIGER 미국배당다우존스", "amount": 100000, "day": 5})
+    c = create_app(rt).test_client()
+    p = c.get("/api/market/picks?mkt=kr&syms=360750,123456").get_json()
+    assert [(x["sym"], x["name"], x["tag"]) for x in p["picks"]] == [("005930", "삼성전자", "관심"), ("999999", "999999", "관심"), ("458730", "TIGER 미국배당다우존스", "적립 중")]
+    assert p["names"] == {"360750": "TIGER 미국S&P500", "123456": "123456"}
+    assert c.get("/api/market/picks?mkt=us").get_json()["picks"] == [{"sym": "NVDA", "name": "NVDA", "tag": "관심"}]
+    assert c.get("/api/market/search?mkt=kr&q=tiger").get_json()[0]["sym"] == "360750"
+
+
 def test_dividend_slow_source_does_not_block_screen(rt, monkeypatch):
     """바깥 서버가 느리면 기다리지 않고 '받는 중'으로 돌려준다. 그 종목은 저장하지 않아 다음에 다시 받는다."""
     import time as _t

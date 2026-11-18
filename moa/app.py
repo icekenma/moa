@@ -762,6 +762,12 @@ def create_app(rt, updater=None):
             return jsonify([])
         return jsonify(rt.market.kr_search(q) if m == "kr" else rt.market.us_search(q))
 
+    @app.get("/api/market/picks")
+    def market_picks():
+        m = mkt_arg(request.args.get("mkt", "kr"))
+        syms = [x.strip().upper()[:12] for x in (request.args.get("syms") or "").split(",") if x.strip()]
+        return jsonify(rt.market.picks(m, syms))
+
     @app.post("/api/market/watch")
     def market_watch():
         d = body()

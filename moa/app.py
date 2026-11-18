@@ -356,7 +356,7 @@ def create_app(rt, updater=None):
             ledger=rt.ledger.summary(month), recent=rt.ledger.recent(5),
             assets=rt.assets.overview(),
             scalp={k: sc[k] for k in ("state", "mode_label", "today", "error", "data_source")},
-            ai=rt.aipick.today(),
+            ai=rt.aipick.today(), auto=rt.autotrade.brief(),
             dca={"schedule": dc["schedule"], "monthly": dc["monthly"], "value": dc["value"],
                  "gain": dc["gain"], "gain_pct": dc["gain_pct"], "plans": len(dc["plans"])},
             feed_error=rt.errors.get("feed"))
@@ -1227,6 +1227,10 @@ def create_app(rt, updater=None):
     @app.get("/api/auto")
     def auto_home():
         return jsonify(rt.autotrade.overview())
+
+    @app.get("/api/auto/brief")
+    def auto_brief():
+        return jsonify(rt.autotrade.brief())
 
     @app.post("/api/auto/plan")
     def auto_plan():

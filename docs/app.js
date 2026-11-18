@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261118.2221";
+const UI_VERSION = "261119.0747";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -505,7 +505,7 @@ const MENU = {
   home: { title: "홈", subs: [["summary", "요약"], ["activity", "최근 활동"]] },
   ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["analysis", "분석"], ["budget", "예산"], ["fixed", "고정비"], ["cards", "카드"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
-  invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["dca", "적립"], ["dividend", "배당"], ["auto", "자동매매"]], extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
+  invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["auto", "자동매매"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["dca", "적립"], ["dividend", "배당"]], extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
   // 설정: 자주 바꾸는 것부터. 한 번만 맞추면 되는 서버 연결은 뒤로.
   settings: { title: "설정", subs: [["all", "전체"], ["theme", "화면"], ["ai", "AI"], ["accounts", "계좌"], ["trading", "주문·알림"], ["security", "보안"], ["backup", "백업"], ["connect", "서버"], ["app", "앱 정보"]] },
 };
@@ -538,6 +538,8 @@ function setTop(title, opt = {}) {
   // 2뎁스 메뉴는 엄지가 닿는 아래쪽(하단 탭 바로 위)에 둔다
   $("#subdock").innerHTML = opt.menu ? subnav(opt.menu, opt.sub) : "";
   document.body.classList.toggle("has-sub", !!opt.menu);
+  const cur = $("#subdock [aria-current]"), nav = $("#subdock .subnav");   // 메뉴가 길어 가려진 탭이면 보이는 곳으로
+  if (cur && nav && nav.scrollWidth > nav.clientWidth) nav.scrollLeft = cur.offsetLeft - (nav.clientWidth - cur.offsetWidth) / 2;
 }
 // 큰 숫자는 처음 보일 때 0부터 올라가게(동작 줄이기 설정이면 생략)
 const RM = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)");
@@ -742,6 +744,7 @@ pages.home = {
           ${A.history.length >= 2 ? lineChart([{ values: A.history.map((h) => h.net) }], { h: 72, label: "월별 순자산 추이" }) : ""}`
         : `<div class="small muted">계좌를 등록하면 순자산을 매달 기록해요</div>`}
       </a>
+      ${((d.auto || {}).runs || []).map((r) => pages.invest.atHomeCard(r)).join("")}
       <a class="card dark dom-night" href="#invest/ai" style="text-decoration:none">
         <div class="card-head"><h2>오늘의 투자</h2><span class="tiny" style="color:#C5CCD6">AI 추천 ›</span></div>
         <div class="grid2">
@@ -1462,8 +1465,21 @@ pages.invest = {
   },
 
   // ---------- 투자 홈(카카오페이증권 스타일) ----------
+  atBriefHtml() {
+    const B = this._atB;
+    if (!B) return "";
+    return B.runs.length ? B.runs.map((r) => this.atHomeCard(r)).join("")
+      : `<a class="card at-home-empty" href="#invest/auto"><span><b>AI 자동매매</b><small>${B.ended ? `끝난 자동매매 ${B.ended}개 · 돌고 있는 것은 없어요` : "쓸 돈만 정하면 AI가 플랜을 짜서 사고팔아요. 모의로 먼저 해 볼 수 있어요"}</small></span><em>›</em></a>`;
+  },
+  async atBrief() {   // 15초마다만 새로 받는다
+    if (this._atBT && Date.now() - this._atBT < 15000) return;
+    this._atBT = Date.now();
+    try { this._atB = await GET("/api/auto/brief"); } catch (e) { return; }
+    if ($("#ihAuto")) $("#ihAuto").innerHTML = this.atBriefHtml();
+  },
   async home(box) {
     if (!box.children.length) { const c = memo.get("ihome"); if (c) this.homeRender(box, c); }
+    this.atBrief();
     const d = await GET("/api/invest/home");
     memo.set("ihome", d);
     if (investState.tab !== "home") return;
@@ -1486,6 +1502,7 @@ pages.invest = {
         : `<div class="ih-lbl">내 투자</div><div class="ih-empty">키움 계좌를 연결하면 총자산·오늘 손익·보유 종목이 여기 보여요 <a href="#settings/accounts">연결하기</a></div>`}
       </section>
       <div class="ss-row">${sessionChip("kr")}${sessionChip("us")}<a href="#invest/market" class="tiny">장 시간 ›</a></div>
+      <div id="ihAuto">${this.atBriefHtml()}</div>
       ${idx.length ? `<div class="ih-idx">${idx.map((x) => `<div><span>${esc(x.name)}</span><b>${x.name.includes("환율") ? won(x.price) : Number(x.price).toLocaleString("en-US", { maximumFractionDigits: 2 })}</b><em class="${tone(x.change_pct)}">${pct(x.change_pct, 2)}</em></div>`).join("")}</div>` : ""}
       ${a && a.total != null ? `<section class="card tight">
         <div class="card-head ih-head"><h2>보유 종목 ${H.length}</h2>${seg("정렬", [["value", "평가금액"], ["pnl", "수익률"], ["day", "오늘"]], S.sort, "on-card ih-sort")}</div>
@@ -1529,6 +1546,34 @@ pages.invest = {
       $("#atRetry").onclick = () => { A.view = "list"; this.auto(box); };
     }
   },
+  // 자동매매: 남은 시간을 읽기 쉽게
+  atDur(min) {
+    if (min == null) return "";
+    if (min < 1) return "곧";
+    if (min < 60) return `${min}분 뒤`;
+    if (min < 1440) return `${Math.floor(min / 60)}시간${min % 60 ? ` ${min % 60}분` : ""} 뒤`;
+    return `${Math.floor(min / 1440)}일${Math.floor(min % 1440 / 60) ? ` ${Math.floor(min % 1440 / 60)}시간` : ""} 뒤`;
+  },
+  // 다음에 언제 움직이는지 한 줄: "다음 추천 오늘 09:10 · 50분 뒤"
+  atNextLine(n) {
+    const x = n.next;
+    if (x.kind === "at") return `다음 추천 <b>${esc(x.text)}</b>${x.local ? ` (${esc(x.local)})` : ""} · ${this.atDur(x.in_min)}`;
+    return { soon: "곧 AI 추천을 받아요", busy: "AI 추천을 받는 중", slot: "자리가 나면 다시 추천", hold: "새 매수 없음 · 보유만 정리", paused: "새 매수 멈춤 · 보유만 지켜봄", closing: "보유 종목 정리 중", blocked: "확인이 필요해요" }[x.kind] || "";
+  },
+  atTodayLine(r) {
+    const n = r.now, t = n.today;
+    return `오늘 추천 ${t.cycles}/${t.cycles_max} · 매수 ${t.buys} · 매도 ${t.sells} · 보유 ${n.size.slots_used}/${n.size.slots} · ${n.period.day}일째/${n.period.days}일`;
+  },
+  // 홈·투자 홈에 놓는 요약 카드(누르면 그 자동매매의 현황으로)
+  atHomeCard(r) {
+    const [lbl] = this.AT_ST[r.status] || [r.status], m = r.money, n = r.now, live = r.status === "running" && n.engine.ok;
+    return `<a class="card dom dom-invest at-home" href="#invest/auto" data-atgo="${r.id}">
+      <div class="card-head"><h2>AI 자동매매</h2><span class="tiny live-dot ${live ? "on" : ""}">${r.mode === "real" ? "실전" : "모의"} · ${lbl}${n.engine.ok ? "" : " · 엔진 확인 필요"}</span></div>
+      <div class="at-home-eq"><span class="big">${this.atM(r.mkt, m.equity)}</span><b class="${tone(m.ret_pct)}">${pct(m.ret_pct, 2)}</b></div>
+      <div class="at-home-next">${esc(n.next.label)}</div>
+      <div class="small">${this.atNextLine(n)}</div>
+      <div class="tiny">${esc(r.name)} · ${this.atTodayLine(r)}</div></a>`;
+  },
   atReadyHtml(R) {
     const rows = [];
     if (!R.ai) rows.push(`Claude API 키가 없어요. <a href="#settings/ai">AI 설정에서 넣기</a>`);
@@ -1540,7 +1585,9 @@ pages.invest = {
     return `<button type="button" class="card at-run" data-run="${r.id}">
       <div class="at-run-top"><b>${esc(r.name)}</b><span class="tag ${cls}">${lbl}</span>${r.pending ? `<span class="tag warn">개선안 ${r.pending}</span>` : ""}</div>
       <div class="at-run-mid"><span class="at-eq">${this.atM(r.mkt, m.equity)}</span><span class="at-ret ${tone(m.ret_pct)}">${pct(m.ret_pct, 2)}</span></div>
-      <div class="tiny">${r.mode === "real" ? "실전" : "모의"} · ${r.mkt === "us" ? "미국" : "국내"} ${esc(r.style_label)} · ${r.start_date.slice(5).replace("-", "/")}~${r.end_date.slice(5).replace("-", "/")} · 거래 ${r.closed}건${r.closed ? ` (승 ${r.wins})` : ""} · 보유 ${r.open}</div>
+      ${r.now ? `<div class="at-run-next"><span class="at-dot ${r.status === "running" && r.now.engine.ok ? "on" : ""}"></span><span>${esc(r.now.next.label)}</span></div>
+      <div class="small">${this.atNextLine(r.now)}</div>` : ""}
+      <div class="tiny">${r.mode === "real" ? "실전" : "모의"} · ${r.mkt === "us" ? "미국" : "국내"} ${esc(r.style_label)} · ${r.start_date.slice(5).replace("-", "/")}~${r.end_date.slice(5).replace("-", "/")} · 거래 ${r.closed}건${r.closed ? ` (승 ${r.wins})` : ""} · 보유 ${r.open}${r.now ? ` · 오늘 추천 ${r.now.today.cycles}/${r.now.today.cycles_max}` : ""}</div>
     </button>`;
   },
   async atList(box) {
@@ -1658,7 +1705,7 @@ pages.invest = {
     const d = (A.d = await GET(`/api/auto/runs/${A.view}`));
     if (investState.tab !== "auto" || A.view !== d.run.id) return;
     const r = d.run, m = r.money, M = (v, s) => this.atM(r.mkt, v, s), [lbl, cls] = this.AT_ST[r.status] || [r.status, ""];
-    const next = r.status === "running" ? (d.next.busy ? "AI 추천을 받는 중이에요" : d.next.ok ? "곧 AI 추천을 받아요" : d.next.why) : r.status_msg;
+    const N = d.now, next = N ? N.next.label : r.status_msg;
     const keep = $("#atBody") ? window.scrollY : null;
     box.onclick = null;
     box.innerHTML = `<section class="ap-hero at-hero">
@@ -1667,7 +1714,10 @@ pages.invest = {
         <div class="at-hero-eq">${M(m.equity)}</div>
         <div class="at-hero-ret ${tone(m.ret_pct)}">${M(m.equity - m.budget, true)} (${pct(m.ret_pct, 2)})</div>
         <div class="at-hero-kv"><div><span>쓸 돈</span><b>${M(m.budget)}</b></div><div><span>남은 현금</span><b>${M(m.cash)}</b></div><div><span>확정 손익</span><b class="${tone(m.realized)}">${M(m.realized, true)}</b></div></div>
-        <div class="ap-h2">${esc(next || "")}${r.status !== "ended" ? ` · ${r.end_date.slice(5).replace("-", "/")}까지 · 플랜 ${r.ver}판` : ""}</div>
+        ${N ? `<div class="at-nowline ${N.next.kind}"><span class="at-dot ${r.status === "running" && N.engine.ok ? "on" : ""}"></span>
+          <div><b>${esc(next)}</b><span>${this.atNextLine(N)}</span></div></div>
+        <div class="ap-h2">${r.end_date.slice(5).replace("-", "/")}까지(${N.period.day}일째/${N.period.days}일) · 플랜 ${r.ver}판 · 엔진 ${N.engine.ok ? `정상(${N.engine.sec}초 전 확인)` : "확인 필요"}</div>`
+          : `<div class="ap-h2">${esc(next || "")}</div>`}
         ${r.status === "ended" ? "" : `<div class="at-ctl">
           ${r.status === "running" ? `<button type="button" class="btn line-w" data-ctl="pause">새 매수 멈춤</button>` : r.status === "paused" ? `<button type="button" class="btn yellow" data-ctl="resume">다시 시작</button>` : ""}
           ${r.status === "closing" ? "" : `<button type="button" class="btn line-w" data-ctl="end">전부 팔고 종료</button>`}</div>`}
@@ -1683,6 +1733,47 @@ pages.invest = {
     }));
     this.atTab();
     if (keep != null) window.scrollTo(0, keep);
+  },
+  // 현황 맨 위: 오늘 시간표, 오늘 한 일과 한도, 다음 매수 규모, 최근 추천
+  atNowHtml(d) {
+    const r = d.run, N = d.now, mkt = r.mkt, M = (v, s) => this.atM(mkt, v, s), T = N.today, Z = N.size, P = N.period;
+    const rows = N.steps.rows, nextIdx = N.steps.today ? rows.findIndex((x) => !x.done) : 0;
+    const dayPnl = T.pnl + T.unreal, dayUsed = Math.min(100, Math.max(0, -dayPnl) / (T.limit || 1) * 100), totUsed = Math.min(100, N.risk.loss / (N.risk.limit || 1) * 100);
+    const gauge = (label, used, left, cls) => `<div class="at-g ${cls || ""}"><div class="at-g-t"><span>${label}</span><b>${left}</b></div><div class="at-g-b" role="img" aria-label="${label} ${Math.round(used)}% 사용"><i style="width:${Math.max(used, used > 0 ? 3 : 0)}%"></i></div></div>`;
+    const warn = [];
+    if (!N.engine.ok) warn.push(N.engine.sec == null ? "엔진이 아직 한 번도 돌지 않았어요. 노트북에서 앱이 켜져 있는지 확인해 주세요." : `엔진이 ${N.engine.sec}초째 돌지 않았어요. 노트북의 앱을 확인해 주세요.`);
+    const L = N.last_cycle;
+    return `${this.atReadyHtml(d.ready)}${warn.map((w) => `<div class="notice warn">${esc(w)}</div>`).join("")}
+      <section class="card at-sched">
+        <div class="card-head"><h2>${N.steps.today ? "오늘" : esc(N.steps.label)} 시간표</h2><span class="tiny">지금 ${esc(N.clock.kst)}${N.clock.local ? ` · 뉴욕 ${esc(N.clock.local)}` : ""}${N.phase === "open" ? ` · 마감까지 ${N.clock.left_min}분` : ""}</span></div>
+        <ol class="at-steps">${rows.map((x, i) => `<li class="${x.done ? "done" : ""} ${i === nextIdx ? "next" : ""}"><time>${esc(x.hm)}${x.local ? `<small>뉴욕 ${esc(x.local)}</small>` : ""}</time>
+          <div><b>${esc(x.name)}${i === nextIdx && N.steps.today ? ` <em>다음</em>` : ""}</b><span>${esc(x.sub)}</span></div></li>`).join("")}</ol>
+        ${N.steps.today ? "" : `<div class="tiny">${N.phase === "off" ? "오늘은 장이 쉬는 날이라" : "오늘 장은 끝나서"} 다음 거래일 시간표를 보여 드려요.</div>`}
+        ${mkt === "us" ? `<div class="tiny">시각은 한국 시간이에요.</div>` : ""}
+      </section>
+      <section class="card at-today">
+        <div class="card-head"><h2>오늘 한 일</h2><span class="tiny">${N.busy ? "AI 추천 받는 중" : N.phase === "open" ? "장 열림" : N.phase === "pre" ? "장 시작 전" : N.phase === "post" ? "장 마감" : "쉬는 날"}</span></div>
+        <div class="sc-kpi"><div><span>AI 추천</span><b>${T.cycles}<small> / ${T.cycles_max}번</small></b></div><div><span>매수 · 매도</span><b>${T.buys} · ${T.sells}${T.sells ? `<small> (승 ${T.wins})</small>` : ""}</b></div>
+          <div><span>오늘 손익</span><b class="${tone(dayPnl)}">${M(dayPnl, true)}</b></div></div>
+        ${gauge("하루 손실 한도", dayUsed, `${M(Math.min(0, dayPnl))} / -${M(T.limit)}`, dayUsed >= 100 ? "full" : "")}
+        ${gauge("전체 손실 한도", totUsed, `${M(N.risk.loss ? -N.risk.loss : 0)} / -${M(N.risk.limit)}`, totUsed >= 100 ? "full" : "")}
+        ${gauge("기간", P.day / P.days * 100, `${P.day}일째 / ${P.days}일 · ${P.left}일 남음`, "calm")}
+        ${T.streak ? `<div class="tiny">오늘 연속 손절 ${T.streak}번 · ${T.streak_max}번이면 오늘은 쉬어요</div>` : ""}
+      </section>
+      <section class="card tight"><div class="card-head" style="padding-top:8px"><h2>다음에 살 때</h2></div>
+        <dl class="dt-rows at-facts">
+          <div><dt>한 번에 사는 금액</dt><dd>약 ${M(Z.alloc)}<small>굴리는 돈의 ${Z.pct}%${Z.mult < 1 ? ` × 검증 단계 ${Math.round(Z.mult * 100)}%` : ""}</small></dd></div>
+          <div><dt>보유 자리</dt><dd>${Z.slots_used} / ${Z.slots}종목<small>${Z.slots_used >= Z.slots ? "꽉 차서 팔릴 때까지 새로 사지 않아요" : `${Z.slots - Z.slots_used}자리 비어 있어요`}</small></dd></div>
+          ${Z.warm_need ? `<div><dt>검증 단계</dt><dd>${Z.warm_done} / ${Z.warm_need}건<small>${Z.warm_done >= Z.warm_need ? "끝났어요. 정해진 비중을 다 써요" : "끝나면 정해진 비중을 다 써요"}</small></dd></div>` : ""}
+          <div><dt>고르는 기준</dt><dd>승률 ${d.params.min_win_prob}% · 점수 ${d.params.min_score} · 손익비 ${d.params.min_rr} 이상<small>${d.params.skip_watch ? "AI가 관망이면 쉬어요" : ""}</small></dd></div>
+          <div><dt>AI 비용</dt><dd>오늘 $${N.ai.today_usd.toFixed(2)} / 한도 $${N.ai.limit_usd}<small>지금까지 ${N.ai.cycles_all}번 · $${N.ai.total_usd.toFixed(2)}</small></dd></div>
+        </dl></section>
+      <section class="card at-last">
+        <div class="card-head"><h2>최근 추천</h2><span class="tiny">${L ? esc(L.ts.replace("T", " ").slice(5, 16)) : ""}</span></div>
+        ${L ? `<div class="small">${L.stance ? `<span class="tag">${esc(L.stance)}</span> ` : ""}${esc(L.view || L.msg)}</div>
+          ${L.picks ? `<div class="at-last-l">${L.bought.map((x) => `<div class="buy"><b>${esc(x)}</b><span>샀어요</span></div>`).join("")}${L.skipped.map((x) => `<div><b>${esc(x.name)}</b><span>${esc(x.why || "건너뜀")}</span></div>`).join("")}</div>` : `<div class="tiny">${esc(L.msg)}</div>`}`
+          : `<div class="empty small">아직 받은 추천이 없어요.${N.next.kind === "at" ? `<br>첫 추천은 ${esc(N.next.text)}에 받아요.` : ""}</div>`}
+      </section>`;
   },
   atPropHtml(p, mkt) {
     const pend = p.status === "pending";
@@ -1715,7 +1806,7 @@ pages.invest = {
     if (A.tab === "now") {
       const pend = d.proposals.filter((p) => p.status === "pending");
       const KIND = { buy: ["매수", "y"], sell: ["매도", ""], cycle: ["추천", ""], skip: ["쉼", ""], risk: ["한도", "warn"], review: ["분석", ""], control: ["조작", ""], start: ["시작", "y"], end: ["종료", ""] };
-      el.innerHTML = `${pend.map((p) => this.atPropHtml(p, mkt)).join("")}
+      el.innerHTML = `${d.now ? this.atNowHtml(d) : ""}${pend.map((p) => this.atPropHtml(p, mkt)).join("")}
         <section class="card tight"><div class="card-head" style="padding-top:8px"><h2>보유 ${d.open.length}</h2><span class="tiny">평가 ${M(r.money.open_value)} · ${M(r.money.unrealized, true)}</span></div>
           <div class="list">${d.open.length ? d.open.map((t) => `<div class="item" ${this.atTradeDt(t, mkt)} role="button" tabindex="0">
             <span class="main"><b>${esc(t.name)}</b><span class="sub">${won(t.qty)}주 · ${M(t.entry_price)} → ${M(t.last)}${t.fill_ok ? "" : " · 체결 확인 중"}</span>
@@ -4174,6 +4265,11 @@ function detailSheet(o) {
   (box) => box.addEventListener("click", (e) => { if (e.target.closest("[data-close]")) closeSheet(); }));
 }
 document.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.matches && e.target.matches('[data-cashwhy]')) e.target.click(); });
+// 홈·투자 홈의 자동매매 카드: 링크가 자동매매 화면으로 데려가기 전에, 그 자동매매의 현황이 바로 열리게 해 둔다
+document.addEventListener("click", (e) => {
+  const g = e.target.closest && e.target.closest("[data-atgo]");
+  if (g) { const A = pages.invest.atState(); A.view = Number(g.dataset.atgo); A.tab = "now"; A.d = null; }
+}, true);
 document.addEventListener("click", (e) => {
   if (!e.target.closest("[data-cashwhy]")) return;
   const h = memo.get("ihome");

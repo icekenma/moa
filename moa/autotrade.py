@@ -605,43 +605,204 @@ class AutoTrade:
 
     def gate(self, run):
         """지금 새로 사도 되는지. (허용, 사유)"""
+        ok, _, why = self.gate_code(run)
+        return ok, why
+
+    def gate_code(self, run):
+        """지금 새로 사도 되는지와 그 사유의 종류. (허용, 코드, 사유) — 코드는 화면에서 '다음에 언제 움직이는지'를 계산할 때 쓴다."""
         p, mkt = run["params"], run["mkt"]
         ss = self._session(mkt)
         if not ss["open"]:
-            return False, "장이 열려 있지 않아요"
+            return False, "closed", "장이 열려 있지 않아요"
         if AP.mkt_date(mkt) > run["end_date"]:
-            return False, "기간이 끝났어요"
+            return False, "over", "기간이 끝났어요"
         hm = self._local(mkt).strftime("%H:%M")
         if not (p["entry_start"] <= hm <= p["entry_end"]):
-            return False, f"매수 시간({p['entry_start']}~{p['entry_end']})이 아니에요"
+            return False, "time", f"매수 시간({p['entry_start']}~{p['entry_end']})이 아니에요"
         opens = self._open(run["id"])
         if len(opens) >= p["max_positions"]:
-            return False, "보유 종목 수가 꽉 찼어요"
+            return False, "full", "보유 종목 수가 꽉 찼어요"
         closed = self._today_closed(run)
         day_pnl = sum(c["pnl"] or 0 for c in closed) + sum(t["qty"] * ((t["last"] or t["entry_price"]) - t["entry_price"]) for t in opens)
         if day_pnl <= -run["budget"] * p["daily_loss_pct"] / 100:
-            return False, f"하루 손실 한도(-{p['daily_loss_pct']:g}%)에 닿아 오늘은 새로 사지 않아요"
+            return False, "dayloss", f"하루 손실 한도(-{p['daily_loss_pct']:g}%)에 닿아 오늘은 새로 사지 않아요"
         k = int(p["loss_streak"])
         if k and len(closed) >= k and all((c["pnl"] or 0) < 0 for c in closed[-k:]):
-            return False, f"오늘 연속 {k}번 손절이라 새로 사지 않아요"
+            return False, "streak", f"오늘 연속 {k}번 손절이라 새로 사지 않아요"
         cycles = self.rt.db.q("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' AND day=?", (run["id"], AP.mkt_date(mkt)))
         if len(cycles) >= p["cycles_per_day"]:
-            return False, "오늘 추천 횟수를 다 썼어요"
+            return False, "cycles", "오늘 추천 횟수를 다 썼어요"
         if time.time() - (run["last_cycle"] or 0) < p["cycle_gap_min"] * 60:
-            return False, "다음 추천 시간을 기다리는 중이에요"
+            return False, "gap", "다음 추천 시간을 기다리는 중이에요"
         m = self.money(run)
         price_floor = 1000 if mkt == "kr" else 2
         if m["cash"] < price_floor:
-            return False, "남은 현금이 없어요"
+            return False, "cash", "남은 현금이 없어요"
         usd = sum(float((json.loads(c["data"]) if c["data"] else {}).get("usd") or 0) for c in cycles)
         if usd >= float(p.get("ai_daily_usd") or 1):
-            return False, "오늘 AI 추천 비용 한도를 다 썼어요"
+            return False, "aicost", "오늘 AI 추천 비용 한도를 다 썼어요"
         if not self.rt.ai.configured():
-            return False, "AI 키가 없어요"
+            return False, "nokey", "AI 키가 없어요"
         c = self.rt.ai.conf()
         if c.get("budget_usd") and self.rt.ai.month_usd()[0] >= float(c["budget_usd"]):
-            return False, "이번 달 AI 예산을 다 썼어요"
-        return True, ""
+            return False, "budget", "이번 달 AI 예산을 다 썼어요"
+        return True, "", ""
+
+    # ------------------------------------------------------------------ 지금 상태(화면용)
+    HOURS = {"kr": ("09:00", "15:20"), "us": ("09:30", "16:00")}   # 그 시장 시각 기준 정규장
+    WD = "월화수목금토일"
+
+    def _trading_day(self, mkt, d):
+        if d.weekday() >= 5:
+            return False
+        return not (mkt == "kr" and d.isoformat() in (self.rt.settings.get("holidays") or []))
+
+    def _next_day(self, mkt, d):
+        for _ in range(15):
+            d += timedelta(days=1)
+            if self._trading_day(mkt, d):
+                return d
+        return d
+
+    def _kst(self, mkt, local_dt):
+        """그 시장 시각(naive) → 한국 시각(naive)."""
+        if mkt != "us":
+            return local_dt
+        off = AP.kst_now().replace(tzinfo=None) - AP.et_now().replace(tzinfo=None)
+        return local_dt + timedelta(hours=round(off.total_seconds() / 3600))
+
+    def _when(self, mkt, local_dt):
+        """다음 일이 일어날 때를 화면에 쓰기 좋게: 한국 시각 기준 '오늘 09:10'·'내일 09:10'·'11/23(월) 09:10'과 남은 분."""
+        k, now = self._kst(mkt, local_dt), AP.kst_now().replace(tzinfo=None)
+        days = (k.date() - now.date()).days
+        day = "오늘" if days == 0 else "내일" if days == 1 else f"{k.month}/{k.day}({self.WD[k.weekday()]})"
+        out = {"at": k.isoformat(timespec="minutes"), "text": f"{day} {k:%H:%M}", "in_min": max(0, round((k - now).total_seconds() / 60))}
+        if mkt == "us":
+            out["local"] = f"뉴욕 {local_dt:%H:%M}"
+        return out
+
+    def _next(self, run, loc, busy):
+        """다음에 무엇을 언제 하는지. kind: soon(곧 추천)·at(정해진 시각)·slot(자리가 나면)·hold(보유만 지켜봄)·blocked(막힘)·busy·paused·closing·ended"""
+        p, mkt, st = run["params"], run["mkt"], run["status"]
+        if st == "ended":
+            return {"kind": "ended", "label": run["status_msg"] or "끝났어요"}
+        if st == "closing":
+            return {"kind": "closing", "label": run["status_msg"] or "보유 종목을 정리하는 중이에요"}
+        if st == "paused":
+            return {"kind": "paused", "label": "새 매수를 멈춘 상태예요. 들고 있는 종목은 목표·손절에 닿으면 팔아요"}
+        if busy:
+            return {"kind": "busy", "label": "AI 추천을 받는 중이에요. 1~2분쯤 걸려요"}
+        ok, code, why = self.gate_code(run)
+        if ok:
+            return {"kind": "soon", "label": "조건이 맞아 곧 AI 추천을 받아요"}
+        today, hm = loc.date(), loc.strftime("%H:%M")
+        end = datetime.strptime(run["end_date"], "%Y-%m-%d").date()
+
+        def entry(d):
+            h, m = map(int, p["entry_start"].split(":"))
+            return datetime(d.year, d.month, d.day, h, m)
+
+        def nxt(label, d):
+            if d > end:
+                return {"kind": "hold", "label": "기간의 마지막 날이라 새로 사지 않아요. 들고 있는 종목만 정리해요" if self._open(run["id"]) else "기간이 끝나 가요. 새로 사지 않아요"}
+            return {"kind": "at", "label": label, **self._when(mkt, entry(d))}
+        tday = self._trading_day(mkt, today)
+        if code in ("closed", "time"):
+            if not tday:
+                return nxt("오늘은 장이 쉬어요. 다음 거래일에 AI 추천을 받아 매수를 시작해요", self._next_day(mkt, today))
+            if hm < p["entry_start"]:
+                return nxt("장 시작 전이에요. 매수 시작 시각에 AI 추천을 받아요" if hm < self.HOURS[mkt][0] else "장은 열렸고, 매수 시작 시각을 기다려요", today)
+            return nxt("오늘 매수 시간은 끝났어요. 다음 거래일에 이어 가요", self._next_day(mkt, today))
+        if code == "over":
+            return {"kind": "hold", "label": why}
+        if code in ("dayloss", "streak", "cycles", "aicost"):
+            return nxt(why + ". 다음 거래일에 다시 시작해요" if code != "cycles" else "오늘 추천 횟수를 다 썼어요. 다음 거래일에 다시 받아요", self._next_day(mkt, today))
+        if code == "gap":
+            at = loc + timedelta(minutes=math.ceil(max(0, (run["last_cycle"] or 0) + p["cycle_gap_min"] * 60 - time.time()) / 60))
+            if at.strftime("%H:%M") > p["entry_end"]:
+                return nxt("오늘은 매수 시간이 끝나기 전에 다음 추천 차례가 오지 않아요", self._next_day(mkt, today))
+            return {"kind": "at", "label": f"추천 간격({p['cycle_gap_min']}분)을 기다리는 중이에요", **self._when(mkt, at)}
+        if code in ("full", "cash"):
+            return {"kind": "slot", "label": ("보유 종목 수가 꽉 찼어요" if code == "full" else "남은 현금이 없어요") + ". 들고 있는 종목이 팔려 자리가 나면 다시 추천을 받아요"}
+        return {"kind": "blocked", "label": why + (". 설정 → AI에서 확인해 주세요" if code in ("nokey", "budget") else "")}
+
+    def now(self, run):
+        """지금 무엇을 하고 있고, 오늘 무엇을 했고, 다음에 언제 움직이는지."""
+        p, mkt, rid = run["params"], run["mkt"], run["id"]
+        loc = self._local(mkt).replace(tzinfo=None)
+        today, hm = loc.date(), loc.strftime("%H:%M")
+        day = AP.mkt_date(mkt)
+        ss = self._session(mkt)
+        o_hm, c_hm = self.HOURS[mkt]
+        tday = self._trading_day(mkt, today)
+        phase = "open" if ss["open"] else "off" if not tday else "pre" if hm < o_hm else "post"
+        opens = self._open(rid)
+        closed = self._today_closed(run)
+        th = self._busy.get(rid)
+        busy = bool(th and th.is_alive())
+        m = self.money(run)
+        logs = self.rt.db.q("SELECT ts, msg, data FROM at_log WHERE run_id=? AND kind='cycle' ORDER BY id", (rid,))
+        usd_all = usd_day = 0.0
+        cyc_today, last = [], None
+        for x in logs:
+            d = json.loads(x["data"]) if x["data"] else {}
+            usd_all += float(d.get("usd") or 0)
+            last = (x, d)
+        for x in self.rt.db.q("SELECT ts, msg, data FROM at_log WHERE run_id=? AND kind='cycle' AND day=? ORDER BY id", (rid, day)):
+            d = json.loads(x["data"]) if x["data"] else {}
+            usd_day += float(d.get("usd") or 0)
+            cyc_today.append({"ts": x["ts"], "msg": x["msg"]})
+        last_cycle = None
+        if last:
+            x, d = last
+            dec = d.get("decisions") or []
+            last_cycle = {"ts": x["ts"], "msg": x["msg"], "stance": d.get("stance"), "view": d.get("view"), "picks": len(dec),
+                          "bought": [q.get("name") or q.get("sym") for q in dec if q.get("act") == "buy"],
+                          "skipped": [{"name": q.get("name") or q.get("sym"), "why": q.get("why")} for q in dec if q.get("act") == "skip"][:5]}
+        buys = self.rt.db.one("SELECT COUNT(*) n FROM at_trades WHERE run_id=? AND entry_day=? AND status!='cancelled'", (rid, day))["n"]
+        day_real = sum(c["pnl"] or 0 for c in closed)
+        day_unreal = sum(t["qty"] * ((t["last"] or t["entry_price"]) - t["entry_price"]) for t in opens)
+        streak = 0
+        for c in reversed(closed):
+            if (c["pnl"] or 0) < 0:
+                streak += 1
+            else:
+                break
+        n_closed = self.rt.db.one("SELECT COUNT(*) n FROM at_trades WHERE run_id=? AND status='closed'", (rid,))["n"]
+        warm = int(p.get("warmup_trades") or 0)
+        mult = float(p.get("warmup_mult") or 1) if n_closed < warm else 1.0
+        start = datetime.strptime(run["start_date"], "%Y-%m-%d").date()
+        end = datetime.strptime(run["end_date"], "%Y-%m-%d").date()
+        total_days = (end - start).days + 1
+        # 오늘(쉬는 날·장 마감 뒤면 다음 거래일)의 시간표. 시각은 그 시장 기준이고, 미국은 한국 시각을 함께 준다
+        show = today if tday and phase != "post" else self._next_day(mkt, today)
+        soon = (datetime.strptime(c_hm, "%H:%M") - timedelta(minutes=8)).strftime("%H:%M")
+        rows = [(o_hm, "장 시작", "보유 종목 감시 시작"), (p["entry_start"], "매수 시작", f"AI 추천을 받아요(하루 최대 {p['cycles_per_day']}번, {p['cycle_gap_min']}분 간격)"),
+                (p["entry_end"], "매수 끝", "이 뒤로는 새로 사지 않아요")]
+        if run["style"] == "day":
+            rows.append((soon, "전부 정리", "들고 있는 종목을 모두 팔아요"))
+        rows.append((c_hm, "장 마감", "오늘 평가액을 기록해요"))
+        steps = []
+        for t, name, sub in sorted(rows):
+            h, mi = map(int, t.split(":"))
+            k = self._kst(mkt, datetime(show.year, show.month, show.day, h, mi))
+            steps.append({"hm": f"{k:%H:%M}", "local": t if mkt == "us" else None, "name": name, "sub": sub, "done": show == today and hm >= t})
+        eng = round(time.time() - self._last) if self._last else None
+        return {
+            "phase": phase, "busy": busy, "next": self._next(run, loc, busy),
+            "clock": {"kst": f"{AP.kst_now():%H:%M}", "local": f"{loc:%H:%M}" if mkt == "us" else None, "left_min": ss.get("left_min") or 0},
+            "steps": {"day": show.isoformat(), "today": show == today, "label": "오늘" if show == today else f"{show.month}/{show.day}({self.WD[show.weekday()]})", "rows": steps},
+            "today": {"cycles": len(cyc_today), "cycles_max": p["cycles_per_day"], "buys": buys, "sells": len(closed),
+                      "wins": sum(1 for c in closed if (c["pnl"] or 0) > 0), "pnl": round(day_real, 2), "unreal": round(day_unreal, 2),
+                      "limit": round(run["budget"] * p["daily_loss_pct"] / 100, 2), "streak": streak, "streak_max": int(p["loss_streak"])},
+            "risk": {"loss": round(max(0.0, run["budget"] - m["equity"]), 2), "limit": round(run["budget"] * p["total_loss_pct"] / 100, 2)},
+            "size": {"alloc": round(min(m["base"] * p["per_trade_pct"] / 100 * mult, max(0.0, m["cash"])), 2), "pct": p["per_trade_pct"], "mult": mult,
+                     "warm_done": min(n_closed, warm), "warm_need": warm, "slots_used": len(opens), "slots": p["max_positions"]},
+            "period": {"day": min(max((today - start).days + 1, 1), total_days), "days": total_days, "left": max(0, (end - today).days), "end": run["end_date"]},
+            "ai": {"today_usd": round(usd_day, 3), "limit_usd": float(p.get("ai_daily_usd") or 1), "total_usd": round(usd_all, 3), "cycles_all": len(logs)},
+            "last_cycle": last_cycle,
+            "engine": {"sec": eng, "ok": eng is not None and eng < 90},
+        }
 
     def _maybe_cycle(self, run):
         th = self._busy.get(run["id"])
@@ -1087,10 +1248,28 @@ class AutoTrade:
             "money": m, "closed": n["n"], "wins": int(n["w"] or 0), "open": len(self._open(run["id"])), "pending": pend,
             "style_label": STYLES[run["style"]]["label"]}
 
+    def brief(self):
+        """홈 화면용: 돌고 있는 자동매매의 지금 상태를 가볍게(시세를 새로 묻지 않는다)."""
+        out = []
+        for run in self._runs("WHERE status IN ('running','paused','closing')"):
+            try:
+                n = self.now(run)
+                out.append(dict(self._summary(run), now={k: n[k] for k in ("phase", "busy", "next", "today", "size", "period", "engine")}))
+            except Exception as e:
+                self.rt.db.log("system", "error", f"자동매매 요약 오류: {type(e).__name__}: {e}", self._now())
+        return {"runs": out, "ended": self.rt.db.one("SELECT COUNT(*) n FROM at_runs WHERE status='ended'")["n"]}
+
     def overview(self):
         from .ai import MODELS
         c = self.rt.ai.conf()
-        return {"ready": self.ready(), "runs": [self._summary(r) for r in self._runs()][:30],
+        runs = []
+        for r in self._runs()[:30]:
+            x = self._summary(r)
+            if r["status"] != "ended":
+                n = self.now(r)
+                x["now"] = {k: n[k] for k in ("phase", "busy", "next", "today", "size", "period", "engine")}
+            runs.append(x)
+        return {"ready": self.ready(), "runs": runs,
                 "models": [{"id": k, "label": v[0]} for k, v in MODELS.items()], "default_model": c.get("model") or "claude-sonnet-5-5",
                 "styles": [{"id": k, **v} for k, v in STYLES.items()], "min_budget": MIN_BUDGET,
                 "sessions": {"kr": self._session("kr"), "us": self._session("us")}}
@@ -1125,6 +1304,7 @@ class AutoTrade:
                 "equity": self.rt.db.q("SELECT day, equity FROM at_equity WHERE run_id=? ORDER BY day", (rid,)),
                 "log": log, "proposals": [self._proposal(x["id"]) for x in props], "changes": self.changes(rid),
                 "next": {"ok": ok, "why": why, "busy": bool(th and th.is_alive())},
+                "now": self.now(run) if run["status"] != "ended" else None, "ready": self.ready(),
                 "broker": getattr(b, "label", None), "session": self._session(run["mkt"]),
                 "keys": {k: v[3] for k, v in PLAN_KEYS.items()}}
 

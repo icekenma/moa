@@ -485,6 +485,119 @@ def test_cycle_uses_ai_stream(env, monkeypatch):
     assert "예산 초과" in at.detail(rid)["log"][0]["msg"]
 
 
+def test_now_tells_what_happens_next_and_what_happened_today(env):
+    """지금 상태: 장 시작 전·매수 대기·추천 간격·자리 없음·장 마감 뒤·쉬는 날마다 '다음에 언제 움직이는지'를 알려 준다."""
+    import time as _t
+    at = env.at
+    rid = env.run(budget=1_000_000)
+    run = lambda: at._run(rid)
+    p = run()["params"]
+    assert (p["max_positions"], p["per_trade_pct"], p["cycles_per_day"], p["entry_start"], p["entry_end"]) == (3, 33.0, 3, "09:10", "14:30")
+    # 1) 장 시작 전(수요일 08:20): 오늘 09:10에 시작, 50분 뒤
+    env.open, env.hm = False, "08:20"
+    n = at.now(run())
+    assert n["phase"] == "pre" and n["busy"] is False and n["next"]["kind"] == "at" and "장 시작 전" in n["next"]["label"]
+    assert (n["next"]["text"], n["next"]["in_min"], n["next"]["at"]) == ("오늘 09:10", 50, "2026-11-18T09:10")
+    rows = n["steps"]["rows"]
+    assert n["steps"]["today"] and n["steps"]["label"] == "오늘" and [(r["hm"], r["name"]) for r in rows] == [
+        ("09:00", "장 시작"), ("09:10", "매수 시작"), ("14:30", "매수 끝"), ("15:12", "전부 정리"), ("15:20", "장 마감")]
+    assert not any(r["done"] for r in rows) and all(r["local"] is None for r in rows)
+    assert n["today"] == {"cycles": 0, "cycles_max": 3, "buys": 0, "sells": 0, "wins": 0, "pnl": 0, "unreal": 0, "limit": 20000.0, "streak": 0, "streak_max": 3}
+    assert n["risk"] == {"loss": 0.0, "limit": 80000.0}
+    assert n["size"] == {"alloc": 165000.0, "pct": 33.0, "mult": 0.5, "warm_done": 0, "warm_need": 10, "slots_used": 0, "slots": 3}     # 검증 단계: 비중의 절반
+    assert n["period"] == {"day": 1, "days": 30, "left": 29, "end": run()["end_date"]} and n["ai"]["total_usd"] == 0 and n["last_cycle"] is None
+    assert n["clock"]["kst"] == "08:20" and n["engine"] == {"sec": None, "ok": False}                                                 # 엔진이 아직 한 번도 돌지 않음
+    at.tick(force=True)
+    assert at.now(run())["engine"]["ok"] is True
+    # 2) 장은 열렸지만 매수 시작 전
+    env.open, env.hm = True, "09:05"
+    n = at.now(run())
+    assert n["phase"] == "open" and n["next"]["text"] == "오늘 09:10" and n["next"]["in_min"] == 5 and "매수 시작 시각을 기다려요" in n["next"]["label"]
+    assert [r["done"] for r in n["steps"]["rows"]] == [True, False, False, False, False]
+    # 3) 매수 시간: 곧 추천
+    env.hm = "09:30"
+    assert at.now(run())["next"]["kind"] == "soon"
+    # 4) 한 번 추천받아 산 뒤: 간격만큼 기다림, 오늘 한 일이 숫자로 잡힌다
+    env.enter(rid, [env.pick(), env.pick("000660", score=10)])
+    at.rt.db.x("UPDATE at_runs SET last_cycle=? WHERE id=?", (_t.time(), rid))
+    n = at.now(run())
+    assert n["next"]["kind"] == "at" and n["next"]["text"] == "오늘 10:30" and 59 <= n["next"]["in_min"] <= 60 and "간격(60분)" in n["next"]["label"]
+    assert n["today"]["cycles"] == 1 and n["today"]["buys"] == 1 and n["size"]["slots_used"] == 1 and n["ai"] == {"today_usd": 0.05, "limit_usd": 1.0, "total_usd": 0.05, "cycles_all": 1}
+    lc = n["last_cycle"]
+    assert lc["bought"] == ["005930"] and lc["picks"] == 2 and lc["skipped"][0]["name"] == "000660" and "점수" in lc["skipped"][0]["why"] and lc["view"] == "지수 강보합"
+    env.px["005930"] = 69500.0
+    at.tick(force=True)
+    n = at.now(run())
+    assert n["today"]["unreal"] < 0 and n["today"]["pnl"] == 0 and n["today"]["sells"] == 0
+    # 간격이 매수 끝 시각을 넘기면 다음 거래일로
+    env.hm = "14:00"
+    n = at.now(run())
+    assert n["next"]["text"] == "내일 09:10" and "다음 추천 차례가 오지 않아요" in n["next"]["label"]
+    # 5) 오늘 추천 횟수를 다 쓰면 다음 거래일
+    env.hm = "11:00"
+    at.rt.db.x("UPDATE at_runs SET last_cycle=0 WHERE id=?", (rid,))
+    for _ in range(2):
+        at.log(rid, "cycle", "추천", {"usd": 0.05})
+    n = at.now(run())
+    assert n["next"]["kind"] == "at" and n["next"]["text"] == "내일 09:10" and "추천 횟수" in n["next"]["label"] and n["today"]["cycles"] == 3
+    # 6) 자리가 꽉 차면 시각 없이 '자리가 나면'
+    at.rt.db.x("DELETE FROM at_log WHERE run_id=? AND kind='cycle' AND msg='추천'", (rid,))
+    at.edit(rid, {"max_positions": 1})
+    n = at.now(run())
+    assert n["next"]["kind"] == "slot" and "자리가 나면" in n["next"]["label"] and "at" not in n["next"]
+    at.edit(rid, {"max_positions": 3})
+    # 7) 장 마감 뒤: 시간표는 다음 거래일 것으로 바뀐다. 휴장일(설정)과 주말은 건너뛴다
+    env.open, env.hm = False, "16:00"
+    n = at.now(run())
+    assert n["phase"] == "post" and n["next"]["text"] == "내일 09:10" and n["steps"]["today"] is False and n["steps"]["label"] == "11/19(목)"
+    at.rt.settings.update({"holidays": ["2026-11-19"]})
+    n = at.now(run())
+    assert n["next"]["text"] == "11/20(금) 09:10" and n["steps"]["day"] == "2026-11-20" and n["next"]["in_min"] == (24 + 17) * 60 + 10
+    env.day, env.hm = "2026-11-21", "10:00"                                   # 토요일
+    n = at.now(run())
+    assert n["phase"] == "off" and "장이 쉬어요" in n["next"]["label"] and n["next"]["text"] == "11/23(월) 09:10" and n["period"]["day"] == 4
+    # 8) 멈춤·정리·종료
+    at.control(rid, "pause")
+    assert at.now(run())["next"]["kind"] == "paused"
+    at.control(rid, "resume")
+    # 기간 마지막 날 뒤로는 새로 사지 않는다고 알려 준다
+    at.rt.db.x("UPDATE at_runs SET end_date='2026-11-21' WHERE id=?", (rid,))
+    n = at.now(run())
+    assert n["next"]["kind"] == "hold" and "새로 사지 않아요" in n["next"]["label"] and n["period"]["left"] == 0
+    at.rt.db.x("UPDATE at_runs SET end_date='2026-12-17' WHERE id=?", (rid,))
+    # 화면용 묶음: 목록·자세히·홈에 같은 상태가 실린다
+    c = create_app(env.rt).test_client()
+    o = c.get("/api/auto").get_json()["runs"][0]
+    assert o["now"]["next"]["text"] == "11/23(월) 09:10" and o["now"]["size"]["slots"] == 3 and "steps" not in o["now"]
+    d = c.get(f"/api/auto/runs/{rid}").get_json()
+    assert d["now"]["steps"]["rows"] and d["now"]["last_cycle"]["bought"] == ["005930"] and d["ready"]["ai"] is True
+    b = c.get("/api/auto/brief").get_json()
+    assert b["ended"] == 0 and b["runs"][0]["id"] == rid and b["runs"][0]["now"]["today"]["buys"] == 0 and b["runs"][0]["money"]["budget"] == 1_000_000
+    assert c.get("/api/home").get_json()["auto"]["runs"][0]["name"] == b["runs"][0]["name"]
+    env.day, env.hm, env.open = "2026-11-23", "10:00", True
+    at.control(rid, "end")
+    at.tick(force=True)
+    assert at._run(rid)["status"] == "ended"
+    d = c.get(f"/api/auto/runs/{rid}").get_json()
+    assert d["now"] is None and c.get("/api/auto/brief").get_json() == {"runs": [], "ended": 1} and "now" not in c.get("/api/auto").get_json()["runs"][0]
+
+
+def test_now_us_shows_korean_time(env, monkeypatch):
+    """미국장은 한국 시각으로 알려 주고 뉴욕 시각을 함께 준다."""
+    at = env.at
+    # 뉴욕 11/18(수) 08:00 = 한국 11/18(수) 22:00 (겨울, 14시간 차이)
+    monkeypatch.setattr(at, "_local", lambda mkt: datetime(2026, 11, 18, 8, 0) if mkt == "us" else datetime(2026, 11, 18, 22, 0))
+    monkeypatch.setattr(AP, "kst_now", lambda: datetime(2026, 11, 18, 22, 0))
+    monkeypatch.setattr(AP, "et_now", lambda: datetime(2026, 11, 18, 8, 0))
+    env.open = False
+    rid = env.run(mkt="us", budget=3000)
+    n = at.now(at._run(rid))
+    assert n["phase"] == "pre" and n["next"] == {"kind": "at", "label": n["next"]["label"], "at": "2026-11-18T23:40", "text": "오늘 23:40", "in_min": 100, "local": "뉴욕 09:40"}
+    rows = n["steps"]["rows"]
+    assert (rows[0]["hm"], rows[0]["local"], rows[0]["name"]) == ("23:30", "09:30", "장 시작") and (rows[-1]["hm"], rows[-1]["local"]) == ("06:00", "16:00")
+    assert n["clock"] == {"kst": "22:00", "local": "08:00", "left_min": 0} and n["today"]["limit"] == 60.0
+
+
 def test_api(env):
     c = create_app(env.rt).test_client()
     o = c.get("/api/auto").get_json()

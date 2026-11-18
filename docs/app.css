@@ -2108,3 +2108,77 @@ html.dark-theme .dv-tips li{background:rgba(255,255,255,.05)}
 html.dark-theme .dv-tips li::before{background:#FCD34D}
 html.dark-theme .dv-tips li.over::before,html.dark-theme .dv-tips li.health::before{background:rgba(255,255,255,.4)}
 html.dark-theme .dv-alone{border-color:var(--glass-b)}
+
+/* ---------- v4.40 자동매매: 지금 상태 ---------- */
+.at-dot{flex:0 0 auto;display:inline-block;width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.3)}
+.at-dot.on{background:#34D399;box-shadow:0 0 0 0 rgba(52,211,153,.55);animation:atPulse 1.9s ease-out infinite}
+@keyframes atPulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.5)}70%,100%{box-shadow:0 0 0 8px rgba(52,211,153,0)}}
+@media (prefers-reduced-motion:reduce){.at-dot.on{animation:none}}
+.at-nowline{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-radius:13px;background:rgba(255,255,255,.09);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+.at-nowline .at-dot{margin-top:5px}
+.at-nowline div{display:flex;flex-direction:column;gap:3px;min-width:0}
+.at-nowline b{font-size:13.5px;font-weight:800;line-height:1.4;color:var(--on-deep-strong,#fff)}
+.at-nowline span{font-size:11.5px;color:var(--on-deep2);line-height:1.4}
+.at-nowline span b{font-size:inherit;color:#FDE68A;font-weight:800}
+.at-nowline.blocked,.at-nowline.closing{box-shadow:inset 0 0 0 1px rgba(253,186,116,.5)}
+.at-run-next{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;line-height:1.4}
+.at-run-next .at-dot{background:var(--line2)}
+.at-run-next .at-dot.on{background:#1FA971}
+.at-run .small b,.at-home .small b{font-weight:800}
+/* 오늘 시간표 */
+.at-steps{list-style:none;margin:2px 0 0;padding:0;display:flex;flex-direction:column}
+.at-steps li{position:relative;display:grid;grid-template-columns:54px 1fr;gap:0 22px;padding:7px 0;min-height:42px}
+.at-steps li::before{content:"";position:absolute;left:64px;top:0;bottom:0;width:2px;background:var(--line2)}
+.at-steps li:first-child::before{top:14px}.at-steps li:last-child::before{bottom:calc(100% - 14px)}
+.at-steps li::after{content:"";position:absolute;left:59px;top:11px;width:12px;height:12px;border-radius:50%;background:var(--card,#fff);border:2px solid var(--line2);box-sizing:border-box}
+.at-steps li.done::after{background:var(--ink3);border-color:var(--ink3)}
+.at-steps li.next::after{background:var(--sec);border-color:var(--sec);box-shadow:0 0 0 4px color-mix(in srgb,var(--sec) 22%,transparent)}
+.at-steps time{font-size:13px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-.02em;padding-top:1px;display:flex;flex-direction:column}
+.at-steps time small{font-size:9px;font-weight:600;color:var(--ink3);white-space:nowrap}
+.at-steps li div{display:flex;flex-direction:column;gap:1px;min-width:0}
+.at-steps li div b{font-size:12.5px;font-weight:800}
+.at-steps li div b em{font-style:normal;font-size:9.5px;font-weight:800;margin-left:4px;padding:1px 6px;border-radius:7px;background:color-mix(in srgb,var(--sec) 16%,transparent);color:var(--sec-i,var(--sec))}
+.at-steps li div span{font-size:10.5px;color:var(--ink3);line-height:1.45}
+.at-steps li.done time,.at-steps li.done div b{color:var(--ink3);font-weight:700}
+/* 오늘 한 일·한도 */
+.at-today{display:flex;flex-direction:column;gap:9px}
+.at-today .sc-kpi b small{font-size:10px;font-weight:700;color:var(--ink3)}
+.at-g{display:flex;flex-direction:column;gap:4px}
+.at-g-t{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:11px}
+.at-g-t span{font-weight:700;color:var(--ink2)}
+.at-g-t b{font-weight:700;font-variant-numeric:tabular-nums;font-size:10.5px;color:var(--ink3);white-space:nowrap}
+.at-g-b{height:6px;border-radius:3px;background:color-mix(in srgb,var(--ink) 9%,transparent);overflow:hidden}
+.at-g-b i{display:block;height:100%;border-radius:3px;background:var(--coral-i,#D9534F)}
+.at-g.calm .at-g-b i{background:var(--ink3)}
+.at-g.full .at-g-t b{color:var(--coral-i,#B3261E)}
+.at-facts dd{display:flex;flex-direction:column;align-items:flex-end;text-align:right;gap:1px}
+.at-facts dd small{font-size:9.5px;font-weight:500;color:var(--ink3)}
+.at-last{display:flex;flex-direction:column;gap:7px}
+.at-last-l{display:flex;flex-direction:column}
+.at-last-l div{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px solid var(--line);font-size:11.5px}
+.at-last-l div:first-child{border-top:0}
+.at-last-l b{font-weight:800;flex:0 0 auto;max-width:45%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.at-last-l span{color:var(--ink3);text-align:right;min-width:0}
+.at-last-l .buy span{color:var(--up);font-weight:800}
+/* 홈 카드 */
+.at-home{text-decoration:none;color:inherit;display:flex;flex-direction:column;gap:4px}
+.at-home-eq{display:flex;align-items:baseline;gap:8px}
+.at-home-eq b{font-size:13px;font-weight:800}
+.at-home-next{font-size:12.5px;font-weight:700;line-height:1.45}
+.at-home-empty{display:flex;align-items:center;justify-content:space-between;gap:10px;text-decoration:none;color:inherit}
+.at-home-empty span{display:flex;flex-direction:column;gap:2px;min-width:0}
+.at-home-empty b{font-size:13px;font-weight:800}.at-home-empty small{font-size:10.5px;color:var(--ink3);line-height:1.45}
+.at-home-empty em{font-style:normal;font-size:18px;color:var(--ink3)}
+#ihAuto:empty{display:none}
+#ihAuto{display:flex;flex-direction:column;gap:8.5px}
+html.dark-theme .at-steps li::before{background:rgba(255,255,255,.14)}
+html.dark-theme .at-steps li::after{background:#1b1524;border-color:rgba(255,255,255,.3)}
+html.dark-theme .at-steps li.done::after{background:rgba(255,255,255,.4);border-color:transparent}
+html.dark-theme .at-steps li.next::after{background:var(--n1);border-color:var(--n1);box-shadow:0 0 0 4px rgba(var(--n-rgb),.25)}
+html.dark-theme .at-steps li div b em{background:rgba(var(--n-rgb),.2);color:var(--n1)}
+html.dark-theme .at-g-b{background:rgba(255,255,255,.1)}
+html.dark-theme .at-g-b i{background:#FF8C7D}
+html.dark-theme .at-g.calm .at-g-b i{background:rgba(255,255,255,.45)}
+html.dark-theme .at-last-l div{border-color:var(--glass-b)}
+html.dark-theme .at-run-next .at-dot{background:rgba(255,255,255,.3)}
+html.dark-theme .at-run-next .at-dot.on{background:#34D399}

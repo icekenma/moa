@@ -2182,3 +2182,16 @@ html.dark-theme .at-g.calm .at-g-b i{background:rgba(255,255,255,.45)}
 html.dark-theme .at-last-l div{border-color:var(--glass-b)}
 html.dark-theme .at-run-next .at-dot{background:rgba(255,255,255,.3)}
 html.dark-theme .at-run-next .at-dot.on{background:#34D399}
+
+/* ---------- v4.41 자동매매: 기회 분석 ---------- */
+.at-opp{display:flex;flex-direction:column;gap:9px}
+.at-opp .sc-kpi b small{font-size:10px;font-weight:700;color:var(--ink3)}
+.at-notes{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
+.at-notes li{position:relative;padding:8px 10px 8px 13px;border-radius:10px;background:color-mix(in srgb,var(--ink) 5%,transparent);font-size:11.5px;line-height:1.55;color:var(--ink2)}
+.at-notes li::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;border-radius:2px;background:var(--sec)}
+.at-opp-t .at-tr{grid-template-columns:minmax(0,1.5fr) 44px minmax(0,1.3fr);align-items:center}
+.at-opp-r{display:flex;flex-direction:column;align-items:flex-end;gap:1px}
+.at-opp-r small{font-size:9.5px;font-weight:600;color:var(--ink3)}
+.at-chg b .tag{margin-left:4px;font-size:9px}
+html.dark-theme .at-notes li{background:rgba(255,255,255,.05)}
+html.dark-theme .at-notes li::before{background:var(--n1)}

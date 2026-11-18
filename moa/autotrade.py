@@ -32,6 +32,21 @@ STYLES = {
 MIN_BUDGET = {"kr": 300_000, "us": 300}
 US_FEE = 0.25          # 미국 왕복 비용(%) 대략
 US_SLIP = 0.0005       # 모의 체결 슬리피지(미국)
+# 추천받은 종목을 사지 않은 이유(기회 분석에 쓴다)
+SKIP = {"winprob": "승률 기준 미달", "score": "점수 기준 미달", "rr": "손익비 기준 미달", "fee": "목표가 비용보다 작음",
+        "chase": "추천가보다 올라 쫓지 않음", "qty": "배정 금액으로 1주를 못 삼", "full": "보유 자리 없음", "dup": "오늘 이미 거래",
+        "auto": "앱이 고른 예비 종목", "watch": "AI가 관망 권함", "quote": "시세 없음", "fail": "매수 실패", "etc": "기타"}
+_SKIP_TEXT = (("승률", "winprob"), ("점수", "score"), ("손익비", "rr"), ("비용", "fee"), ("쫓아가지", "chase"), ("1주를 못", "qty"),
+              ("꽉 참", "full"), ("이미 거래", "dup"), ("예비 종목", "auto"), ("시세", "quote"), ("매수 실패", "fail"))
+OPP_MIN = 8            # 건너뛴 종목의 실제 결과가 이만큼은 쌓여야 기준을 낮춘다
+
+
+def skip_code(dec):
+    """판단 기록 한 줄의 건너뛴 이유 코드(예전 기록은 글에서 알아낸다)."""
+    if dec.get("code") in SKIP:
+        return dec["code"]
+    why = str(dec.get("why") or "")
+    return next((c for t, c in _SKIP_TEXT if t in why), "etc")
 ACTIVE = ("running", "paused", "closing")
 
 # 개선안으로 바꿀 수 있는 값과 범위(이 밖의 값은 AI가 내놔도 버린다)
@@ -91,7 +106,7 @@ def make_plan(budget, mkt, style, days):
              "entry_start": "09:30" if mkt == "kr" else "09:45", "entry_end": "15:00" if mkt == "kr" else "15:30"}
     p["per_trade_pct"] = round(min(100 / p["max_positions"], {"day": 33.0, "swing": 25.0, "month": 20.0}[style]), 1)
     p.update(loss_streak=3, chase_pct=0.5, skip_watch=True, warmup_trades=10, warmup_mult=0.5,
-             review_every=30, ai_review=True, ai_daily_usd=1.0, web_search=True)
+             review_every=30, review_days=5, auto_apply=False, ai_review=True, ai_daily_usd=1.0, web_search=True)
     return p
 
 
@@ -114,7 +129,8 @@ def plan_text(run):
         {"t": "추천 받기", "d": f"하루 최대 {p['cycles_per_day']}번, {p['entry_start']}~{p['entry_end']}({'한국' if run['mkt'] == 'kr' else '뉴욕'} 시간) 사이, 자리가 비었을 때만."},
         {"t": "손실 한도", "d": f"하루 -{p['daily_loss_pct']:g}%(약 {money(b * p['daily_loss_pct'] / 100)})면 그날 매수 중지, "
                               f"누적 -{p['total_loss_pct']:g}%(약 {money(b * p['total_loss_pct'] / 100)})면 전부 정리하고 종료. 연속 {p['loss_streak']}번 손절이면 그날 쉬어요."},
-        {"t": "개선", "d": f"매매 {p['review_every']}건이 쌓일 때마다 조건별 성적을 분석해 개선안을 내요. 승인해야 반영돼요."},
+        {"t": "개선", "d": f"매매 {p['review_every']}건 또는 {p.get('review_days', 5)}거래일마다 성적을 분석해 개선안을 내요. 매수가 너무 적으면 건너뛴 종목이 그 뒤 실제로 어땠는지 보고 "
+                           "기준을 낮추는 안도 내요. " + ("모의라서 개선안을 스스로 반영해요(플랜에서 끌 수 있어요)." if p.get("auto_apply") and run.get("mode") != "real" else "승인해야 반영돼요.")},
     ]
 
 
@@ -181,6 +197,7 @@ class AutoTrade:
         db.x("""CREATE TABLE IF NOT EXISTS at_changes(
             id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL, ts TEXT NOT NULL, ver INTEGER NOT NULL, source TEXT NOT NULL,
             changes TEXT NOT NULL, stats TEXT)""")
+        AP._col(db, "at_runs", (("last_review_day", "TEXT"),))
         self._last = 0.0
         self._busy = {}       # run_id → 추천을 받는 중인 스레드
         self._day_note = {}   # (run_id, 날짜, 사유) → 같은 안내를 하루 한 번만 남기려고
@@ -467,6 +484,11 @@ class AutoTrade:
             ph, day = AP.phase_at(mkt, AP.kst_now().replace(tzinfo=None))
             if ph == "post" and not self.rt.db.one("SELECT 1 x FROM at_equity WHERE run_id=? AND day=?", (run["id"], day.isoformat())):
                 self._snap(run, day.isoformat())  # 하루 한 번, 장 마감 뒤 평가액
+                if run["status"] in ("running", "paused"):
+                    try:
+                        self._daily_review(run, day.isoformat())
+                    except Exception as e:
+                        self.rt.db.log("system", "error", f"자동매매 하루 점검 오류: {type(e).__name__}: {e}", self._now())
 
     def _snap(self, run, day=None):
         self.rt.db.x("INSERT INTO at_equity(run_id,day,equity) VALUES(?,?,?) ON CONFLICT(run_id,day) DO UPDATE SET equity=excluded.equity",
@@ -526,7 +548,7 @@ class AutoTrade:
         run["last_review_n"] = n
         try:
             pr = self.review(run["id"], auto=True)
-            if pr and pr.get("changes"):
+            if pr and pr.get("changes") and not self._auto_apply(run, pr, f"거래 {n}건 분석"):
                 self.rt.notify(f"[moa 자동매매] {run['name']} 개선안이 나왔어요({len(pr['changes'])}건). 앱에서 확인해 주세요")
         except Exception as e:
             self.rt.db.log("system", "error", f"자동매매 분석 오류: {e}", self._now())
@@ -858,7 +880,9 @@ class AutoTrade:
             self.log(rid, "cycle", "추천은 받았지만 멈춘 상태라 사지 않았어요", head)
             return 0
         if p.get("skip_watch") and res.get("stance") == "관망":
-            self.log(rid, "cycle", f"AI가 관망을 권해 쉬어요 · {res.get('view') or ''}"[:200], dict(head, picks=[{"sym": x.get("sym"), "name": x.get("name")} for x in picks]))
+            self.log(rid, "cycle", f"AI가 관망을 권해 쉬어요 · {res.get('view') or ''}"[:200], dict(head, watch=True,
+                                                                                                picks=[{"sym": str(x.get("sym") or "").upper(), "name": x.get("name"), "score": x.get("score"),
+                                                                                                        "win_prob": x.get("win_prob"), "auto": bool(x.get("auto"))} for x in picks]))
             return 0
         n_closed = self.rt.db.one("SELECT COUNT(*) n FROM at_trades WHERE run_id=? AND status='closed'", (rid,))["n"]
         mult = float(p.get("warmup_mult") or 1) if n_closed < int(p.get("warmup_trades") or 0) else 1.0
@@ -869,52 +893,54 @@ class AutoTrade:
             dec = {"sym": sym, "name": name, "score": x.get("score"), "win_prob": x.get("win_prob"), "cal_prob": x.get("cal_prob")}
             decisions.append(dec)
 
-            def skip(why):
-                dec.update(act="skip", why=why)
+            def skip(code, why):
+                dec.update(act="skip", code=code, why=why)
             opens = self._open(rid)
             if len(opens) >= p["max_positions"]:
-                skip("보유 종목 수가 꽉 참")
+                skip("full", "보유 종목 수가 꽉 참")
                 continue
             if x.get("auto"):
-                skip("AI가 아니라 앱이 지표로 고른 예비 종목")
+                skip("auto", "AI가 아니라 앱이 지표로 고른 예비 종목")
                 continue
             wp = x.get("cal_prob") if x.get("cal_prob") is not None and (x.get("cal_n") or 0) >= 10 else x.get("win_prob")
             if (wp or 0) < p["min_win_prob"]:
-                skip(f"승률 {wp or 0:g}% < 기준 {p['min_win_prob']:g}%")
+                dec["wp"] = wp
+                skip("winprob", f"승률 {wp or 0:g}% < 기준 {p['min_win_prob']:g}%")
                 continue
             if (x.get("score") or 0) < p["min_score"]:
-                skip(f"점수 {x.get('score') or 0:g} < 기준 {p['min_score']:g}")
+                skip("score", f"점수 {x.get('score') or 0:g} < 기준 {p['min_score']:g}")
                 continue
             tp, sl = min(float(x.get("target_pct") or 0), p["tp_cap"]), min(float(x.get("stop_pct") or 0), p["sl_cap"])
             if tp <= 0 or sl <= 0 or tp / sl < p["min_rr"]:
-                skip(f"손익비 {tp / sl if sl else 0:.2f} < 기준 {p['min_rr']:g}")
+                skip("rr", f"손익비 {tp / sl if sl else 0:.2f} < 기준 {p['min_rr']:g}")
                 continue
             if tp < fee * 3:
-                skip(f"목표 {tp:g}%가 비용({fee:g}%)의 3배보다 작음")
+                skip("fee", f"목표 {tp:g}%가 비용({fee:g}%)의 3배보다 작음")
                 continue
             if self.rt.db.one("SELECT 1 x FROM at_trades WHERE run_id=? AND sym=? AND (status='open' OR entry_day=?) AND status!='cancelled'", (rid, sym, today)):
-                skip("오늘 이미 거래했거나 보유 중")
+                skip("dup", "오늘 이미 거래했거나 보유 중")
                 continue
             q = self._quote(mkt, sym)
             price = q.get("price")
             if not price:
-                skip("시세를 받지 못함")
+                skip("quote", "시세를 받지 못함")
                 continue
             ref = float(x.get("entry_price") or 0)
             if ref and price > ref * (1 + p["chase_pct"] / 100):
-                skip(f"추천가보다 {((price / ref) - 1) * 100:.2f}% 올라 쫓아가지 않음")
+                skip("chase", f"추천가보다 {((price / ref) - 1) * 100:.2f}% 올라 쫓아가지 않음")
                 continue
             m = self.money(run)
             alloc = min(m["base"] * p["per_trade_pct"] / 100 * mult, m["cash"])
             buy_px = C.buy_fill(price, self.rt.settings.get("costs")) if mkt == "kr" else round(price * (1 + US_SLIP), 4)
             qty = int(alloc // (buy_px * 1.002))
             if qty < 1:
-                skip(f"배정 금액({alloc:,.0f})으로 1주를 못 삼")
+                dec["alloc"], dec["px"] = round(alloc), price
+                skip("qty", f"배정 금액({alloc:,.0f})으로 1주를 못 삼")
                 continue
             try:
                 tid = self._buy(run, x, sym, name, q, qty, price, buy_px, tp, sl, res)
             except Exception as e:
-                skip(f"매수 실패: {e}")
+                skip("fail", f"매수 실패: {e}")
                 continue
             bought += 1
             dec.update(act="buy", qty=qty, price=buy_px, target_pct=tp, stop_pct=sl, trade=tid)
@@ -1031,6 +1057,8 @@ class AutoTrade:
                 to = _clamp_key(key, to)
             except Exception:
                 return
+            if isinstance(to, float) and to == int(to) and not isinstance(to, bool):
+                to = int(to)                               # 50.0 → 50 (화면에 깔끔하게)
             if to != p.get(key) and not any(c["key"] == key for c in out):
                 out.append({"key": key, "label": PLAN_KEYS[key][3], "from": p.get(key), "to": to, "why": why})
 
@@ -1078,18 +1106,209 @@ class AutoTrade:
                 f"{n}건 평균 {a['avg_pct']:+.2f}%, 손익비율(PF) {a['pf']:g}로 잃는 구간이라 비중을 절반으로 줄임")
         return out
 
+    # ----- 기회 분석: 추천받은 종목을 얼마나 샀고, 건너뛴 종목은 그 뒤 실제로 어땠나
+    def opportunity(self, run):
+        """지금 플랜 판에서 받은 추천을 모아, 건너뛴 이유별 건수와 그 종목들의 실제 결과(추천 성적표)를 붙인다.
+        결과는 AI가 낸 목표·손절대로 샀다고 쳤을 때의 비용 뺀 수익률이라, 플랜의 익절·손절 상한과는 조금 다를 수 있다."""
+        rid = run["id"]
+        last = self.rt.db.one("SELECT ts FROM at_changes WHERE run_id=? ORDER BY id DESC LIMIT 1", (rid,))
+        logs = self.rt.db.q("SELECT ts, day, data FROM at_log WHERE run_id=? AND kind='cycle' AND data IS NOT NULL ORDER BY id", (rid,))
+        cur = [x for x in logs if not last or x["ts"] >= last["ts"]]
+        scope = "지금 플랜" if len(cur) >= 3 else "전체"
+        if len(cur) < 3:
+            cur = logs
+        items, days, cycles = [], set(), 0
+        for x in cur:
+            d = json.loads(x["data"])
+            dec = d.get("decisions")
+            if dec is None and not d.get("watch"):
+                continue                                   # 추천을 받지 못했거나 멈춘 상태였던 기록
+            cycles += 1
+            days.add(x["day"] or x["ts"][:10])
+            if dec is None:
+                dec = [dict(q, act="skip", code="auto" if q.get("auto") else "watch") for q in d.get("picks") or []]
+            for q in dec:
+                items.append({"pick_id": d.get("pick_id"), "sym": str(q.get("sym") or "").upper(), "name": q.get("name") or q.get("sym"),
+                              "act": q.get("act"), "code": None if q.get("act") == "buy" else skip_code(q), "score": q.get("score"),
+                              "wp": q.get("wp") if q.get("wp") is not None else q.get("cal_prob") if q.get("cal_prob") is not None else q.get("win_prob"),
+                              "why": q.get("why"), "alloc": q.get("alloc"), "px": q.get("px")})
+        ids = sorted({i["pick_id"] for i in items if i["pick_id"]})
+        res = {}
+        if ids:
+            try:
+                for r in self.rt.db.q(f"SELECT pick_id, sym, net_pct, result FROM ai_outcomes WHERE status='done' AND net_pct IS NOT NULL "
+                                      f"AND pick_id IN ({','.join('?' * len(ids))})", ids):
+                    if r["result"] not in ("미체결", "자료 없음"):
+                        res[(r["pick_id"], str(r["sym"]).upper())] = r["net_pct"]
+            except Exception:
+                res = {}
+        for i in items:
+            i["net"] = res.get((i["pick_id"], i["sym"]))
+        skipped = [i for i in items if i["act"] != "buy"]
+        bought = len(items) - len(skipped)
+
+        def agg(xs):
+            g = [i["net"] for i in xs if i["net"] is not None]
+            return {"n": len(xs), "graded": len(g), "avg": round(sum(g) / len(g), 2) if g else None,
+                    "win": round(sum(1 for v in g if v > 0) / len(g) * 100) if g else None}
+        reasons = []
+        for code in SKIP:
+            xs = [i for i in skipped if i["code"] == code]
+            if xs:
+                reasons.append(dict(agg(xs), code=code, label=SKIP[code]))
+        reasons.sort(key=lambda r: -r["n"])
+        return {"scope": scope, "days": len(days), "cycles": cycles, "picks": len(items), "bought": bought,
+                "buy_rate": round(bought / len(items) * 100) if items else 0, "per_day": round(bought / len(days), 1) if days else 0,
+                "reasons": reasons, "skipped": agg(skipped), "items": items}
+
+    def opp_changes(self, run, O, rows):
+        """매수가 너무 적을 때 고칠 값을 찾는다. 기준을 낮추는 것은 건너뛴 종목의 실제 결과가 뒷받침할 때만 한다.
+        반환: (바꿀 값 목록, 알림 글 목록)"""
+        p, out, notes = run["params"], [], []
+        if O["cycles"] < 3 or not O["picks"]:
+            return out, notes
+        base = make_plan(run["budget"], run["mkt"], run["style"], 30)      # 낮추는 데는 바닥이 있다(처음 플랜 기준)
+        sk = [i for i in O["items"] if i["act"] != "buy"]
+        real = [i for i in sk if i["code"] not in ("full", "dup")]         # 자리가 없어서·이미 사서 건너뛴 것은 '기회 부족'이 아니다
+        low = O["buy_rate"] < 25 and len(real) >= 3 and (O["days"] >= 2 or O["cycles"] >= 6)
+        fee = AP.FEE[run["mkt"]]
+
+        def add(key, to, why):
+            try:
+                to = _clamp_key(key, to)
+            except Exception:
+                return
+            if isinstance(to, float) and to == int(to) and not isinstance(to, bool):
+                to = int(to)                               # 50.0 → 50 (화면에 깔끔하게)
+            if to != p.get(key) and not any(c["key"] == key for c in out):
+                out.append({"key": key, "label": PLAN_KEYS[key][3], "from": p.get(key), "to": to, "why": why})
+
+        def judged(xs):
+            g = [i["net"] for i in xs if i["net"] is not None]
+            return len(g), (sum(g) / len(g) if g else 0.0), (sum(1 for v in g if v > 0) / len(g) * 100 if g else 0.0)
+
+        def good(xs, need=OPP_MIN, avg_min=None, win_min=50):
+            n, avg, win = judged(xs)
+            return n >= need and avg >= (fee / 2 if avg_min is None else avg_min) and win >= win_min
+
+        def said(xs):
+            n, avg, win = judged(xs)
+            return f"그 뒤 결과가 나온 {n}건은 평균 {avg:+.2f}%(비용 뺀 값), {win:.0f}%가 이익"
+        # 1) 돈이 모자라 1주를 못 삼: 결과와 상관없는 구조 문제 → 종목 수를 줄여 한 번에 쓰는 돈을 키운다
+        q = [i for i in sk if i["code"] == "qty"]
+        if len(q) >= 3 and len(q) >= len(real) * 0.25:
+            px = sorted(i["px"] for i in q if i.get("px"))
+            mid = px[len(px) // 2] if px else None
+            unit = "원" if run["mkt"] == "kr" else "달러"
+            if p["max_positions"] > 1 and p["per_trade_pct"] < 50:
+                n2 = p["max_positions"] - 1
+                add("max_positions", n2, f"배정 금액으로 1주를 못 사 건너뛴 종목이 {len(q)}개" + (f"(주가 중간값 {mid:,.0f}{unit})" if mid else "") + ". 종목 수를 줄여 한 번에 쓰는 돈을 키움")
+                add("per_trade_pct", min(50.0, round(100 / n2, 1)), "종목 수를 줄인 만큼 1회 비중을 올림(손절 폭은 그대로)")
+            else:
+                notes.append(f"배정 금액으로 1주를 못 사 건너뛴 종목이 {len(q)}개예요. 종목 수·비중은 더 조정할 수 없어, 쓸 돈을 늘려야 해요.")
+        if not low:
+            if O["picks"] and not out:
+                notes.append(f"추천 {O['picks']}종목 중 {O['bought']}종목을 샀어요. 매수가 모자란 상태는 아니에요.")
+            return out, notes
+        notes.append(f"{O['days']}거래일 동안 추천 {O['picks']}종목 중 {O['bought']}종목만 샀어요(하루 {O['per_day']:g}건). 무엇에 걸렸는지 봤어요.")
+        # 잃고 있는 중에는 기준을 낮추지 않는다
+        a = _agg(rows) if rows else None
+        if a and a["n"] >= 8 and a["avg_pct"] < 0:
+            notes.append(f"다만 지금까지 산 {a['n']}건이 평균 {a['avg_pct']:+.2f}%로 잃는 구간이라, 기준을 낮추지 않아요.")
+            return out, notes
+        # 2) 승률 기준: 기준 바로 아래 5%p 구간이 실제로 벌었으면 5%p 낮춘다
+        w = [i for i in sk if i["code"] == "winprob"]
+        if w:
+            t = p["min_win_prob"]
+            band = [i for i in w if (i["wp"] or 0) >= t - 5]
+            floor = max(40, base["min_win_prob"] - 10)
+            if good(band) and t - 5 >= floor:
+                add("min_win_prob", t - 5, f"승률 {t - 5:g}~{t:g}%라 건너뛴 {len(band)}종목: {said(band)}")
+            elif judged(band)[0] >= OPP_MIN:
+                notes.append(f"승률 기준에 걸린 종목은 {said(band)}이라, 지금 기준을 유지하는 게 맞아요.")
+            else:
+                notes.append(f"승률 기준에 걸린 종목이 {len(w)}개인데, 결과가 나온 것이 {judged(band)[0]}건이라 아직 판단하지 않아요({OPP_MIN}건부터).")
+        # 3) 점수 기준: 기준 바로 아래 10점 구간
+        sc = [i for i in sk if i["code"] == "score"]
+        if sc:
+            t = p["min_score"]
+            band = [i for i in sc if (i["score"] or 0) >= t - 10]
+            floor = max(30, base["min_score"] - 15)
+            if good(band) and t - 5 >= floor:
+                add("min_score", t - 5, f"점수 {t - 10:g}~{t:g}점이라 건너뛴 {len(band)}종목: {said(band)}")
+            elif judged(band)[0] >= OPP_MIN:
+                notes.append(f"점수 기준에 걸린 종목은 {said(band)}이라, 지금 기준을 유지해요.")
+        # 4) 손익비 기준
+        rr = [i for i in sk if i["code"] == "rr"]
+        if rr and good(rr) and p["min_rr"] - 0.2 >= max(1.2, base["min_rr"] - 0.4):
+            add("min_rr", round(p["min_rr"] - 0.2, 1), f"손익비가 모자라 건너뛴 {len(rr)}종목: {said(rr)}")
+        # 5) 추천가보다 올라 쫓지 않은 종목: 그래도 올랐으면 허용 폭을 조금 넓힌다
+        ch = [i for i in sk if i["code"] == "chase"]
+        if ch and good(ch, need=6) and p["chase_pct"] + 0.3 <= base["chase_pct"] + 1.0:
+            add("chase_pct", round(p["chase_pct"] + 0.3, 1), f"추천가보다 올라 쫓지 않은 {len(ch)}종목: {said(ch)}")
+        # 6) AI가 관망이라 쉰 날: 쉰 종목들이 뚜렷이 벌었을 때만 관망에도 사게 한다(문턱을 높게 둔다)
+        wt = [i for i in sk if i["code"] == "watch"]
+        if wt and p.get("skip_watch"):
+            if good(wt, need=12, avg_min=max(0.3, fee), win_min=55):
+                add("skip_watch", False, f"AI가 관망이라 쉰 {len(wt)}종목: {said(wt)}")
+            elif judged(wt)[0] >= OPP_MIN:
+                notes.append(f"관망이라 쉰 종목은 {said(wt)}이라, 쉬는 게 맞았어요.")
+        if not out and not any("판단하지" in n or "유지" in n or "맞았" in n for n in notes):
+            notes.append("기준을 낮출 만한 근거는 아직 없어요. 결과가 더 쌓이면 다시 봐요.")
+        return out, notes
+
     def review(self, rid, auto=False):
-        """규칙 기반 분석 → 개선안(승인 대기). 바꿀 것이 없어도 분석 결과는 남긴다."""
+        """규칙 기반 분석 → 개선안. 끝난 거래의 성적(조이는 쪽)과 기회 분석(매수가 너무 적을 때 푸는 쪽)을 함께 본다.
+        바꿀 것이 없어도 분석 결과는 남긴다. 같은 값을 두 쪽이 다르게 말하면 실제 거래 성적을 따른다."""
         run = self._run(rid)
         rows = self._since_ver(run)
-        if len(rows) < 10:
-            raise ValueError(f"끝난 거래가 10건은 있어야 분석할 수 있어요(지금 {len(rows)}건)")
-        ch = self.rule_changes(run, rows)
-        a = _agg(rows)
+        O = self.opportunity(run)
+        if len(rows) < 10 and O["cycles"] < 3:
+            raise ValueError(f"끝난 거래 10건이나 추천 3번은 쌓여야 분석할 수 있어요(지금 거래 {len(rows)}건, 추천 {O['cycles']}번)")
+        ch = self.rule_changes(run, rows) if len(rows) >= 10 else []
+        loose, notes = self.opp_changes(run, O, rows)
+        for c in loose:
+            if not any(x["key"] == c["key"] for x in ch):
+                ch.append(dict(c, loosen=True))
+        a = _agg(rows) if rows else None
         small = len(rows) < int(run["params"].get("review_every") or 30)
-        summary = (f"{a['n']}건 · 승률 {a['win_rate']:g}% · 평균 {a['avg_pct']:+.2f}% · " +
-                   (f"고칠 값 {len(ch)}개" if ch else "지금 값 유지")) + (" · 표본이 적어 참고용" if small and not auto else "")
-        return self._save_proposal(run, "rule", summary, ch, {"all": a, "small": small})
+        head = f"{a['n']}건 · 승률 {a['win_rate']:g}% · 평균 {a['avg_pct']:+.2f}%" if a else f"추천 {O['picks']}종목 중 {O['bought']}종목 매수"
+        summary = f"{head} · " + (f"고칠 값 {len(ch)}개" if ch else "지금 값 유지") + (" · 표본이 적어 참고용" if a and small and not auto and not loose else "")
+        return self._save_proposal(run, "rule", summary, ch, {"all": a, "small": small, "opp": {k: v for k, v in O.items() if k != "items"}, "notes": notes})
+
+    def _auto_apply(self, run, pr, why):
+        """모의이고 사용자가 켜 둔 경우에만, 승인 대기 개선안을 스스로 반영한다. 실전은 언제나 사람이 승인한다."""
+        if not pr or pr.get("status") != "pending" or run["mode"] != "paper" or not run["params"].get("auto_apply"):
+            return False
+        try:
+            self.decide(pr["id"], "apply")
+        except ValueError:
+            return False
+        self.log(run["id"], "review", f"모의라서 개선안을 스스로 반영했어요({why})", {"proposal": pr["id"], "auto": True})
+        self.rt.notify(f"[moa 자동매매] {run['name']} 개선안 {len(pr['changes'])}건을 스스로 반영했어요(모의)")
+        return True
+
+    def _daily_review(self, run, day):
+        """장이 끝난 뒤 하루 한 번 본다. 정해진 거래일마다, 또는 이틀째 한 건도 못 샀으면 바로 분석한다(거래 건수와 상관없이)."""
+        p, rid = run["params"], run["id"]
+        since = run.get("last_review_day") or ""
+        rows = self.rt.db.q("SELECT day, data FROM at_log WHERE run_id=? AND kind='cycle' AND data IS NOT NULL AND day>? ORDER BY id", (rid, since))
+        days = sorted({r["day"] for r in rows})
+        if not days:
+            return None
+        buys = self.rt.db.one("SELECT COUNT(*) n FROM at_trades WHERE run_id=? AND entry_day>? AND status!='cancelled'", (rid, since))["n"]
+        every = int(p.get("review_days") or 5)
+        if not (len(days) >= every or (len(days) >= 2 and len(rows) >= 3 and buys == 0)):
+            return None
+        self.rt.db.x("UPDATE at_runs SET last_review_day=? WHERE id=?", (day, rid))
+        run["last_review_day"] = day
+        try:
+            pr = self.review(rid, auto=True)
+        except ValueError:
+            return None
+        if pr.get("changes") and not self._auto_apply(run, pr, f"{len(days)}거래일 점검"):
+            self.rt.notify(f"[moa 자동매매] {run['name']} 개선안이 나왔어요({len(pr['changes'])}건). 앱에서 확인해 주세요")
+        return pr
 
     def _save_proposal(self, run, source, summary, changes, stats=None, text=None):
         # 같은 출처의 승인 대기 개선안은 새것으로 바꾼다
@@ -1151,6 +1370,19 @@ class AutoTrade:
         if run["status"] == "ended":
             raise ValueError("끝난 자동매매는 고칠 수 없어요")
         p, applied = copy.deepcopy(run["params"]), []
+        opts = {}
+        if "auto_apply" in (patch or {}):          # 개선안 자동 반영: 모의에서만, 사용자만 켤 수 있다(AI 개선안으로는 못 바꾼다)
+            on = bool(patch["auto_apply"])
+            if on and run["mode"] != "paper":
+                raise ValueError("실전은 개선안을 직접 승인해야 반영돼요")
+            opts["auto_apply"] = on
+        if (patch or {}).get("review_days") not in (None, ""):
+            opts["review_days"] = int(min(max(float(patch["review_days"]), 2), 20))
+        opts = {k: v for k, v in opts.items() if p.get(k) != v}
+        if opts:
+            p.update(opts)
+            self.rt.db.x("UPDATE at_runs SET params=? WHERE id=?", (json.dumps(p, ensure_ascii=False), rid))
+            self.log(rid, "review", " · ".join(f"개선안 자동 반영 {'켬' if v else '끔'}" if k == "auto_apply" else f"점검 주기 {v}거래일" for k, v in opts.items()))
         for k, v in (patch or {}).items():
             if k not in PLAN_KEYS or v in (None, ""):
                 continue
@@ -1185,18 +1417,25 @@ class AutoTrade:
                            "보유 중 최저%": r["mae_pct"], "보유(분)": r["hold_min"], "AI승률": r["win_prob"], "보정승률": r["cal_prob"],
                            "점수": r["score"], "분위기": r["stance"], "근거": (why.get("reasons") or [])[:2]})
         skips = self.rt.db.q("SELECT ts, msg FROM at_log WHERE run_id=? AND kind IN ('cycle','skip','risk') ORDER BY id DESC LIMIT 25", (run["id"],))
+        O = self.opportunity(run)
+        opp = {"범위": O["scope"], "거래일": O["days"], "추천 횟수": O["cycles"], "추천 종목": O["picks"], "산 종목": O["bought"], "매수율%": O["buy_rate"],
+               "건너뛴 이유별(결과 = 그 뒤 실제로 어땠는지, 비용 뺀 수익률)": [
+                   {"이유": r["label"], "건수": r["n"], "결과 나온 건수": r["graded"], "평균%": r["avg"], "이익 비율%": r["win"]} for r in O["reasons"]],
+               "앱의 판단": self.opp_changes(run, O, self._since_ver(run))[1]}
         keys = {k: {"설명": v[3], "범위": "참/거짓" if v[2] is bool else "HH:MM" if v[2] == "hm" else f"{v[0]}~{v[1]}", "지금": run["params"].get(k)}
                 for k, v in PLAN_KEYS.items()}
         ask = (f"내 AI 자동매매({run['name']}, {'국내' if run['mkt'] == 'kr' else '미국'} {STYLES[run['style']]['label']}, "
                f"{'실전' if run['mode'] == 'real' else '모의'})의 매매 기록을 복기해 줘.\n"
                "1) 먼저 한국어로 짧게: 첫 줄에 결론, 이어서 '- ' 항목으로 잘된 점, 손실 원인(종목 선정·산 시간·목표와 손절 폭·비중), 눈에 띄는 패턴.\n"
                "2) 그다음 플랜에서 바꿀 값을 제안해. 표본이 8건 미만인 조건만 보고 바꾸지 마. 근거가 약하면 changes를 비워. 한 번에 최대 3개.\n"
+               "   매수가 너무 적으면 '기회 분석'을 봐: 건너뛴 종목이 그 뒤 실제로 벌었을 때(결과 8건 이상)만 그 기준을 한 단계 낮추고, "
+               "돈이 모자라 1주를 못 산 경우가 많으면 종목 수를 줄여 1회 비중을 키우는 쪽을 봐. 잃고 있는 중에는 기준을 낮추지 마.\n"
                "3) 마지막에 아래 JSON 하나를 ```json 코드 블록으로. key는 '바꿀 수 있는 값'에 있는 것만, to는 범위 안에서.\n"
                '{"summary":"한 줄 요약","changes":[{"key":"min_win_prob","to":60,"why":"숫자를 넣은 근거 한 줄"}]}\n'
                "수익을 장담하는 말은 하지 마. 웹 검색은 하지 마.")
         data = {"기준시각": self._now(), "운용": {"쓸 돈": run["budget"], "통화": "원" if run["mkt"] == "kr" else "달러", "기간": f"{run['start_date']}~{run['end_date']}",
                                              "플랜 판": run["ver"], "지금 돈": self.money(run)},
-                "성적": st, "바꿀 수 있는 값": keys, "끝난 거래(최근 60건)": trades, "최근 판단 기록": skips,
+                "성적": st, "기회 분석": opp, "바꿀 수 있는 값": keys, "끝난 거래(최근 60건)": trades, "최근 판단 기록": skips,
                 "플랜 변경 이력": self.changes(run["id"])}
         return f"자동매매 복기 · {run['name']}", ask, data
 
@@ -1223,11 +1462,14 @@ class AutoTrade:
                 changes.append({"key": key, "label": PLAN_KEYS[key][3], "from": run["params"].get(key), "to": to, "why": str(c.get("why") or "")[:200]})
         body = text.split("```json")[0].strip()
         summary = str(j.get("summary") or "").strip() or (body.splitlines()[0] if body else "AI 복기")
-        return self._save_proposal(run, "ai", summary, changes, {"model": model, "usd": usd}, body[:6000])
+        pr = self._save_proposal(run, "ai", summary, changes, {"model": model, "usd": usd}, body[:6000])
+        if d.get("auto"):
+            self._auto_apply(run, pr, "AI 복기")
+        return pr
 
     def _ai_review_bg(self, rid):
         try:
-            for _ in self.rt.ai.stream("auto", {"run_id": rid}):
+            for _ in self.rt.ai.stream("auto", {"run_id": rid, "auto": True}):
                 pass
         except Exception as e:
             self.rt.db.log("system", "error", f"자동매매 AI 복기 오류: {e}", self._now())
@@ -1300,11 +1542,13 @@ class AutoTrade:
         m["equity"] = round(m["cash"] + m["open_value"], 2)
         m["ret_pct"] = round(m["equity"] / run["budget"] * 100 - 100, 2)
         b = self.real_broker()[0] if run["mode"] == "real" else None
+        O = self.opportunity(run)
         return {"run": s, "params": run["params"], "plan": plan_text(run), "open": opens, "closed": recent, "stats": st,
                 "equity": self.rt.db.q("SELECT day, equity FROM at_equity WHERE run_id=? ORDER BY day", (rid,)),
                 "log": log, "proposals": [self._proposal(x["id"]) for x in props], "changes": self.changes(rid),
                 "next": {"ok": ok, "why": why, "busy": bool(th and th.is_alive())},
                 "now": self.now(run) if run["status"] != "ended" else None, "ready": self.ready(),
+                "opp": dict({k: v for k, v in O.items() if k != "items"}, notes=self.opp_changes(run, O, self._since_ver(run))[1]),
                 "broker": getattr(b, "label", None), "session": self._session(run["mkt"]),
                 "keys": {k: v[3] for k, v in PLAN_KEYS.items()}}
 

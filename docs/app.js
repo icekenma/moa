@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.0747";
+const UI_VERSION = "261119.0805";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1775,13 +1775,28 @@ pages.invest = {
           : `<div class="empty small">아직 받은 추천이 없어요.${N.next.kind === "at" ? `<br>첫 추천은 ${esc(N.next.text)}에 받아요.` : ""}</div>`}
       </section>`;
   },
+  // 분석 탭: 추천받은 종목을 얼마나 샀는지, 왜 건너뛰었는지, 건너뛴 종목이 그 뒤 실제로 어땠는지
+  atOppHtml(d) {
+    const O = d.opp;
+    if (!O || !O.cycles) return "";
+    const res = (x) => (x.graded ? `<span class="${tone(x.avg)}">${pct(x.avg, 2)}</span><small>${x.graded}건 · ${x.win}% 이익</small>` : `<small>결과 대기</small>`);
+    return `<section class="card at-opp">
+        <div class="card-head"><h2>기회 분석</h2><span class="tiny">${esc(O.scope)} · ${O.days}거래일 · 추천 ${O.cycles}번</span></div>
+        <div class="sc-kpi"><div><span>추천받은 종목</span><b>${O.picks}</b></div><div><span>산 종목</span><b>${O.bought}<small> · 하루 ${O.per_day}건</small></b></div><div><span>매수율</span><b>${O.buy_rate}%</b></div></div>
+        ${(O.notes || []).length ? `<ul class="at-notes">${O.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+        ${O.reasons.length ? `<div class="at-tbl at-opp-t"><div class="at-tr at-th"><span>건너뛴 이유</span><span>건수</span><span>그 뒤 실제 결과</span></div>
+          ${O.reasons.map((x) => `<div class="at-tr"><span>${esc(x.label)}</span><span>${x.n}</span><span class="at-opp-r">${res(x)}</span></div>`).join("")}</div>` : ""}
+        <div class="tiny">'그 뒤 실제 결과'는 건너뛴 종목을 AI가 낸 목표·손절대로 샀다고 쳤을 때의 수익률(비용 뺀 값)이에요. 이 결과가 8건 이상 쌓이고 벌었을 때만 그 기준을 한 단계 낮추자고 해요. 돈이 모자라 못 산 경우는 결과를 기다리지 않고 종목 수를 줄이는 안을 내요.</div>
+      </section>`;
+  },
   atPropHtml(p, mkt) {
     const pend = p.status === "pending";
     const stLbl = { applied: "반영함", rejected: "반영 안 함", none: "바꿀 것 없음", pending: "승인 대기" }[p.status] || p.status;
     return `<section class="card at-prop ${pend ? "pend" : ""}" data-prop="${p.id}">
       <div class="card-head"><h2>${p.source === "ai" ? "AI 복기 개선안" : "자동 분석 개선안"}</h2><span class="tag ${pend ? "warn" : ""}">${stLbl}</span></div>
       <div class="small">${esc(p.summary)}</div>
-      ${p.changes.length ? `<div class="at-chg">${p.changes.map((c) => `<div><b>${esc(c.label || c.key)}</b><span class="at-arrow">${esc(String(c.from))} → <em>${esc(String(c.to))}</em></span><span class="tiny">${esc(c.why || "")}</span></div>`).join("")}</div>` : ""}
+      ${p.changes.length ? `<div class="at-chg">${p.changes.map((c) => `<div><b>${esc(c.label || c.key)}${c.loosen ? ` <span class="tag">매수 늘리기</span>` : ""}</b><span class="at-arrow">${esc(String(c.from))} → <em>${esc(String(c.to))}</em></span><span class="tiny">${esc(c.why || "")}</span></div>`).join("")}</div>` : ""}
+      ${((p.stats || {}).notes || []).length ? `<ul class="at-notes">${p.stats.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
       ${p.text ? `<details class="at-more"><summary>AI 복기 전문 보기</summary><div class="ai-ans">${mdLite(p.text)}</div></details>` : ""}
       ${pend ? `<div class="grid2"><button type="button" class="btn" data-dec="reject">반영 안 함</button><button type="button" class="btn dark" data-dec="apply">승인하고 반영</button></div>` : `<div class="tiny">${esc((p.decided_at || p.ts).replace("T", " ").slice(5, 16))}</div>`}
     </section>`;
@@ -1826,7 +1841,13 @@ pages.invest = {
       $("#atCsv").onclick = () => run(async () => bkSave(await apiBlob(`/api/auto/runs/${r.id}/export`), `자동매매_${r.id}.csv`));
     } else if (A.tab === "stat") {
       const hist = d.proposals.filter((p) => p.status !== "pending");
-      el.innerHTML = !S.n ? `<section class="card"><div class="empty">거래가 끝나면 성적이 쌓여요.<br>10건부터 분석할 수 있고, ${d.params.review_every}건마다 스스로 분석해요.</div></section>` : `
+      const canRev = S.n >= 10 || (d.opp && d.opp.cycles >= 3);
+      el.innerHTML = !S.n ? `${d.opp && d.opp.cycles ? `<div class="tiny" style="padding:0 3px">끝난 거래가 아직 없어 성적표는 비어 있어요. 대신 추천을 얼마나 샀는지부터 봐요.</div>`
+          : `<section class="card"><div class="empty">거래가 끝나면 성적이 쌓여요.<br>${d.params.review_every}건 또는 ${d.params.review_days || 5}거래일마다 스스로 분석해요.</div></section>`}
+        ${this.atOppHtml(d)}
+        ${d.opp && d.opp.cycles ? `<button type="button" class="btn wide" id="atRev" ${canRev ? "" : "disabled"}>지금 분석하기</button>
+        <div class="tiny" style="padding:0 3px">거래가 없어도 추천이 3번 쌓이면 '왜 못 샀는지'부터 분석해요(무료).</div>` : ""}
+        ${hist.length ? `<div class="sec-title">지난 분석</div>${hist.map((p) => this.atPropHtml(p, mkt)).join("")}` : ""}` : `
         <section class="card">
           <div class="sc-kpi"><div><span>승률</span><b>${S.win_rate}%</b></div><div><span>평균 수익률</span><b class="${tone(S.avg_pct)}">${pct(S.avg_pct, 2)}</b></div><div><span>번 돈 ÷ 잃은 돈</span><b>${S.pf == null ? "-" : S.pf >= 99 ? "손실 없음" : S.pf}</b></div>
             <div><span>거래</span><b>${S.n}건</b></div><div><span>최대 낙폭</span><b>${S.mdd_pct ?? "-"}%</b></div><div><span>확정 손익</span><b class="${tone(S.pnl)}">${M(S.pnl, true)}</b></div></div>
@@ -1835,8 +1856,9 @@ pages.invest = {
         </section>
         ${(d.stats.groups || []).filter((g) => g.rows.length > 1 || g.label === "파는 사유").map((g) => `<section class="card tight"><div class="card-head" style="padding-top:8px"><h2>${esc(g.label)}별</h2></div>
           <div class="at-tbl"><div class="at-tr at-th"><span></span><span>거래</span><span>승률</span><span>평균</span></div>${g.rows.sort((a, b) => b.n - a.n).map((x) => `<div class="at-tr"><span>${esc(x.key)}</span><span>${x.n}</span><span>${x.win_rate}%</span><span class="${tone(x.avg_pct)}">${pct(x.avg_pct, 2)}</span></div>`).join("")}</div></section>`).join("")}
-        <div class="grid2"><button type="button" class="btn" id="atRev" ${S.n < 10 ? "disabled" : ""}>지금 분석하기</button><button type="button" class="btn ai-btn" id="atAi" ${S.n < 5 ? "disabled" : ""}><span class="ai-spark" aria-hidden="true">✦</span>AI 복기</button></div>
-        <div class="tiny" style="padding:0 3px">'지금 분석하기'는 조건별 성적으로 고칠 값을 찾아요(무료). 'AI 복기'는 Claude가 기록 전체를 읽고 개선안을 내요(유료). 어느 쪽이든 승인해야 반영돼요.</div>
+        ${this.atOppHtml(d)}
+        <div class="grid2"><button type="button" class="btn" id="atRev" ${canRev ? "" : "disabled"}>지금 분석하기</button><button type="button" class="btn ai-btn" id="atAi" ${S.n < 5 ? "disabled" : ""}><span class="ai-spark" aria-hidden="true">✦</span>AI 복기</button></div>
+        <div class="tiny" style="padding:0 3px">'지금 분석하기'는 조건별 성적과 건너뛴 종목의 결과로 고칠 값을 찾아요(무료). 'AI 복기'는 Claude가 기록 전체를 읽고 개선안을 내요(유료). 어느 쪽이든 승인해야 반영돼요.</div>
         ${hist.length ? `<div class="sec-title">지난 분석</div>${hist.map((p) => this.atPropHtml(p, mkt)).join("")}` : ""}`;
       if ($("#atRev")) $("#atRev").onclick = async () => { A.d = await run(() => api("POST", `/api/auto/runs/${r.id}/review`), "분석했어요. 현황에서 개선안을 확인해요"); A.tab = "now"; this.auto($("#iv")); };
       if ($("#atAi")) $("#atAi").onclick = () => { aiSheet("auto", { run_id: r.id }); sheet.addEventListener("close", () => { if (investState.tab === "auto") this.auto($("#iv")); }, { once: true }); };
@@ -1847,9 +1869,17 @@ pages.invest = {
           <ol class="at-plan">${d.plan.map((s) => `<li><b>${esc(s.t)}</b><span>${esc(s.d)}</span></li>`).join("")}</ol></section>
         <section class="card tight"><div class="card-head" style="padding-top:8px"><h2>세부 값</h2>${r.status === "ended" ? "" : `<button type="button" class="link" id="atEdit">직접 고치기</button>`}</div>
           <dl class="dt-rows">${Object.entries(d.keys).map(([k, l]) => `<div><dt>${esc(l)}</dt><dd>${esc(String(val(k)))}</dd></div>`).join("")}</dl></section>
+        ${r.status === "ended" ? "" : `<section class="card">
+          <div class="card-head"><div><h2>개선안 스스로 반영</h2><div class="tiny">${r.mode === "real" ? "실전은 개선안을 직접 승인해야 반영돼요." : "모의에서만 켤 수 있어요. 켜면 스스로 낸 개선안을 바로 반영하고 알림을 보내요. 바뀐 내용은 아래 이력에 남고, 언제든 직접 고칠 수 있어요."}</div></div>
+            <button type="button" class="switch" role="switch" id="atAuto" aria-checked="${!!p.auto_apply && r.mode !== "real"}" aria-label="개선안 스스로 반영" ${r.mode === "real" ? "disabled" : ""}><span></span></button></div>
+          <div class="tiny">스스로 분석하는 때: 끝난 거래 ${p.review_every}건마다, ${p.review_days || 5}거래일마다, 그리고 이틀째 한 건도 못 샀을 때.</div></section>`}
         <div class="sec-title">바뀐 이력</div>
         <section class="card tight"><div class="list">${d.changes.slice().reverse().map((c) => `<div class="item"><span class="ico">${c.ver}판</span><span class="main"><span class="at-msg">${c.changes.length ? c.changes.map((x) => `${esc(x.label || x.key)} ${esc(String(x.from))} → ${esc(String(x.to))}`).join(", ") : "처음 플랜"}</span><span class="sub">${esc(c.ts.replace("T", " ").slice(5, 16))} · ${SRC[c.source] || c.source}</span></span></div>`).join("")}</div></section>`;
       if ($("#atEdit")) $("#atEdit").onclick = () => this.atEdit();
+      if ($("#atAuto")) $("#atAuto").onclick = async () => {
+        try { A.d = await run(() => api("PUT", `/api/auto/runs/${r.id}/params`, { auto_apply: !p.auto_apply }), p.auto_apply ? "이제 승인해야 반영해요" : "개선안을 스스로 반영해요(모의)"); } catch (e) { return; }
+        this.atTab();
+      };
     }
     el.onclick = async (e) => {
       const b = e.target.closest("[data-dec]");

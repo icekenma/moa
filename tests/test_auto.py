@@ -598,6 +598,204 @@ def test_now_us_shows_korean_time(env, monkeypatch):
     assert n["clock"] == {"kst": "22:00", "local": "08:00", "left_min": 0} and n["today"]["limit"] == 60.0
 
 
+def _cyc(env, rid, pid, picks, nets=None, stance="보통"):
+    """추천 한 번을 흘려보내고, 그 종목들의 '그 뒤 실제 결과'(추천 성적표)를 넣는다."""
+    n = env.at._enter(env.at._run(rid), {"id": pid, "stance": stance, "view": "지수 보합", "picks": picks}, {"usd": 0.05})
+    for i, x in enumerate(picks):
+        if nets and nets[i] is not None:
+            env.rt.db.x("INSERT INTO ai_outcomes(pick_id,idx,ts,mkt,model,sym,status,result,net_pct) VALUES(?,?,?,?,?,?,?,?,?)",
+                        (pid, i, f"{env.day}T10:00:00", "kr", "m", x["sym"], "done", "익절" if nets[i] > 0 else "손절", nets[i]))
+    return n
+
+
+def test_opportunity_counts_skips_and_joins_what_happened_next(env):
+    """기회 분석: 건너뛴 이유를 코드로 남기고, 그 종목들이 그 뒤 실제로 어땠는지 붙인다."""
+    at = env.at
+    rid = env.run(budget=3_000_000)
+    _cyc(env, rid, 11, [env.pick("005930"), env.pick("000660", win_prob=52), env.pick("035420", score=40)], [1.2, 0.8, -1.5])
+    env.day = "2026-11-19"
+    _cyc(env, rid, 12, [env.pick("000660", win_prob=50), env.pick("035420", target_pct=1.0, stop_pct=1.5)], [None, 0.4])
+    _cyc(env, rid, 13, [env.pick("000660"), env.pick("035420")], [0.9, -0.3], stance="관망")
+    at.log(rid, "cycle", "추천을 받지 못했어요: 오류")                       # 결과 없는 기록은 세지 않는다
+    dec = at.rt.db.q("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' AND data IS NOT NULL ORDER BY id", (rid,))
+    d0 = json.loads(dec[0]["data"])["decisions"]
+    assert [(q["act"], q.get("code")) for q in d0] == [("buy", None), ("skip", "winprob"), ("skip", "score")] and d0[1]["wp"] == 52
+    O = at.opportunity(at._run(rid))
+    assert (O["days"], O["cycles"], O["picks"], O["bought"], O["buy_rate"], O["per_day"]) == (2, 3, 7, 1, 14, 0.5)
+    R = {r["code"]: r for r in O["reasons"]}
+    assert R["winprob"] == {"n": 2, "graded": 1, "avg": 0.8, "win": 100, "code": "winprob", "label": "승률 기준 미달"}
+    assert R["score"]["avg"] == -1.5 and R["rr"]["n"] == 1 and R["rr"]["avg"] == 0.4 and R["watch"] == {"n": 2, "graded": 2, "avg": 0.3, "win": 50, "code": "watch", "label": "AI가 관망 권함"}
+    assert O["skipped"] == {"n": 6, "graded": 5, "avg": 0.06, "win": 60} and O["reasons"][0]["n"] == 2
+    # 예전 기록(코드 없이 글만 있는 것)도 이유를 알아낸다
+    from moa.autotrade import skip_code
+    assert skip_code({"why": "승률 50% < 기준 55%"}) == "winprob" and skip_code({"why": "배정 금액(165,000)으로 1주를 못 삼"}) == "qty"
+    assert skip_code({"why": "추천가보다 0.80% 올라 쫓아가지 않음"}) == "chase" and skip_code({"why": "?"}) == "etc" and skip_code({"code": "full", "why": "승률"}) == "full"
+    # 자세히 화면과 AI 복기 자료에 실린다
+    d = at.detail(rid)
+    assert d["opp"]["picks"] == 7 and "items" not in d["opp"] and isinstance(d["opp"]["notes"], list)
+
+
+def test_too_few_trades_fixes_money_shortage_first(env):
+    """돈이 모자라 1주를 못 사는 경우: 결과를 기다리지 않고 종목 수를 줄여 한 번에 쓰는 돈을 키우자고 한다(거래가 0건이어도)."""
+    at = env.at
+    rid = env.run(budget=1_000_000)                                        # 3종목 · 33% · 검증 단계 절반 → 한 번에 16.5만
+    with pytest.raises(ValueError):
+        at.review(rid)                                                    # 추천이 3번도 안 쌓였으면 분석하지 않는다
+    for i in range(3):
+        if i == 2:
+            env.day = "2026-11-19"
+        assert _cyc(env, rid, 20 + i, [env.pick("035420"), env.pick("000660", win_prob=52)]) == 0     # 20만 원짜리는 못 삼
+    pr = at.review(rid)
+    ch = {c["key"]: c for c in pr["changes"]}
+    assert pr["status"] == "pending" and ch["max_positions"]["to"] == 2 and ch["per_trade_pct"]["to"] == 50.0 and ch["max_positions"]["loosen"] is True
+    assert "1주를 못 사" in ch["max_positions"]["why"] and "200,000원" in ch["max_positions"]["why"] and "min_win_prob" not in ch   # 승률 기준은 결과가 없어 건드리지 않는다
+    assert pr["summary"].startswith("추천 6종목 중 0종목 매수") and any("판단하지 않아요" in n for n in pr["stats"]["notes"]) and pr["stats"]["opp"]["buy_rate"] == 0
+    at.decide(pr["id"], "apply")
+    p = at._run(rid)["params"]
+    assert (p["max_positions"], p["per_trade_pct"]) == (2, 50.0)
+    assert _cyc(env, rid, 30, [env.pick("035420")]) == 1                    # 이제 25만까지 살 수 있다
+    # 더 줄일 수 없으면 '쓸 돈을 늘려야 한다'고만 알린다
+    at.edit(rid, {"max_positions": 1})
+    env.px["035420"] = 900_000.0
+    for i in range(3):
+        _cyc(env, rid, 40 + i, [env.pick("035420")])
+    at.rt.db.x("DELETE FROM at_trades WHERE run_id=?", (rid,))
+    for i in range(3):
+        _cyc(env, rid, 50 + i, [env.pick("035420")])
+    ch2, notes = at.opp_changes(at._run(rid), at.opportunity(at._run(rid)), [])
+    assert ch2 == [] and any("쓸 돈을 늘려야" in n for n in notes)
+
+
+def test_too_few_trades_loosens_only_with_evidence(env):
+    """기준을 낮추는 것은 건너뛴 종목이 실제로 벌었을 때만. 잃었으면 유지하고, 결과가 모자라면 기다리고, 바닥 아래로는 안 내린다."""
+    at = env.at
+    rid = env.run(budget=3_000_000)
+    run = lambda: at._run(rid)
+    opp = lambda rows=(): at.opp_changes(run(), at.opportunity(run()), list(rows))
+
+    def feed(base_id, n, nets, **kw):
+        for i in range(n):
+            env.day = f"2026-11-{18 + i % 3:02d}"
+            _cyc(env, rid, base_id + i, [env.pick("000660", **kw)], [nets[i % len(nets)]])
+    # 승률 52%라 건너뛴 9건이 그 뒤 꾸준히 벌었다 → 55 → 50
+    feed(100, 9, [0.9, 0.6, -0.2], win_prob=52)
+    ch, notes = opp()
+    assert [(c["key"], c["from"], c["to"]) for c in ch] == [("min_win_prob", 55, 50)] and "9건은 평균 +0.43%" in ch[0]["why"] and "67%가 이익" in ch[0]["why"]
+    assert any("추천 9종목 중 0종목만" in n for n in notes)
+    # 잃고 있는 중이면 낮추지 않는다
+    losing = [{"pnl": -1000.0, "pnl_pct": -1.0, "fees": 10, "mfe_pct": 0.2, "mae_pct": -1.2, "reason": "손절"}] * 8
+    ch, notes = opp(losing)
+    assert ch == [] and any("잃는 구간" in n for n in notes)
+    # 같은 조건인데 건너뛴 종목이 잃었다 → 유지가 맞다고 알린다
+    at.rt.db.x("UPDATE ai_outcomes SET net_pct=-0.7, result='손절'")
+    ch, notes = opp()
+    assert ch == [] and any("유지하는 게 맞아요" in n for n in notes)
+    # 결과가 아직 모자라면 기다린다
+    at.rt.db.x("DELETE FROM ai_outcomes WHERE pick_id>102")
+    ch, notes = opp()
+    assert ch == [] and any("결과가 나온 것이 3건이라 아직 판단하지 않아요" in n for n in notes)
+    # 기준에서 멀리 떨어진 종목(승률 40%)의 결과는 근거로 쓰지 않는다
+    at.rt.db.x("DELETE FROM at_log WHERE run_id=? AND kind='cycle'", (rid,))
+    at.rt.db.x("DELETE FROM ai_outcomes")
+    feed(200, 9, [1.5], win_prob=40)
+    assert opp()[0] == []
+    # 바닥: 처음 플랜보다 10%p 넘게는 내리지 않는다
+    at.rt.db.x("DELETE FROM at_log WHERE run_id=? AND kind='cycle'", (rid,))
+    at.edit(rid, {"min_win_prob": 45})
+    feed(300, 9, [1.5], win_prob=44)
+    ch, notes = opp()
+    assert ch == [] and run()["params"]["min_win_prob"] == 45
+    # 점수·손익비·추격·관망도 같은 방식(관망은 문턱이 더 높다)
+    at.rt.db.x("DELETE FROM at_log WHERE run_id=? AND kind='cycle'", (rid,))
+    at.edit(rid, {"min_win_prob": 55})
+    feed(400, 9, [0.8], score=55)
+    feed(420, 9, [0.8], target_pct=2.0, stop_pct=1.5)
+    feed(440, 6, [0.8], entry_price=140000)
+    keys = {c["key"]: c["to"] for c in opp()[0]}
+    assert keys == {"min_score": 55, "min_rr": 1.3, "chase_pct": 0.8}
+    at.rt.db.x("DELETE FROM at_log WHERE run_id=? AND kind='cycle'", (rid,))
+    for i in range(12):
+        env.day = f"2026-11-{18 + i % 3:02d}"
+        _cyc(env, rid, 500 + i, [env.pick("000660")], [0.2], stance="관망")
+    assert opp()[0] == [] and any("쉬는 게 맞았어요" in n for n in opp()[1])              # 조금 번 정도로는 관망을 풀지 않는다
+    at.rt.db.x("UPDATE ai_outcomes SET net_pct=0.9 WHERE pick_id>=500")
+    assert [(c["key"], c["to"]) for c in opp()[0]] == [("skip_watch", False)]
+    # 충분히 사고 있으면 아무것도 낮추지 않는다
+    at.rt.db.x("DELETE FROM at_log WHERE run_id=? AND kind='cycle'", (rid,))
+    env.day = "2026-11-18"
+    _cyc(env, rid, 600, [env.pick("005930"), env.pick("000660", win_prob=52)], [1.0, 1.0])
+    _cyc(env, rid, 601, [env.pick("035420"), env.pick("000660", win_prob=52)], [1.0, 1.0])
+    _cyc(env, rid, 602, [env.pick("000660", win_prob=52)], [1.0])
+    ch, notes = opp()
+    assert ch == [] and any("모자란 상태는 아니에요" in n for n in notes)
+
+
+def test_daily_review_runs_by_days_and_paper_can_apply_itself(env, monkeypatch):
+    """거래 건수와 상관없이 정해진 거래일마다(이틀째 한 건도 못 샀으면 바로) 스스로 분석한다. 모의에서 켜 두면 스스로 반영한다."""
+    at = env.at
+    rid = env.run(budget=1_000_000)
+    notes = []
+    monkeypatch.setattr(env.rt, "notify", lambda m: notes.append(m))
+    close = lambda: (setattr(env, "open", False), setattr(env, "hm", "16:00"), at.tick(force=True), setattr(env, "open", True), setattr(env, "hm", "10:30"))
+    props = lambda: at.rt.db.q("SELECT status, source, changes FROM at_proposals WHERE run_id=? ORDER BY id", (rid,))
+    # 첫날: 두 번 추천받았지만 돈이 모자라 못 삼 → 아직 하루뿐이라 지켜본다
+    _cyc(env, rid, 1, [env.pick("035420")])
+    _cyc(env, rid, 2, [env.pick("035420")])
+    close()
+    assert props() == [] and at._run(rid)["last_review_day"] is None
+    # 둘째 날도 0건 → 장 마감 뒤 바로 분석해 개선안을 낸다(승인 대기 + 알림)
+    env.day = "2026-11-19"
+    _cyc(env, rid, 3, [env.pick("035420")])
+    close()
+    ps = props()
+    assert len(ps) == 1 and ps[0]["status"] == "pending" and "max_positions" in ps[0]["changes"] and at._run(rid)["last_review_day"] == "2026-11-19"
+    assert any("개선안이 나왔어요" in m for m in notes) and at._run(rid)["params"]["max_positions"] == 3     # 승인 전에는 그대로
+    close()
+    assert len(props()) == 1                                                                              # 같은 날 두 번 하지 않는다
+    # 모의에서 '스스로 반영'을 켜면 다음 점검부터 바로 반영한다(판이 올라가고 이력·알림이 남는다)
+    assert at.edit(rid, {"auto_apply": True})["params"]["auto_apply"] is True
+    for d in ("2026-11-20", "2026-11-23"):
+        env.day = d
+        _cyc(env, rid, 10 + int(d[-2:]), [env.pick("035420")])
+        _cyc(env, rid, 40 + int(d[-2:]), [env.pick("035420")])
+        close()
+    run = at._run(rid)
+    assert (run["params"]["max_positions"], run["params"]["per_trade_pct"], run["ver"]) == (2, 50.0, 2) and props()[-1]["status"] == "applied"
+    assert any("스스로 반영했어요(모의)" in m for m in notes)
+    assert at.rt.db.one("SELECT msg FROM at_log WHERE run_id=? AND msg LIKE '%스스로 반영%'", (rid,)) and at.changes(rid)[-1]["source"] == "rule"
+    assert "스스로 반영해요" in at.detail(rid)["plan"][-1]["d"]
+    # 정해진 거래일(기본 5일)마다도 돈다: 잘 사고 있으면 '지금 값 유지'로 남는다
+    n0 = len(props())
+    for i, d in enumerate(("2026-11-24", "2026-11-25", "2026-11-26", "2026-11-27", "2026-11-30")):
+        env.day = d
+        _cyc(env, rid, 100 + i, [env.pick("005930")])
+        at.rt.db.x("UPDATE at_trades SET status='closed', exit_day=?, pnl=100, pnl_pct=0.5 WHERE run_id=? AND status='open'", (d, rid))
+        close()
+    ps = props()
+    assert len(ps) == n0 + 1 and ps[-1]["status"] == "none" and at._run(rid)["last_review_day"] == "2026-11-30"
+    # 실전은 스스로 반영을 켤 수 없고, AI 개선안으로도 이 값은 못 바꾼다
+    at.rt.db.x("UPDATE at_runs SET mode='real' WHERE id=?", (rid,))
+    at.edit(rid, {"auto_apply": False})
+    with pytest.raises(ValueError):
+        at.edit(rid, {"auto_apply": True})
+    at.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.auto_apply',json('true')) WHERE id=?", (rid,))
+    assert at._auto_apply(at._run(rid), {"id": 1, "status": "pending", "changes": [{}]}, "x") is False      # 실전이면 켜져 있어도 반영하지 않는다
+    assert "auto_apply" not in PLAN_KEYS and "review_days" not in PLAN_KEYS
+    assert at.edit(rid, {"review_days": 1})["params"]["review_days"] == 2
+
+
+def test_ai_review_gets_opportunity_data(env):
+    at = env.at
+    rid = env.run()
+    _seed(env, rid, 8)
+    for i in range(3):
+        _cyc(env, rid, 900 + i, [env.pick("000660", win_prob=52)], [0.5])
+    _, ask, data = at.review_context({"run_id": rid})
+    o = data["기회 분석"]
+    assert o["추천 종목"] == 3 and o["산 종목"] == 0 and o["건너뛴 이유별(결과 = 그 뒤 실제로 어땠는지, 비용 뺀 수익률)"][0] == {"이유": "승률 기준 미달", "건수": 3, "결과 나온 건수": 3, "평균%": 0.5, "이익 비율%": 100}
+    assert "기회 분석" in ask and "잃고 있는 중에는 기준을 낮추지 마" in ask and isinstance(o["앱의 판단"], list)
+
+
 def test_api(env):
     c = create_app(env.rt).test_client()
     o = c.get("/api/auto").get_json()

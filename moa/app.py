@@ -969,7 +969,11 @@ def create_app(rt, updater=None):
     @app.get("/api/invest/candles/<m>/<sym>")
     def invest_candles(m, sym):
         m = mkt_arg(m)
-        return jsonify(rt.invest.candles(m, sym_arg(m, sym), request.args.get("tf", "d")))
+        try:
+            n = int(request.args.get("n") or 120)
+        except ValueError:
+            n = 120
+        return jsonify(rt.invest.candles(m, sym_arg(m, sym), request.args.get("tf", "d"), n))
 
     @app.get("/api/invest/info/<m>/<sym>")
     def invest_info(m, sym):

@@ -2734,3 +2734,20 @@ def test_dividend_daily_collect_records_and_detects_changes(rt, monkeypatch):
     assert dv.daily_due(datetime(2026, 11, 23, 8, 5))
     c = create_app(rt).test_client()
     assert c.get("/api/div/events").status_code == 200 and "rows" in c.get("/api/div/history/us/SCHD").get_json()
+
+
+def test_candles_more_bars_for_zoom(rt, monkeypatch):
+    """크게 보기는 손으로 줄여 볼 수 있게 봉을 600개까지(평소 120). 공개 시세는 더 긴 기간을 받는다."""
+    from datetime import datetime as D
+    calls = []
+
+    def chart(sym, rng="1d", interval="5m", prepost=False, events=None):
+        calls.append(rng)
+        ts = [int(D(2020, 1, 1).timestamp()) + 86400 * i for i in range(800)]
+        return {"meta": {"gmtoffset": 0}, "timestamp": ts, "indicators": {"quote": [{"close": [100 + i % 7 for i in range(800)]}]}}
+    monkeypatch.setattr(rt.market, "_yh_chart", chart)
+    assert len(rt.invest.candles("us", "AAPL", "d")["bars"]) == 120 and calls[-1] == "6mo"
+    assert len(rt.invest.candles("us", "AAPL", "d", 600)["bars"]) == 600 and calls[-1] == "3y"
+    c = create_app(rt).test_client()
+    assert len(c.get("/api/invest/candles/us/AAPL?tf=d&n=9999").get_json()["bars"]) == 600
+    assert len(c.get("/api/invest/candles/us/AAPL?tf=d&n=x").get_json()["bars"]) == 120

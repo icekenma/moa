@@ -109,9 +109,12 @@ class Invest:
     TF = {"m1": ("1분", "minute", "1"), "m5": ("5분", "minute", "5"), "d": ("일", "daily", None),
           "w": ("주", "weekly", None), "mo": ("월", "monthly", None)}
 
-    def candles(self, mkt, sym, tf):
+    def candles(self, mkt, sym, tf, n=120):
+        """봉 자료. n: 돌려줄 봉 수(평소 120, 크게 보기에서 손으로 줄여 볼 때는 600까지)."""
         if tf not in self.TF:
             tf = "d"
+        n = max(120, min(600, int(n or 120)))
+        long = n > 120
         if mkt == "kr" and self.kr() is not None:
             def load():
                 cl = self.kr()
@@ -132,10 +135,12 @@ class Invest:
                             "v": int(num(r.get("trde_qty")))} for r in (d.get(lk) or []) if r.get("dt")]
                 out = [x for x in out if x["c"]]
                 out.sort(key=lambda x: x["t"])
-                return {"tf": tf, "bars": out[-120:], "source": "키움"}
-            return self.cache.get(("cd", sym, tf), 3 if self.TF[tf][1] == "minute" else 60, load, stale=600)
+                return {"tf": tf, "bars": out[-600:], "source": "키움"}
+            res = self.cache.get(("cd", sym, tf), 3 if self.TF[tf][1] == "minute" else 60, load, stale=600)
+            return dict(res, bars=(res.get("bars") or [])[-n:])
         ysym = sym if mkt == "us" else sym + (".KQ" if self.m.kr_market(sym) == "코스닥" else ".KS")
-        rng, iv = {"m1": ("1d", "1m"), "m5": ("5d", "5m"), "d": ("6mo", "1d"), "w": ("2y", "1wk"), "mo": ("10y", "1mo")}[tf]
+        rng, iv = ({"m1": ("1d", "1m"), "m5": ("1mo", "5m"), "d": ("3y", "1d"), "w": ("10y", "1wk"), "mo": ("max", "1mo")} if long else
+                   {"m1": ("1d", "1m"), "m5": ("5d", "5m"), "d": ("6mo", "1d"), "w": ("2y", "1wk"), "mo": ("10y", "1mo")})[tf]
 
         def load_y():
             res = self.m._yh_chart(ysym, rng, iv)
@@ -158,8 +163,8 @@ class Invest:
                     label = datetime.fromtimestamp(t).strftime("%Y-%m-%d")
                 out.append({"t": label, "o": g("open") or c, "h": g("high") or c,
                             "l": g("low") or c, "c": c, "v": int(g("volume") or 0)})
-            return {"tf": tf, "bars": out[-120:], "source": "공개 시세(지연)"}
-        return self.cache.get(("cdy", ysym, tf), 20 if self.TF[tf][1] == "minute" else 600, load_y, stale=3600)
+            return {"tf": tf, "bars": out[-n:], "source": "공개 시세(지연)"}
+        return self.cache.get(("cdy", ysym, tf, long), 20 if self.TF[tf][1] == "minute" else 600, load_y, stale=3600)
 
     # ---------- 종목 정보(기본) ----------
     def info(self, mkt, sym):

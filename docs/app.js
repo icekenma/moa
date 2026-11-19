@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261120.0711";
+const UI_VERSION = "261120.0731";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -5126,23 +5126,25 @@ const mkt = {
   zoom() {
     const D = this.d;
     if (!D || this.zv) return;
-    const Z = this.zv = { D, range: D.range === "1d" ? "m5" : D.range, cd: D.range === "1d" ? null : D.cd };
+    const Z = this.zv = { D, range: D.range === "1d" ? "m5" : D.range, cd: D.range === "1d" ? null : D.cd, win: null };
     const ov = document.createElement("div");
     ov.className = "cz";
     ov.setAttribute("role", "dialog"); ov.setAttribute("aria-modal", "true"); ov.setAttribute("aria-label", `${D.q.name} 차트 크게 보기`);
     ov.innerHTML = `<div class="cz-in"><div class="cz-top">
         <div class="cz-name"><b>${esc(D.q.name)}</b><span id="czPx"></span></div>
         ${seg("크게기간", [["m5", "5분"], ["d", "일"], ["w", "주"], ["mo", "월"]], Z.range, "cz-seg")}
+        <div class="cz-zm" role="group" aria-label="차트 확대·축소"><button type="button" data-cz="out" aria-label="축소(봉 더 많이)">−</button><button type="button" data-cz="reset" aria-label="처음 크기로">맞춤</button><button type="button" data-cz="in" aria-label="확대(봉 더 크게)">+</button></div>
         <button type="button" class="cz-x" id="czX" aria-label="크게 보기 닫기">${CLOSE_ICO}</button></div>
       <div class="cz-chart mk-chart" id="czChart"><div class="empty small loading">불러오는 중</div></div></div>`;
     document.body.appendChild(ov);
     Z.ov = ov; Z.prevOverflow = document.body.style.overflow; document.body.style.overflow = "hidden";
     const load = async () => {
       const r = Z.range;
-      try { const cd = await GET(`/api/invest/candles/${D.m}/${encodeURIComponent(D.sym)}?tf=${r}`); if (this.zv === Z && Z.range === r) { Z.cd = cd; this.drawZoom(); } }
+      try { const cd = await GET(`/api/invest/candles/${D.m}/${encodeURIComponent(D.sym)}?tf=${r}&n=600`); if (this.zv === Z && Z.range === r) { Z.cd = cd; this.drawZoom(); } }   // 앞쪽 봉이 늘어도 오른쪽 기준(end)이라 보던 구간은 그대로
       catch (e) { if (this.zv === Z && Z.range === r) { Z.cd = { bars: [], error: e.message }; this.drawZoom(); } }
     };
-    bindSeg(ov, "크게기간", (v) => { Z.range = v; Z.cd = v === D.range ? D.cd : null; $("#czChart").innerHTML = `<div class="empty small loading">불러오는 중</div>`; if (Z.cd) this.drawZoom(); load(); });
+    bindSeg(ov, "크게기간", (v) => { Z.range = v; Z.cd = null; Z.win = null; $("#czChart").innerHTML = `<div class="empty small loading">불러오는 중</div>`; load(); });
+    this.zoomGestures(Z);
     Z.close = () => {
       clearInterval(Z.timer); window.removeEventListener("resize", Z.fit); window.removeEventListener("keydown", Z.key); window.removeEventListener("hashchange", Z.close);
       document.body.style.overflow = Z.prevOverflow; ov.remove(); if (this.zv === Z) this.zv = null; $("#mkZoom")?.focus();
@@ -5153,8 +5155,83 @@ const mkt = {
     addEventListener("resize", Z.fit); addEventListener("keydown", Z.key); addEventListener("hashchange", Z.close);
     Z.timer = setInterval(() => { if (this.zv === Z && !document.hidden) load(); }, 20000);
     this.drawZoom();
-    if (!Z.cd) load();
+    load();
     $("#czX", ov).focus();
+  },
+  // 크게 보기의 손가락 동작: 두 손가락으로 벌리면 확대(봉이 커지고 적게), 오므리면 축소(봉이 작고 많이), 두 손가락으로 끌면 앞뒤로 옮김.
+  // 두 번 톡 누르면 처음 크기. 컴퓨터에서는 휠로 확대·축소, 가로 휠(또는 Shift+휠)로 옮긴다
+  zoomGestures(Z) {
+    const el = $("#czChart", Z.ov);
+    let pinch = null, raf = 0, lastTap = 0;
+    Z.pinching = () => !!pinch;
+    const total = () => ((Z.cd && Z.cd.bars) || []).length;
+    const redraw = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; this.drawZoom(); }); };
+    const frac = (x, y) => { const r = el.getBoundingClientRect(); return Math.max(0, Math.min(1, Z.ov.classList.contains("rot") ? (y - r.top) / r.height : (x - r.left) / r.width)); };
+    // 보이는 봉 수를 n으로 바꾸되, 손가락(또는 커서) 아래의 봉은 그 자리에 둔다
+    const setN = (n, f, from0, n0) => {
+      const T = total(); if (!T || !Z.win) return;
+      n = Math.max(Math.min(20, T), Math.min(T, n));
+      const anchor = from0 + f * n0;
+      const from = Math.max(0, Math.min(T - n, anchor - f * n));
+      Z.win = { n, end: T - from - n };
+      redraw();
+    };
+    const fromOf = () => total() - Z.win.end - Z.win.n;
+    const mid = (t) => [(t[0].clientX + t[1].clientX) / 2, (t[0].clientY + t[1].clientY) / 2];
+    const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    // 손가락이 닿은 그림을 움직이는 동안 지우면 손가락 신호가 끊긴다. 그래서 움직이는 동안은 그림을 늘이고 옮겨 보여 주고, 손을 떼면 그 구간으로 다시 그린다
+    const plan = (n, f, from0, n0) => {
+      const T = total();
+      n = Math.max(Math.min(20, T), Math.min(T, n));
+      return { n, from: Math.max(0, Math.min(T - n, from0 + f * n0 - f * n)) };
+    };
+    el.addEventListener("touchstart", (e) => {
+      if (e.touches.length === 2 && Z.win) {
+        e.preventDefault();
+        const [mx, my] = mid(e.touches);
+        pinch = { d: dist(e.touches), n: Z.win.n, from: fromOf(), f: frac(mx, my), mx, my, svg: $("svg", el), next: null };
+        if (pinch.svg) pinch.svg.style.transformOrigin = "0 0";
+        $("#cdCur", el)?.setAttribute("visibility", "hidden");
+      } else if (e.touches.length === 1) {
+        const now = Date.now();
+        if (now - lastTap < 280 && Z.win) { Z.win = null; redraw(); }
+        lastTap = now;
+      }
+    }, { passive: false });
+    el.addEventListener("touchmove", (e) => {
+      if (!pinch || e.touches.length < 2) return;
+      e.preventDefault();
+      const [mx, my] = mid(e.touches), r = el.getBoundingClientRect(), rot = Z.ov.classList.contains("rot");
+      const n = pinch.n * pinch.d / Math.max(10, dist(e.touches));
+      const drag = (rot ? (my - pinch.my) / r.height : (mx - pinch.mx) / r.width) * pinch.n;    // 끈 만큼 지난 봉 쪽으로
+      const nx = plan(n, pinch.f, pinch.from - drag, pinch.n);
+      pinch.next = nx;
+      if (pinch.svg) pinch.svg.style.transform = `scaleX(${(pinch.n / nx.n).toFixed(4)}) translateX(${(-(nx.from - pinch.from) / pinch.n * 100).toFixed(3)}%)`;
+    }, { passive: false });
+    const end = (e) => {
+      if (!pinch || e.touches.length >= 2) return;
+      const nx = pinch.next;
+      pinch = null;
+      if (nx) { Z.win = { n: nx.n, end: total() - nx.from - nx.n }; this.drawZoom(); }
+    };
+    el.addEventListener("touchend", end); el.addEventListener("touchcancel", end);
+    el.addEventListener("wheel", (e) => {
+      if (!Z.win) return;
+      e.preventDefault();
+      const T = total();
+      if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        const d = (e.shiftKey ? e.deltaY : e.deltaX) / 40 * Math.max(1, Z.win.n / 40);
+        Z.win = { n: Z.win.n, end: Math.max(0, Math.min(T - Z.win.n, Z.win.end - d)) };
+        return redraw();
+      }
+      setN(Z.win.n * Math.exp(e.deltaY / 400), frac(e.clientX, e.clientY), fromOf(), Z.win.n);
+    }, { passive: false });
+    Z.ov.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-cz]");
+      if (!b || !Z.win) return;
+      if (b.dataset.cz === "reset") { Z.win = null; return redraw(); }
+      setN(Z.win.n * (b.dataset.cz === "in" ? 0.67 : 1.5), 1, fromOf(), Z.win.n);      // 버튼은 가장 최근 봉을 기준으로
+    });
   },
   drawZoom() {
     const Z = this.zv;
@@ -5170,7 +5247,13 @@ const mkt = {
     const r = el.getBoundingClientRect(), k = 1.15;                    // SVG 1단위 ≈ 1.15px(글자 크기가 평소 차트와 비슷하게)
     const w = rot ? r.height : r.width, h = rot ? r.width : r.height;
     const W = Math.max(340, Math.round(w / k)), VH = 40, PH = Math.max(120, Math.round(h / k) - VH - 6 - 64);
-    const o = { W, PH, VH, N: Math.max(60, Math.min(240, Math.round(W / 6.5))), rot };
+    const o = { W, PH, VH, N: Math.max(60, Math.min(240, Math.round(W / 6.5))), rot, pinching: Z.pinching };
+    const T = (Z.cd.bars || []).length;
+    if (!Z.win) Z.win = { n: Math.min(T, o.N), end: 0 };
+    o.win = Z.win;
+    o.hint = `${Math.round(Z.win.n)}봉/${T}봉 · 두 손가락으로 벌리면 확대, 오므리면 축소, 끌면 앞뒤로 · 두 번 누르면 맞춤`;
+    const zm = $(".cz-zm", Z.ov);
+    if (zm) { zm.querySelector('[data-cz="in"]').disabled = Z.win.n <= Math.min(20, T); zm.querySelector('[data-cz="out"]').disabled = Z.win.n >= T; }
     const fmt = (n) => this.money(n, cur), mark = Z.range === D.range ? D.mark : null;
     el.innerHTML = candleChart(Z.cd, cur, fmt, mark, D.at, o);
     bindCandle(el, Z.cd, fmt, mark, o);
@@ -5249,25 +5332,35 @@ const mkt = {
 const ZOOM_ICO = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M10.5 7.5v6M7.5 10.5h6"/></svg>`;
 const CLOSE_ICO = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>`;
 const BELL = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>`;
-function maLine(bars, n, X, Y) {
-  const pts = [];
-  for (let i = n - 1; i < bars.length; i++) { let s2 = 0; for (let k = i - n + 1; k <= i; k++) s2 += bars[k].c; pts.push(`${pts.length ? "L" : "M"}${X(i).toFixed(1)},${Y(s2 / n).toFixed(1)}`); }
+// pre: 보이는 구간 바로 앞의 봉들(있으면 이동평균선이 화면 왼쪽 끝부터 이어진다)
+function maLine(bars, n, X, Y, pre = []) {
+  const all = pre.concat(bars), p = pre.length, pts = [];
+  for (let i = Math.max(n - 1, p); i < all.length; i++) { let s2 = 0; for (let k = i - n + 1; k <= i; k++) s2 += all[k].c; pts.push(`${pts.length ? "L" : "M"}${X(i - p).toFixed(1)},${Y(s2 / n).toFixed(1)}`); }
   return pts.join("");
 }
 // 추천 표시가 있으면 추천 시점이 보이게 구간을 잡는다
-function cdWin(cd, mark, N = 80) {
+function cdWin(cd, mark, N = 80, win = null) {
   const all = (cd && cd.bars) || [];
-  if (!mark) return { bars: all.slice(-N), ri: -1, ei: -1 };
+  if (win) {   // 크게 보기에서 손가락으로 넓히고 옮긴 구간
+    const n = Math.max(2, Math.min(all.length, Math.round(win.n))), from = Math.max(0, Math.min(all.length - n, all.length - Math.round(win.end) - n));
+    const bars = all.slice(from, from + n);
+    if (!mark) return { bars, ri: -1, ei: -1, from };
+    const daily = /^\d{4}-/.test((all[0] || {}).t || ""), key = (iso) => (daily ? iso.slice(0, 10) : `${iso.slice(5, 7)}/${iso.slice(8, 10)} ${iso.slice(11, 16)}`);
+    let ri = bars.findIndex((b) => b.t >= key(mark.ts));
+    if (!daily && ri > 0 && bars[ri].t > key(mark.ts)) ri -= 1;
+    return { bars, ri, ei: mark.end ? bars.findIndex((b) => b.t >= key(mark.end)) : -1, daily, from };
+  }
+  if (!mark) return { bars: all.slice(-N), ri: -1, ei: -1, from: Math.max(0, all.length - N) };
   const key = (iso, daily) => daily ? iso.slice(0, 10) : `${iso.slice(5, 7)}/${iso.slice(8, 10)} ${iso.slice(11, 16)}`;
   const daily = all.length && /^\d{4}-/.test(all[0].t);
   const rk = key(mark.ts, daily), ek = mark.end ? key(mark.end, daily) : null;
   let ri = all.findIndex((b) => b.t >= rk);
   if (!daily && ri > 0 && all[ri].t > rk) ri -= 1;  // 추천 시각이 들어 있는 봉
-  if (ri < 0 || (!daily && all[0].t > rk)) return { bars: all.slice(-N), ri: -1, ei: -1, gone: !daily };
+  if (ri < 0 || (!daily && all[0].t > rk)) return { bars: all.slice(-N), ri: -1, ei: -1, gone: !daily, from: Math.max(0, all.length - N) };
   const from = Math.max(0, Math.min(ri - Math.round(N / 8), all.length - N));
   const bars = all.slice(from, from + N);
   let ei = ek ? bars.findIndex((b) => b.t >= ek) : -1;
-  return { bars, ri: ri - from, ei, daily };
+  return { bars, ri: ri - from, ei, daily, from };
 }
 // 차트 표시의 범례: ◆ 추천, ▲ 매수, ▼ 매도. 채운 것이 실전, 테두리만 있는 것이 모의
 function atMarkLegend() {
@@ -5295,7 +5388,7 @@ function atMarkPoints(bars, evs) {
 }
 // o: 크게 보기에서 쓰는 크기(W·PH·VH는 SVG 단위, N은 보여 줄 봉 수)
 function candleChart(cd, cur, fmt, mark, evs, o = {}) {
-  const win = cdWin(cd, mark, o.N), bars = win.bars;
+  const win = cdWin(cd, mark, o.N, o.win), bars = win.bars;
   if (bars.length < 2) return `<div class="empty small">${esc((cd && cd.error) || "차트 자료가 아직 없어요")}</div>`;
   const W = o.W || 340, PH = o.PH || 150, VH = o.VH || 34, G = 6, n = bars.length, bw = W / n;
   const pts = atMarkPoints(bars, evs);
@@ -5340,11 +5433,11 @@ function candleChart(cd, cur, fmt, mark, evs, o = {}) {
   const bhi = Math.max(...bars.map((b) => b.h)), blo = Math.min(...bars.map((b) => b.l));
   const hiI = bars.findIndex((b) => b.h === bhi), loI = bars.findIndex((b) => b.l === blo);
   const lab = (i, v, below) => { const x = X(i), a = x < 60 ? "start" : x > W - 60 ? "end" : "middle"; return `<text x="${x.toFixed(1)}" y="${(Y(v) + (below ? 11 : -4)).toFixed(1)}" text-anchor="${a}" class="mk-lab">${fmt(v)}</text>`; };
-  return `<div class="cd-legend tiny"><span><i style="background:#F2A900"></i>5일선</span><span><i style="background:#8E44AD"></i>20일선</span></div>${pts.length ? `<div class="at-mk-lg tiny">${atMarkLegend()}</div>` : evs && evs.length ? `<div class="tiny at-mk-none">이 기간에는 자동매매 기록이 없어요. 5분·일 차트에서 볼 수 있어요.</div>` : ""}<div class="tiny cd-tip" id="cdTip">차트를 누르면 그날 시가·고가·저가·종가가 보여요</div>
+  return `<div class="cd-legend tiny"><span><i style="background:#F2A900"></i>5일선</span><span><i style="background:#8E44AD"></i>20일선</span></div>${pts.length ? `<div class="at-mk-lg tiny">${atMarkLegend()}</div>` : evs && evs.length ? `<div class="tiny at-mk-none">이 기간에는 자동매매 기록이 없어요. 5분·일 차트에서 볼 수 있어요.</div>` : ""}<div class="tiny cd-tip" id="cdTip">${o.hint || "차트를 누르면 그날 시가·고가·저가·종가가 보여요"}</div>
     <svg viewBox="0 0 ${W} ${PH + G + VH}" class="mk-svg cd-svg" role="img" aria-label="캔들 차트">
     ${body}${mk}${am}
-    <path d="${maLine(bars, 5, X, Y)}" fill="none" stroke="#F2A900" stroke-width="1.2"/>
-    <path d="${maLine(bars, 20, X, Y)}" fill="none" stroke="#8E44AD" stroke-width="1.2"/>
+    <path d="${maLine(bars, 5, X, Y, cd.bars.slice(Math.max(0, (win.from || 0) - 4), win.from || 0))}" fill="none" stroke="#F2A900" stroke-width="1.2"/>
+    <path d="${maLine(bars, 20, X, Y, cd.bars.slice(Math.max(0, (win.from || 0) - 19), win.from || 0))}" fill="none" stroke="#8E44AD" stroke-width="1.2"/>
     ${lab(hiI, bhi, false)}${lab(loI, blo, true)}
     <line x1="0" x2="${W}" y1="${PH + G / 2}" y2="${PH + G / 2}" stroke="var(--line2)" stroke-width=".5"/>
     <line class="lv-line" x1="0" x2="${W}" y1="${Y(bars[n - 1].c).toFixed(1)}" y2="${Y(bars[n - 1].c).toFixed(1)}" stroke="${bars[n - 1].c >= bars[n - 1].o ? "var(--up)" : "var(--down)"}"/>
@@ -5353,10 +5446,11 @@ function candleChart(cd, cur, fmt, mark, evs, o = {}) {
   </svg><div class="tiny cd-src">${esc(bars[0].t)} ~ ${esc(bars[bars.length - 1].t)} · ${esc(cd.source || "")}</div>`;
 }
 function bindCandle(el, cd, fmt, mark, o = {}) {
-  const svg = $("svg", el), bars = cdWin(cd, mark, o.N).bars;
+  const svg = $("svg", el), bars = cdWin(cd, mark, o.N, o.win).bars;
   if (!svg || bars.length < 2) return;
   const g = $("#cdCur", el), tip = $("#cdTip", el), W = o.W || 340, bw = W / bars.length;
   const at = (ev) => {
+    if (o.pinching && o.pinching()) return;
     const r = svg.getBoundingClientRect(), p = ev.touches ? ev.touches[0] : ev;
     // 크게 보기에서 화면을 90도 돌렸으면 손가락의 세로 위치가 차트의 가로 위치다
     const x = (o.rot ? (p.clientY - r.top) / r.height : (p.clientX - r.left) / r.width) * W;
@@ -5366,7 +5460,7 @@ function bindCandle(el, cd, fmt, mark, o = {}) {
     tip.innerHTML = `${esc(b.t)} 시 ${fmt(b.o)} 고 ${fmt(b.h)} 저 ${fmt(b.l)} 종 <b class="${tone(ch)}">${fmt(b.c)}</b> ${pct(ch, 2)}`;
   };
   svg.addEventListener("pointerdown", at); svg.addEventListener("pointermove", at);
-  svg.addEventListener("pointerleave", () => { g.setAttribute("visibility", "hidden"); tip.textContent = "차트를 누르면 그날 시가·고가·저가·종가가 보여요"; });
+  svg.addEventListener("pointerleave", () => { g.setAttribute("visibility", "hidden"); tip.textContent = o.hint || "차트를 누르면 그날 시가·고가·저가·종가가 보여요"; });
 }
 async function alertSheet(a) {
   const list = (await GET("/api/invest/alerts").catch(() => [])).filter((x) => x.sym === a.sym);

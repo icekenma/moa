@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261120.0642";
+const UI_VERSION = "261120.0711";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -243,12 +243,12 @@ document.addEventListener("visibilitychange", () => { if (document.hidden) lock.
 // ---------- 도구 ----------
 const safeUrl = (u) => (/^https?:\/\//i.test(String(u || "")) ? esc(u) : "#");  // javascript: 같은 주소는 링크로 만들지 않는다
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const won = (n) => (n == null || isNaN(n) ? "-" : Math.round(n).toLocaleString("ko-KR"));
+const won = (n) => (n == null || isNaN(n) ? "-" : Math.round(n).toLocaleString("ko-KR").replace("-", "−"));   // 화면용 빼기 기호(−)
 const shortWon = (n) => { const a = Math.abs(n); return a >= 10000 ? (a / 10000).toFixed(a >= 100000 ? 0 : 1).replace(/\.0$/, "") + "만" : won(a); };
-const signed = (n) => (n > 0 ? "+" : "") + won(n);
-const pct = (n, d = 1) => (n == null ? "-" : (n > 0 ? "+" : "") + Number(n).toFixed(d) + "%");
+const signed = (n) => (n == null || isNaN(n) ? "-" : (n > 0 ? "+" : n < 0 ? "−" : "") + won(Math.abs(n)));   // 화면용: 빼기는 하이픈이 아닌 수학 기호(−)
+const pct = (n, d = 1) => (n == null ? "-" : (n > 0 ? "+" : n < 0 ? "−" : "") + Math.abs(Number(n)).toFixed(d) + "%");
 const tone = (n) => (n > 0 ? "up" : n < 0 ? "down" : "");
-const num = (v) => Number(String(v ?? "").replace(/,/g, "")) || 0;
+const num = (v) => Number(String(v ?? "").replace(/,/g, "").replace(/−/g, "-")) || 0;
 const localToday = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const thisMonth = () => localToday().slice(0, 7);
 const WD = "일월화수목금토";
@@ -797,7 +797,7 @@ view.addEventListener("click", (e) => {
 function fab(label, onClick) {
   $(".fab")?.remove();
   const b = document.createElement("button");
-  b.type = "button"; b.className = "fab"; b.innerHTML = `<span aria-hidden="true" style="font-size:17.5px;line-height:1">+</span>${esc(label)}`;
+  b.type = "button"; b.className = "fab"; b.innerHTML = `<span aria-hidden="true" style="font-size:18px;line-height:1">+</span>${esc(label)}`;
   b.onclick = onClick;
   document.body.appendChild(b);
 }
@@ -1044,7 +1044,7 @@ function txItem(t, btn = true) {
   return `<${tag} ${btn ? `type="button" data-edit="${t.id}"` : ""} class="item">
     <span class="ico ${t.transfer ? "xf" : t.kind === "in" ? "h-in" : hue(t.category || "기타")}">${t.transfer ? "이체" : esc((t.category || "기타").slice(0, 2))}</span>
     <span class="main"><b>${esc(t.memo || t.category || "-")}</b><span class="sub">${btn ? "" : t.date.slice(5).replace("-", ".") + " · "}${t.transfer ? `내 계좌 ${t.kind === "in" ? "입금" : "출금"} · 합계 제외` : esc(t.category || "분류 없음")}${t.method && !t.transfer ? " · " + esc(t.method) : ""}</span></span>
-    <span class="end"><b class="${t.transfer ? "xf-amt" : t.kind === "in" ? "inc" : ""}">${t.transfer ? "" : t.kind === "in" ? "+" : "-"}${won(t.amount)}</b></span></${tag}>`;
+    <span class="end"><b class="${t.transfer ? "xf-amt" : t.kind === "in" ? "inc" : ""}">${t.transfer ? "" : t.kind === "in" ? "+" : "−"}${won(t.amount)}</b></span></${tag}>`;
 }
 
 
@@ -1319,7 +1319,7 @@ pages.ledger = {
       <section class="card tight">
         ${Object.keys(byDay).length ? Object.entries(byDay).map(([date, rows]) => {
           const out = rows.filter((r) => r.kind === "out" && !r.transfer).reduce((a, r) => a + r.amount, 0);
-          return `<div class="day-head"><span>${korDate(date)}</span><span>${out ? "-" + won(out) : ""}</span></div><div class="list">${rows.map((t) => txItem(t)).join("")}</div>`;
+          return `<div class="day-head"><span>${korDate(date)}</span><span>${out ? "−" + won(out) : ""}</span></div><div class="list">${rows.map((t) => txItem(t)).join("")}</div>`;
         }).join("") : `<div class="empty">이 달에는 내역이 없어요</div>`}
       </section>`;
     bindSeg(view, "내역 종류", (v) => { S.kind = v; route(); });
@@ -1472,7 +1472,7 @@ pages.ledger = {
     const item = (x) => `<button type="button" class="item" data-inbox="${x.id}">
       <span class="ico ${x.status === "pending" ? "warn" : hue(x.issuer || x.kind)}">${esc((x.issuer || (x.kind === "card" ? "카드" : "은행")).slice(0, 2))}</span>
       <span class="main"><b>${esc(x.merchant || label[x.action])}</b><span class="sub">${x.transfer ? "내 계좌 이체" : esc(label[x.action])} · ${esc(x.date.slice(5).replace("-", "."))} ${esc(x.time || "")}${x.note ? " · " + esc(x.note) : ""}</span></span>
-      <span class="end"><b class="${x.transfer ? "xf-amt" : x.action === "income" || x.action === "cancel" ? "inc" : ""}">${x.transfer ? "" : x.action === "income" || x.action === "cancel" ? "+" : "-"}${won(x.amount)}</b><span class="tag ${x.transfer ? "" : st[x.status][1]}">${x.transfer ? "이체" : st[x.status][0]}</span></span></button>`;
+      <span class="end"><b class="${x.transfer ? "xf-amt" : x.action === "income" || x.action === "cancel" ? "inc" : ""}">${x.transfer ? "" : x.action === "income" || x.action === "cancel" ? "+" : "−"}${won(x.amount)}</b><span class="tag ${x.transfer ? "" : st[x.status][1]}">${x.transfer ? "이체" : st[x.status][0]}</span></span></button>`;
     const pend = d.items.filter((x) => x.status === "pending"), rest = d.items.filter((x) => x.status !== "pending");
     view.innerHTML = `
       <section class="card">
@@ -1530,7 +1530,7 @@ pages.ledger = {
         const x = d.items.find((y) => y.id == it.dataset.inbox);
         let cat = x.category || (x.action === "income" ? "" : "기타지출");
         openSheet(label[x.action], `
-          <div class="big" style="font-size:21px">${x.action === "income" || x.action === "cancel" ? "+" : "-"}${won(x.amount)}원</div>
+          <div class="big" style="font-size:21px">${x.action === "income" || x.action === "cancel" ? "+" : "−"}${won(x.amount)}원</div>
           <div class="small muted">${esc(x.merchant || "")} · ${esc(x.date)} ${esc(x.time || "")} · ${esc(x.issuer || "")}</div>
           <div class="code" style="white-space:pre-wrap;user-select:text">${esc(x.raw)}</div>
           ${x.action === "spend" || x.action === "outflow" ? `<div class="field">분류<div class="chips">${cats.map((c) => `<button type="button" class="chip" data-c="${esc(c.name)}" aria-pressed="${c.name === cat}">${esc(c.name)}</button>`).join("")}</div></div>` : ""}
@@ -1937,7 +1937,7 @@ pages.invest = {
   atM(mkt, v, sign) {  // 시장 통화로 금액 표시
     if (v == null || isNaN(v)) return "-";
     const s = sign && v > 0 ? "+" : "";
-    return mkt === "us" ? s + (v < 0 ? "-" : "") + "$" + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : s + won(v) + "원";
+    return mkt === "us" ? s + (v < 0 ? "−" : "") + "$" + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : s + won(v) + "원";
   },
   atState() {
     return this.at || (this.at = { view: "list", tab: "now", form: { mode: "paper", mkt: "kr", style: "day", budget: "", days: 30, model: "", daily: "", total: "", confirm: "" }, d: null, pv: null });
@@ -3015,7 +3015,7 @@ pages.invest = {
           <div class="ap-h2" id="apH2"></div>
           ${seg("AI시장", [["kr", "국내장"], ["us", "미국장"]], A.m, "ap-mkt")}
           <div class="ap-sess" id="apSess"></div>
-          <a class="btn ap-statbtn" href="#invest/aistat">📊 AI 추천 전체 성적 · 자체 학습 보기 ›</a>
+          <a class="btn ap-statbtn" href="#invest/aistat"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 20V11M12 20V5M19 20v-7"/></svg>AI 추천 전체 성적 · 자체 학습 보기 ›</a>
         </section>
         <a class="card ap-score" id="apScore" href="#invest/aistat"><div class="empty small loading">추천 성적 불러오는 중</div></a>
         <section class="card"><div class="card-head"><h2>추천 엔진</h2><span class="tiny" id="apFx"></span></div>
@@ -4321,7 +4321,7 @@ pages.invest = {
     box.innerHTML = `
       ${d.error ? `<div class="notice warn">${esc(d.error)}</div>` : ""}
       <section class="card">
-        <h1 class="hero" style="font-size:17.5px">${d.plans.length ? `매달 <span class="hl">${won(d.monthly)}원</span>씩 모아<br>지금 ${won(d.value)}원이에요` : `매달 정한 날, 정한 금액만큼<br><span class="hl">자동으로</span> 사 모아요`}</h1>
+        <h1 class="hero" style="font-size:18px">${d.plans.length ? `매달 <span class="hl">${won(d.monthly)}원</span>씩 모아<br>지금 ${won(d.value)}원이에요` : `매달 정한 날, 정한 금액만큼<br><span class="hl">자동으로</span> 사 모아요`}</h1>
         <div class="kv"><div>매수 원금<b>${won(d.cost)}</b></div><div>평가손익<b class="${tone(d.gain)}">${pct(d.gain_pct, 1)}</b></div><div>다음 매수<b>${d.schedule[0] ? korDate(d.schedule[0].date, false) : "-"}</b></div></div>
         ${h.length >= 2 ? `${lineChart([{ values: h.map((x) => x.value) }, { values: h.map((x) => x.cost), color: "#5B6676", dash: true, w: 2 }], { h: 90, label: "평가금과 원금 추이" })}
           <div class="legend tiny"><span><i class="sw" style="height:2px;width:11px;background:#1B2430"></i>평가금</span><span><i class="sw" style="height:0;width:11px;border-top:2px dashed #5B6676;border-radius:0"></i>원금</span></div>` : ""}
@@ -4344,7 +4344,7 @@ pages.invest = {
         <div class="btns"><button type="button" class="btn" data-dcago="sim">배당 구성에서 고르기</button><button type="button" class="btn" data-dcago="ai"><span class="ai-spark" aria-hidden="true">✦</span> AI 구성 받기</button></div></section>`}
       <div id="dcaDiv"></div>
       ${d.plans.some((p) => p.target_weight > 0) ? `<section class="card"><h2>목표 비중과 지금</h2>${d.plans.filter((p) => p.enabled).map((p) => `<div style="display:flex;flex-direction:column;gap:4px">
-        <div style="display:flex;justify-content:space-between;font-size:10.5px"><b>${esc(p.name)}</b><span class="muted">${p.weight_now}% / 목표 ${p.weight_goal}%</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:11px"><b>${esc(p.name)}</b><span class="muted">${p.weight_now}% / 목표 ${p.weight_goal}%</span></div>
         <div style="position:relative;height:7px;background:var(--bg);border-radius:3.5px"><div style="width:${Math.min(100, p.weight_now)}%;height:7px;background:var(--ink);border-radius:3.5px"></div>
           <div style="position:absolute;top:-3px;left:${Math.min(98, p.weight_goal)}%;width:3px;height:12.5px;border-radius:2px;background:var(--hl);box-shadow:0 0 0 1px var(--ink)"></div></div></div>`).join("")}</section>` : ""}
       <section class="card"><h2>매수 일정</h2>${d.schedule.length ? d.schedule.map((s) => `<div style="display:flex;justify-content:space-between;font-size:11px"><span>${korDate(s.date)}</span><b>${won(s.amount)}원</b></div>`).join("") : `<div class="tiny">예정된 매수가 없어요</div>`}</section>
@@ -5719,7 +5719,7 @@ function winRing(v) {
 }
 
 // ---------- 주문 시트 ----------
-const usd = (n) => (n == null || isNaN(n) ? "-" : "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+const usd = (n) => (n == null || isNaN(n) ? "-" : (n < 0 ? "−$" : "$") + Math.abs(Number(n)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const isUsCode = (c) => /[A-Za-z]/.test(String(c || ""));
 function krTick(p) {  // KRX 호가단위(2023~)
   return p < 2000 ? 1 : p < 5000 ? 5 : p < 20000 ? 10 : p < 50000 ? 50 : p < 200000 ? 100 : p < 500000 ? 500 : 1000;

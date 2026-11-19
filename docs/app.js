@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1519";
+const UI_VERSION = "261119.1554";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -556,7 +556,7 @@ const MENU = {
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
   // 투자는 성격이 같은 화면을 묶는다(AI 추천·자동매매 / 관심·발견·주문 / 적립·배당). 묶음 안은 화면 위 탭으로 오간다
   invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "종목"], ["dca", "적립·배당"]],
-    groups: { ai: [["ai", "AI 추천"], ["auto", "자동매매"]], market: [["market", "관심"], ["discover", "발견"], ["trade", "주문"]], dca: [["dca", "적립"], ["dividend", "배당"]] }, extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
+    groups: { ai: [["ai", "AI 추천"], ["auto", "자동매매"], ["atlog", "매매 기록"]], market: [["market", "관심"], ["discover", "발견"], ["trade", "주문"]], dca: [["dca", "적립"], ["dividend", "배당"]] }, extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
   // 설정: 자주 바꾸는 것부터. 한 번만 맞추면 되는 서버 연결은 뒤로.
   settings: { title: "설정", subs: [["all", "전체"], ["theme", "화면"], ["ai", "AI"], ["accounts", "계좌"], ["trading", "주문·알림"], ["security", "보안"], ["backup", "백업"], ["connect", "서버"], ["app", "앱 정보"]] },
 };
@@ -1584,7 +1584,7 @@ pages.invest = {
     if (sub === "sweep") return this.sweep();
     if (sub === "stock") return mkt.detail(h);
     if (sub === "aistat") return this.aiStat();
-    investState.tab = ["home", "ai", "market", "discover", "account", "trade", "dca", "dividend", "auto"].includes(sub) ? sub : sub === "scalp" ? "ai" : "home";
+    investState.tab = ["home", "ai", "market", "discover", "account", "trade", "dca", "dividend", "auto", "atlog"].includes(sub) ? sub : sub === "scalp" ? "ai" : "home";
     const tabs = groupTabs("invest", investState.tab);
     setTop("투자", { menu: "invest", sub: investState.tab });
     view.innerHTML = `${tabs}<div id="iv" style="display:flex;flex-direction:column;gap:8.5px"></div>`;
@@ -1596,7 +1596,7 @@ pages.invest = {
     if (h.sub === "aistat") return;
     if (h.sub === "sweep") return this.sweepPoll();
     if (investState.tab === "ai") { this.apSess(); if (!this._apT || Date.now() - this._apT > 5000) { this._apT = Date.now(); this.apGuards(); } return; }
-    if (investState.tab === "dividend") return;  // 입력 중인 화면이라 주기적으로 다시 그리지 않는다
+    if (investState.tab === "dividend" || investState.tab === "atlog") return;  // 입력·읽는 화면이라 주기적으로 다시 그리지 않는다
     if (investState.tab === "auto") {  // 자세히 보는 화면만 6초마다 새로(입력 화면·펼쳐 읽는 중에는 그대로)
       const A = this.at;
       const lab = A && A.view === "lab";
@@ -1617,6 +1617,7 @@ pages.invest = {
     if (investState.tab === "trade") return this.trade(box);
     if (investState.tab === "dividend") return this.dividend(box);
     if (investState.tab === "auto") return this.auto(box);
+    if (investState.tab === "atlog") return this.atLog(box);
     if (investState.tab === "scalp") return this.scalp(box);
     return this.dca(box);
   },
@@ -2328,6 +2329,153 @@ pages.invest = {
       };
       draw();
     });
+  },
+  // ---------- 매매 기록: 지난 자동매매를 날짜별·전략별·여러 기준별로 ----------
+  async atLog(box) {
+    const H = this.hx || (this.hx = { days: 30, mkt: "", mode: "", strat: "", view: "day", openDay: "", openSt: "", dd: {} });
+    if (!H.d) box.innerHTML = `<div class="empty loading">기록을 모으는 중</div>`;
+    let d;
+    try { d = await GET(`/api/auto/history?${new URLSearchParams({ days: H.days, mkt: H.mkt, mode: H.mode, strat: H.strat })}`); }
+    catch (e) { if (e instanceof Locked || e instanceof NeedConnect) throw e; box.innerHTML = `<div class="notice warn">${esc(e.message)}</div>`; return; }
+    if (investState.tab !== "atlog" || !$("#iv")) return;
+    H.d = d; H.dd = {}; H.tn = 40; H.dayAll = "";
+    const T = d.total, has = T.n || T.buys || d.days.length;
+    const groups = {};
+    (d.strat_list || []).forEach((x) => (groups[x.group] = groups[x.group] || []).push(x));
+    const sel = (id, label, opts, v) => `<label class="hx-sel"><span>${label}</span><select id="${id}">${opts}</select></label>`;
+    const o = (v, l, cur) => `<option value="${esc(v)}" ${v === cur ? "selected" : ""}>${esc(l)}</option>`;
+    const dayVals = d.days.slice(0, 30).reverse();
+    box.innerHTML = `<section class="card hx-head">
+        <div class="hx-title"><b>매매 기록</b><span>끝난 거래를 날짜·전략·여러 기준으로 나눠 봐요. 돈은 원화예요${d.fx ? `(미국은 지금 환율 ${won(d.fx)}원으로 바꿈)` : ""}.</span></div>
+        ${seg("기록기간", [["7", "7일"], ["30", "30일"], ["90", "90일"], ["0", "전체"]], String(H.days), "on-card")}
+        <div class="hx-f">${sel("hxMkt", "시장", o("", "전체", H.mkt) + o("kr", "국내", H.mkt) + o("us", "미국", H.mkt), H.mkt)}
+          ${sel("hxMode", "구분", o("", "실전·모의", H.mode) + o("real", "실전", H.mode) + o("paper", "모의", H.mode), H.mode)}
+          ${sel("hxStrat", "전략", o("", "모든 전략", H.strat) + Object.entries(groups).map(([g, xs]) => `<optgroup label="${esc(g)}">${xs.map((x) => o(x.key, x.label, H.strat)).join("")}</optgroup>`).join(""), H.strat)}</div>
+        ${has ? `<div class="hx-kpi">
+          <div><span>끝난 거래</span><b>${won(T.n)}<small>건</small></b></div>
+          <div><span>승률</span><b>${T.n ? `${T.win_rate}<small>%</small>` : "-"}</b></div>
+          <div><span>한 번 평균</span><b class="${tone(T.avg_pct)}">${T.n ? pct(T.avg_pct, 2) : "-"}</b></div>
+          <div><span>손익</span><b class="${tone(T.pnl_krw)}">${T.n ? signed(T.pnl_krw) : "-"}</b></div>
+          <div><span>AI 비용</span><b>${won(T.ai_cost)}</b></div>
+          <div><span>비용 뺀 손익</span><b class="${tone(T.net)}">${signed(T.net)}</b></div></div>
+          ${dayVals.length > 1 ? `<div class="hx-chart">${pnlBars(dayVals.map((x) => x.net), dayVals.map((x) => x.day), 64)}<div class="axis"><span>${esc(dayVals[0].day.slice(5))}</span><span>날마다 비용 뺀 손익</span><span>${esc(dayVals[dayVals.length - 1].day.slice(5))}</span></div></div>` : ""}
+          <div class="tiny">기간 안에 산 것 ${won(T.buys)}건 · 지금 들고 있는 것 ${won(T.open)}건 · 거래한 날 ${T.days}일${T.n ? ` · 이익/손실 비 ${T.pf ?? "-"}` : ""}</div>` : ""}
+      </section>
+      ${has ? `<div class="hx-tabs">${seg("기록보기", [["day", "날짜별"], ["strat", "전략별"], ["angle", "기준별"], ["trade", `거래 ${d.trades_n > 400 ? "400+" : d.trades_n}`]], H.view)}</div>
+      <div id="hxBody">${this.hxBody()}</div>` : `<section class="card"><div class="empty">이 조건의 자동매매 기록이 아직 없어요. 모의 자동 테스트가 돌면 여기 쌓여요.</div></section>`}`;
+    bindSeg(box, "기록기간", (v) => { H.days = Number(v); this.atLog(box); });
+    bindSeg(box, "기록보기", (v) => { H.view = v; $("#hxBody").innerHTML = this.hxBody(); });
+    $("#hxMkt").onchange = (e) => { H.mkt = e.target.value; H.strat = ""; this.atLog(box); };
+    $("#hxMode").onchange = (e) => { H.mode = e.target.value; H.strat = ""; this.atLog(box); };
+    $("#hxStrat").onchange = (e) => { H.strat = e.target.value; this.atLog(box); };
+    box.onclick = async (e) => {
+      const dy = e.target.closest("[data-hxday]"), st = e.target.closest("[data-hxst]"), only = e.target.closest("[data-hxonly]"), go = e.target.closest("[data-hxgo]"), more = e.target.closest("[data-hxmore]");
+      if (more) {
+        if (more.dataset.hxmore === "trade") H.tn = (H.tn || 40) + 40; else H.dayAll = more.dataset.hxmore;
+        const y = scrollY; $("#hxBody").innerHTML = this.hxBody(); window.scrollTo(0, y); return;
+      }
+      if (only) { H.strat = only.dataset.hxonly; H.view = "day"; window.scrollTo({ top: 0, behavior: "smooth" }); return this.atLog(box); }
+      if (go) { H.view = go.dataset.hxgo; $$('[data-seg="기록보기"]', box).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === H.view))); $("#hxBody").innerHTML = this.hxBody(); return; }
+      if (dy) {
+        const day = dy.dataset.hxday;
+        H.openDay = H.openDay === day ? "" : day;
+        $("#hxBody").innerHTML = this.hxBody();
+        if (H.openDay && !H.dd[day]) {
+          try { H.dd[day] = await GET(`/api/auto/history?${new URLSearchParams({ days: H.days, mkt: H.mkt, mode: H.mode, strat: H.strat, day })}`); }
+          catch (err) { H.dd[day] = { error: err.message }; }
+          if (H.openDay === day && $("#hxBody")) $("#hxBody").innerHTML = this.hxBody();
+        }
+        return;
+      }
+      if (st) { H.openSt = H.openSt === st.dataset.hxst ? "" : st.dataset.hxst; $("#hxBody").innerHTML = this.hxBody(); }
+    };
+  },
+  hxBody() {
+    const H = this.hx, d = H.d;
+    if (H.view === "strat") return this.hxStrats(d);
+    if (H.view === "angle") return this.hxAngles(d);
+    if (H.view === "trade") {
+      const n = H.tn || 40, xs = d.trades.slice(0, n);
+      return `<section class="card tight hx-list">${xs.map((t) => this.hxTrade(t)).join("") || `<div class="empty small">거래가 없어요</div>`}</section>
+        ${d.trades.length > n ? `<button type="button" class="btn wide" data-hxmore="trade">거래 더 보기(${won(Math.min(40, d.trades.length - n))}건)</button>` : ""}
+        ${d.trades_n > d.trades.length && d.trades.length <= n ? `<div class="tiny" style="padding:0 3px">최근 ${d.trades.length}건까지만 보여요. 기간이나 전략을 좁혀 보세요.</div>` : ""}`;
+    }
+    return `<section class="card tight hx-list">${d.days.map((x) => {
+      const S = x.stats, on = H.openDay === x.day;
+      return `<div class="hx-item ${on ? "on" : ""}"><button type="button" class="hx-row" data-hxday="${x.day}" aria-expanded="${on}">
+          <span class="hx-date"><b>${esc(x.day.slice(5).replace("-", "/"))}</b><small>${x.dow}</small></span>
+          <span class="hx-mid"><b>${S.n ? `매도 ${S.n} · 승률 ${S.win_rate}% · 평균 ${pct(S.avg_pct, 2)}` : `매도 없음`}</b>
+            <small>매수 ${x.buys} · 추천 ${x.cycles}번${x.quick ? `(빠른 ${x.quick})` : ""}${x.best && x.best.pnl > 0 ? ` · 1등 ${esc(x.best.label)}` : ""}</small></span>
+          <span class="hx-val"><b class="${tone(x.net)}">${signed(x.net)}</b><small>AI ${won(x.ai_cost)}원 뺌</small></span></button>
+        ${on ? `<div class="hx-more">${this.hxDay(x)}</div>` : ""}</div>`;
+    }).join("") || `<div class="empty small">기록이 없어요</div>`}</section>`;
+  },
+  hxDay(x) {
+    const D = this.hx.dd[x.day];
+    if (!D) return `<div class="empty small loading">그날 기록을 여는 중</div>`;
+    if (D.error) return `<div class="notice warn">${esc(D.error)}</div>`;
+    const cl = D.trades.filter((t) => t.status === "closed" && (t.exit_day || t.entry_day) === x.day), by = {};
+    cl.forEach((t) => { const g = by[t.strat] || (by[t.strat] = { label: t.strat_label, group: t.strat_group, n: 0, w: 0, sp: 0, pnl: 0 }); g.n++; g.w += t.pnl > 0 ? 1 : 0; g.sp += t.pnl_pct || 0; g.pnl += t.pnl_krw || 0; });
+    const rows = Object.values(by).sort((a, b) => b.pnl - a.pnl);
+    const recs = (D.day && D.day.recs) || [];
+    return `${rows.length ? `<div class="hx-sub">전략별 그날 성적</div><div class="hx-tbl">${rows.map((g) => `<div><span><b>${esc(g.label)}</b><small>${esc(g.group)}</small></span>
+        <span>${g.n}건 · 승 ${g.w}</span><span class="${tone(g.sp)}">${pct(g.sp / g.n, 2)}</span><b class="${tone(g.pnl)}">${signed(g.pnl)}</b></div>`).join("")}</div>` : ""}
+      ${recs.length ? `<details class="hx-det"><summary class="hx-sub">받은 추천 ${recs.length}번 <small>정밀 ${recs.filter((r) => !r.lite).length} · 빠른 ${recs.filter((r) => r.lite).length} · 펼치기</small></summary><ol class="hx-recs">${recs.map((r) => `<li><time>${esc(r.ts.slice(11, 16))}</time>
+        <div><b>${r.lite ? `<span class="tag y">빠른</span>` : `<span class="tag">정밀</span>`} ${esc(r.group)}${r.stance ? ` · ${esc(r.stance)}` : ""}</b>
+          <span>${r.picks.length ? `${r.picks.map(esc).join(", ")} → ${r.bought ? `플랜 ${r.bought}번 매수` : "안 삼"}` : esc(r.msg || r.view)}${r.cost ? ` · ${won(r.cost)}원` : ""}</span>
+          ${r.view && r.picks.length ? `<small>${esc(r.view)}</small>` : ""}</div></li>`).join("")}</ol></details>` : ""}
+      <div class="hx-sub">그날 거래 ${D.trades.length}건</div>${D.trades.slice(0, this.hx.dayAll === x.day ? 400 : 12).map((t) => this.hxTrade(t, true)).join("") || `<div class="empty small">거래가 없어요</div>`}
+      ${D.trades.length > 12 && this.hx.dayAll !== x.day ? `<button type="button" class="btn wide sm" data-hxmore="${x.day}">그날 거래 ${D.trades.length}건 모두 보기</button>` : ""}`;
+  },
+  hxStrats(d) {
+    const H = this.hx, by = {};
+    d.strategies.forEach((s) => (by[s.group] = by[s.group] || []).push(s));
+    const hold = (m) => m == null ? "-" : m < 60 ? `${Math.round(m)}분` : m < 1440 ? `${Math.floor(m / 60)}시간${Math.round(m % 60) ? ` ${Math.round(m % 60)}분` : ""}` : `${(m / 1440).toFixed(1)}일`;
+    return Object.entries(by).map(([g, xs]) => `<div class="sec-title">${esc(g)}</div><section class="card tight hx-list">${xs.map((s) => {
+      const S = s.stats, on = H.openSt === s.key;
+      return `<div class="hx-item ${on ? "on" : ""}"><button type="button" class="hx-row" data-hxst="${esc(s.key)}" aria-expanded="${on}">
+          <span class="hx-mid"><b>${esc(s.label)} ${s.mode === "real" ? `<span class="tag warn">실전</span>` : ""}${s.status === "running" ? `<span class="tag y">가동 중</span>` : ""}</b>
+            <small>${S.n ? `${S.n}건 · 승률 ${S.win_rate}% · 평균 ${pct(S.avg_pct, 2)} · 이익/손실 비 ${S.pf ?? "-"}` : "끝난 거래 없음"}${s.open ? ` · 보유 ${s.open}` : ""}</small></span>
+          <span class="hx-val"><b class="${tone(s.net)}">${signed(s.net)}</b><small>${s.net_pct != null ? pct(s.net_pct, 2) : ""} · AI ${won(s.ai_cost)}원</small></span></button>
+        ${on ? `<div class="hx-more">
+          <div class="hx-kv"><div><span>평균 이익 · 손실</span><b><i class="up">${pct(S.avg_win, 2)}</i> · <i class="down">${pct(S.avg_loss, 2)}</i></b></div>
+            <div><span>가장 좋았던 · 나빴던</span><b><i class="up">${pct(S.best, 2)}</i> · <i class="down">${pct(S.worst, 2)}</i></b></div>
+            <div><span>들고 있던 시간(중간값)</span><b>${hold(S.hold_med)}</b></div>
+            <div><span>최대 상승 · 하락(중간값)</span><b>${S.mfe_med != null ? `${pct(S.mfe_med, 2)} · ${pct(-Math.abs(S.mae_med || 0), 2)}` : "-"}</b></div>
+            <div><span>손익(AI 비용 전)</span><b class="${tone(S.pnl_krw)}">${S.n ? signed(S.pnl_krw) : "-"}</b></div>
+            <div><span>거래한 날 · 쓴 돈</span><b>${s.days}일 · ${won(s.budget)}</b></div></div>
+          ${s.reasons.length ? `<div class="chips hx-chips">${s.reasons.map(([k, n]) => `<span class="chip">${esc(k)} ${n}</span>`).join("")}</div>` : ""}
+          ${s.by_day.length ? `<div class="hx-sub">날짜별</div><div class="hx-tbl">${s.by_day.map((x) => `<div><span><b>${esc(x.day.slice(5).replace("-", "/"))}</b></span><span>${x.n}건 · 승 ${x.win}</span>
+            <span class="${tone(x.avg)}">${pct(x.avg, 2)}</span><b class="${tone(x.pnl)}">${signed(x.pnl)}</b></div>`).join("")}</div>` : ""}
+          <button type="button" class="btn wide sm" data-hxonly="${esc(s.key)}">이 전략만 날짜별·기준별로 보기</button></div>` : ""}</div>`;
+    }).join("")}</section>`).join("") || `<section class="card"><div class="empty small">기록이 없어요</div></section>`;
+  },
+  hxAngles(d) {
+    const sym = d.symbols || [];
+    return `${d.groups.map((g) => `<section class="card hx-ang"><div class="card-head"><h2>${esc(g.label)}</h2><span class="tiny">건수 · 승률 · 한 번 평균 · 손익</span></div>
+      ${g.rows.map((r) => `<div class="hx-ar"><span class="hx-ak">${esc(r.key)}</span><span class="hx-an">${r.n}건</span>
+        <span class="hx-bar" role="img" aria-label="승률 ${r.win_rate}%"><i style="width:${r.win_rate}%"></i><em>${r.win_rate}%</em></span>
+        <b class="${tone(r.avg_pct)}">${pct(r.avg_pct, 2)}</b><small class="${tone(r.pnl_krw)}">${signed(r.pnl_krw)}</small></div>`).join("")}</section>`).join("")}
+      ${sym.length ? `<section class="card hx-ang"><div class="card-head"><h2>자주 거래한 종목</h2><span class="tiny">누르면 차트에 산 때·판 때가 찍혀요</span></div>
+        ${sym.map((r) => `<div class="hx-ar"><span class="hx-ak">${stockA(r.mkt, r.sym, r.name)}</span><span class="hx-an">${r.n}건</span>
+          <span class="hx-bar"><i style="width:${r.win_rate}%"></i><em>${r.win_rate}%</em></span><b class="${tone(r.avg_pct)}">${pct(r.avg_pct, 2)}</b><small class="${tone(r.pnl_krw)}">${signed(r.pnl_krw)}</small></div>`).join("")}</section>` : ""}
+      <div class="tiny" style="padding:0 3px">건수가 적은 칸은 운일 수 있어요. 10건 넘는 칸끼리 비교해 보세요.</div>`;
+  },
+  hxTrade(t, inDay) {
+    const us = t.mkt === "us", P = (v) => v == null ? "-" : us ? `$${Number(v).toFixed(2)}` : `${won(v)}원`;
+    const hold = t.hold_min == null ? "" : t.hold_min < 60 ? `${t.hold_min}분` : t.hold_min < 1440 ? `${Math.floor(t.hold_min / 60)}시간 ${t.hold_min % 60}분` : `${(t.hold_min / 1440).toFixed(1)}일`;
+    const open = t.status === "open", p = open ? (t.last && t.entry_price ? (t.last / t.entry_price - 1) * 100 : null) : t.pnl_pct;
+    const ts = (x) => x ? x.slice(5, 16).replace("T", " ").replace("-", "/") : "";
+    return `<div class="hx-tr">
+      <div class="hx-tr-a"><span>${stockA(t.mkt, t.sym, t.name)} <small>${esc(t.strat_label)}${inDay ? "" : ` · ${esc(t.strat_group)}`}</small></span>
+        <b class="${tone(p)}">${p == null ? "-" : pct(p, 2)}</b></div>
+      <div class="hx-tr-b"><span>산 때 ${esc(ts(t.entry_ts))} · ${P(t.entry_price)} × ${won(t.qty)}주</span>
+        <span>${open ? `보유 중 · 지금 ${P(t.last)}` : `판 때 ${esc(ts(t.exit_ts))} · ${P(t.exit_price)} · ${esc(t.reason || "")}`}</span></div>
+      <div class="hx-tr-c">${t.mode === "real" ? `<span class="tag warn">실전</span>` : `<span class="tag">모의</span>`}${t.lite ? `<span class="tag y">빠른 재추천</span>` : ""}
+        <span>목표 +${t.target_pct}% · 손절 −${t.stop_pct}%</span>${t.win_prob != null ? `<span>AI 승률 ${Math.round(t.win_prob)}%</span>` : ""}${t.score != null ? `<span>점수 ${Math.round(t.score)}</span>` : ""}
+        ${t.stance ? `<span>${esc(t.stance)}</span>` : ""}${hold ? `<span>${hold} 보유</span>` : ""}${!open && t.pnl_krw ? `<span class="${tone(t.pnl_krw)}">${signed(t.pnl_krw)}원</span>` : ""}
+        ${t.mfe_pct != null ? `<span>최대 +${Number(t.mfe_pct).toFixed(2)}% / −${Math.abs(Number(t.mae_pct || 0)).toFixed(2)}%</span>` : ""}</div>
+      ${t.catalyst || (t.reasons && t.reasons.length) ? `<div class="hx-tr-d">${esc(t.catalyst || t.reasons.join(" · "))}</div>` : ""}</div>`;
   },
   // 하루 AI 비용 한도만 빠르게 바꾼다(현황의 'AI 비용'과, 한도에 걸렸을 때 뜨는 버튼에서 연다)
   atAiLimit() {

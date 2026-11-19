@@ -1285,6 +1285,10 @@ def create_app(rt, updater=None):
     def auto_marks(mkt, sym):
         return jsonify(rt.autotrade.marks("us" if mkt == "us" else "kr", sym))
 
+    @app.get("/api/auto/history")
+    def auto_history():
+        return jsonify(rt.autotrade.history(request.args.to_dict()))
+
     @app.get("/api/auto/lab")
     def auto_labs():
         return jsonify(rt.autotrade.labs())

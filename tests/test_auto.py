@@ -1491,3 +1491,44 @@ def test_old_runs_get_quick_rescans_once(env, monkeypatch):
     at.tick(force=True)
     assert sum(1 for x in at.rt.db.q("SELECT msg FROM at_log WHERE kind='control'") if "더 자주" in x["msg"]) == 5       # 한 번만
     assert at.detail(us)["params"]["quick_gap_min"] == 0 and at.edit(us, {"quick_gap_min": 30})["params"]["quick_gap_min"] == 30   # 실전은 플랜에서 켠다
+
+
+# ---------- 매매 기록 ----------
+def test_history_by_day_strategy_and_angles(env, monkeypatch):
+    """지난 기록을 날짜별·전략별·기준별로. 실험은 묶음이 바뀌어도 같은 플랜끼리 이어 보고, 돈은 원화(미국은 환율로)로 맞춘다."""
+    at = env.at
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (0.1, {"fx": 1400.0}))
+    mine, us = env.run(), env.run(mkt="us", budget=3000)
+    _seed(env, mine, 10)                                                  # 11/02~11/04, 반은 -1.2%, 반은 +1.6%
+    env.rt.db.x("UPDATE at_trades SET entry_day='2026-11-17', exit_day='2026-11-17', why=? WHERE run_id=? AND sym='S1'", (json.dumps({"lite": True, "catalyst": "수주"}), mine))
+    env.rt.db.x("INSERT INTO at_trades(run_id,ver,mkt,sym,name,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,exit_ts,exit_price,reason,pnl,pnl_pct,exit_day,hold_min) "
+                "VALUES(?,1,'us','NVDA','엔비디아',2,'closed','2026-11-17T23:40:00','2026-11-17','10:40',100,3,1.5,'2026-11-18T01:10:00',102,'익절',4,2.0,'2026-11-17',90)", (us,))
+    at.log(mine, "cycle", "x", {"usd": 0.5, "pick_id": 1, "decisions": []})
+    at.auto_set(True)
+    lab = next(x for x in at.labs()["labs"] if (x["mkt"], x["style"]) == ("kr", "day"))
+    loose = next(r["id"] for r in lab["runs"] if r["variant"] == "loose")
+    _seed(env, loose, 4)
+    # 30일(오늘 11/18 기준 10/20부터): 모든 기록을 원화로(미국 4달러 = 5,600원)
+    H = at.history({"days": 30})
+    T = H["total"]
+    assert T["n"] == 15 and T["pnl_krw"] == 5 * 1600 - 5 * 1200 + 4 * 1400 + 2 * 1600 - 2 * 1200
+    keys = {s["key"]: s for s in H["strategies"]}
+    assert f"run:{mine}" in keys and f"run:{us}" in keys and "lab:kr:day:loose" in keys
+    s = keys["lab:kr:day:loose"]
+    assert (s["label"], s["group"], s["mode"], s["stats"]["n"]) == ("느슨한 기준", "국내 단타 실험", "paper", 4) and s["by_day"][0]["n"] >= 1
+    assert keys[f"run:{mine}"]["ai_cost"] == 700 and keys[f"run:{mine}"]["net"] == keys[f"run:{mine}"]["stats"]["pnl_krw"] - 700
+    d17 = next(x for x in H["days"] if x["day"] == "2026-11-17")
+    assert d17["sells"] == 2 and d17["dow"] == "화" and d17["stats"]["pnl_krw"] == 1600 + 5600 and d17["mkts"] == ["kr", "us"]
+    G = {g["label"]: {r["key"]: r for r in g["rows"]} for g in H["groups"]}
+    assert G["추천 종류"]["빠른 재추천"]["n"] == 1 and G["시장 · 방식"]["미국 단타"]["n"] == 1 and G["파는 사유"]["익절"]["n"] == 1
+    assert H["symbols"] and all(t["strat_label"] for t in H["trades"]) and H["trades"][0]["exit_ts"] >= H["trades"][-1]["exit_ts"]
+    # 걸러 보기: 시장·구분·전략, 그날 자세히(받은 추천 포함)
+    assert at.history({"days": 30, "mkt": "us"})["total"]["n"] == 1
+    assert at.history({"days": 30, "strat": "lab:kr:day:loose"})["total"]["n"] == 4
+    assert at.history({"days": 30, "mode": "real"})["total"]["n"] == 0
+    one = at.history({"days": 30, "day": "2026-11-17"})
+    assert {t["sym"] for t in one["trades"]} == {"S1", "NVDA"} and one["day"]["day"] == "2026-11-17"
+    assert at.history({"days": 7})["total"]["n"] == 2                     # 11/12~11/18
+    # API
+    c = create_app(env.rt).test_client()
+    assert c.get("/api/auto/history?days=30&mkt=us").get_json()["total"]["n"] == 1

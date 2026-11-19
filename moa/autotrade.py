@@ -2196,6 +2196,201 @@ class AutoTrade:
                 pass
         return self.labs()
 
+    # ------------------------------------------------------------------ 매매 기록(지난 자료를 날짜·전략·여러 기준으로)
+    @staticmethod
+    def _hold_band(m):
+        if m is None:
+            return None
+        return "30분 미만" if m < 30 else "30분~2시간" if m < 120 else "2시간~하루" if m < 60 * 24 else "1~3일" if m < 60 * 24 * 3 else "3일 넘게"
+
+    def _strat(self, r):
+        """전략(비교 단위): 실험은 시장·방식·플랜이 같으면 하나로 묶고(실험 묶음이 바뀌어도 이어 본다), 직접 만든 것은 자동매매마다."""
+        mk = "국내" if r["mkt"] == "kr" else "미국"
+        if r.get("lab_id"):
+            v = r.get("variant") or "base"
+            return f"lab:{r['mkt']}:{r['style']}:{v}", {"label": VARIANTS.get(v, (v,))[0], "group": f"{mk} {STYLES[r['style']]['label']} 실험", "mode": "paper",
+                                                          "mkt": r["mkt"], "style": r["style"], "variant": v, "lab": True}
+        return f"run:{r['id']}", {"label": r["name"], "group": f"{mk} {STYLES[r['style']]['label']} {'실전' if r['mode'] == 'real' else '모의'}",
+                                  "mode": r["mode"], "mkt": r["mkt"], "style": r["style"], "run": r["id"], "lab": False}
+
+    def history(self, q=None):
+        """지난 자동매매를 다각도로: 날짜별 · 전략별 · 여러 기준별 성적과 거래 목록.
+        q: days(7·30·90·0=전체), mkt(kr·us·''), mode(real·paper·''), strat(전략 키), day(그날 자세히)
+        돈은 모두 원화(미국은 지금 환율로 바꿈). 수익률은 거래마다의 % 평균."""
+        q = q or {}
+        days = int(q.get("days") or 30)
+        mkt, mode, sk, one = q.get("mkt") or "", q.get("mode") or "", q.get("strat") or "", q.get("day") or ""
+        fx = self.rt.ai.fx()
+        krw = lambda v, m: (v or 0) * (fx if m == "us" else 1.0)
+        since = (AP.kst_now().replace(tzinfo=None) - timedelta(days=days - 1)).strftime("%Y-%m-%d") if days > 0 else "0000"
+        runs = {r["id"]: r for r in self._runs() if (not mkt or r["mkt"] == mkt) and (not mode or r["mode"] == mode)}
+        strats, key_of = {}, {}
+        for r in runs.values():
+            k, meta = self._strat(r)
+            key_of[r["id"]] = k
+            S = strats.setdefault(k, dict(meta, key=k, runs=[], budget=0.0, status="ended"))
+            S["runs"].append(r["id"])
+            S["budget"] = max(S["budget"], krw(r["budget"], r["mkt"]))
+            if r["status"] in ACTIVE:
+                S["status"] = r["status"] if S["status"] != "running" else "running"
+        if sk:
+            runs = {i: r for i, r in runs.items() if key_of[i] == sk}
+        ids = list(runs)
+        empty = {"filters": {"days": days, "mkt": mkt, "mode": mode, "strat": sk}, "fx": fx, "strategies": [], "days": [], "groups": [], "trades": [], "total": {"n": 0}}
+        if not ids:
+            empty["strat_list"] = [{"key": k, "label": v["label"], "group": v["group"]} for k, v in strats.items()]
+            return empty
+        qm = ",".join("?" * len(ids))
+        trades = self.rt.db.q(f"SELECT * FROM at_trades WHERE run_id IN ({qm}) AND status IN ('open','closed') AND (entry_day>=? OR COALESCE(exit_day,'')>=?) ORDER BY entry_ts", (*ids, since, since))
+        logs = self.rt.db.q(f"SELECT run_id, ts, day, msg, data FROM at_log WHERE run_id IN ({qm}) AND kind='cycle' AND day>=? ORDER BY id", (*ids, since))
+        for t in trades:
+            r = runs[t["run_id"]]
+            try:
+                why = json.loads(t["why"]) if t.get("why") else {}
+            except ValueError:
+                why = {}
+            why = why if isinstance(why, dict) else {}
+            t.update(strat=key_of[t["run_id"]], mode=r["mode"], style=r["style"], lite=bool(why.get("lite")), pnl_krw=round(krw(t["pnl"], t["mkt"]), 2),
+                     hour=(t["entry_hm"] or "")[:2], dow="월화수목금토일"[datetime.strptime(t["entry_day"], "%Y-%m-%d").weekday()],
+                     catalyst=why.get("catalyst") or "", reasons=(why.get("reasons") or [])[:2])
+        closed = [t for t in trades if t["status"] == "closed" and (t["exit_day"] or t["entry_day"]) >= since]
+
+        def agg(rows):
+            a = _agg(rows)
+            if not a["n"]:
+                return a
+            pk = [r["pnl_krw"] for r in rows]
+            a.update(pnl_krw=round(sum(pk)), hold_med=_median([r["hold_min"] for r in rows]), mfe_med=_median([r["mfe_pct"] for r in rows]),
+                     mae_med=_median([r["mae_pct"] for r in rows]), best=round(max(r["pnl_pct"] or 0 for r in rows), 2), worst=round(min(r["pnl_pct"] or 0 for r in rows), 2))
+            a.pop("pnl", None)
+            return a
+        # AI 비용·추천 횟수(날짜·전략별). 실험은 한 번 받은 추천의 비용을 플랜들이 나눠 적었으니 더하면 실제 비용이다
+        cost_d, cost_s, cyc_d = {}, {}, {}
+        for x in logs:
+            try:
+                d = json.loads(x["data"]) if x["data"] else {}
+            except ValueError:
+                d = {}
+            u = float(d.get("usd") or 0) * fx
+            cost_d[x["day"]] = cost_d.get(x["day"], 0) + u
+            k = key_of[x["run_id"]]
+            cost_s[k] = cost_s.get(k, 0) + u
+            if d.get("pick_id") or d.get("decisions") is not None:
+                c = cyc_d.setdefault(x["day"], {})
+                pid = (x["run_id"] if not runs[x["run_id"]].get("lab_id") else runs[x["run_id"]]["lab_id"], x["ts"][:16])
+                c[pid] = bool(d.get("lite"))
+        # 전략별
+        out_s = []
+        for k, S in strats.items():
+            rows = [t for t in closed if t["strat"] == k]
+            if sk and k != sk:
+                continue
+            opens = [t for t in trades if t["strat"] == k and t["status"] == "open"]
+            if not rows and not opens and not cost_s.get(k):
+                continue
+            a = agg(rows)
+            cost = round(cost_s.get(k, 0))
+            net = (a.get("pnl_krw") or 0) - cost
+            reasons = {}
+            for t in rows:
+                reasons[t["reason"] or "기타"] = reasons.get(t["reason"] or "기타", 0) + 1
+            per_day = {}
+            for t in rows:
+                per_day.setdefault(t["exit_day"] or t["entry_day"], []).append(t)
+            out_s.append({k2: S[k2] for k2 in ("key", "label", "group", "mode", "mkt", "style", "lab", "status")} | {
+                "stats": a, "open": len(opens), "ai_cost": cost, "net": round(net), "net_pct": round(net / S["budget"] * 100, 2) if S["budget"] else None,
+                "budget": round(S["budget"]), "days": len(per_day), "reasons": sorted(reasons.items(), key=lambda kv: -kv[1]),
+                "by_day": [{"day": d, "n": len(v), "win": sum(1 for t in v if (t["pnl"] or 0) > 0), "pnl": round(sum(t["pnl_krw"] for t in v)),
+                            "avg": round(sum(t["pnl_pct"] or 0 for t in v) / len(v), 2)} for d, v in sorted(per_day.items(), reverse=True)][:30]})
+        out_s.sort(key=lambda x: (-(x["stats"].get("n", 0) >= 10), -x["net"]))
+        # 날짜별
+        dset = {t["entry_day"] for t in trades if t["entry_day"] >= since} | {t["exit_day"] for t in closed if t["exit_day"]} | set(cost_d)
+        out_d = []
+        for d in sorted(dset, reverse=True):
+            cl = [t for t in closed if (t["exit_day"] or t["entry_day"]) == d]
+            buys = [t for t in trades if t["entry_day"] == d]
+            a = agg(cl)
+            cost = round(cost_d.get(d, 0))
+            cyc = cyc_d.get(d, {})
+            top = {}
+            for t in cl:
+                top[t["strat"]] = top.get(t["strat"], 0) + t["pnl_krw"]
+            best = max(top.items(), key=lambda kv: kv[1]) if top else None
+            out_d.append({"day": d, "dow": "월화수목금토일"[datetime.strptime(d, "%Y-%m-%d").weekday()], "buys": len(buys), "sells": len(cl), "stats": a,
+                          "ai_cost": cost, "net": round((a.get("pnl_krw") or 0) - cost), "cycles": len(cyc), "quick": sum(1 for v in cyc.values() if v),
+                          "mkts": sorted({t["mkt"] for t in buys + cl}), "best": {"key": best[0], "label": strats[best[0]]["label"], "group": strats[best[0]]["group"], "pnl": round(best[1])} if best else None})
+
+        def group(label, fn, order=None):
+            g = {}
+            for t in closed:
+                try:
+                    k = fn(t)
+                except Exception:
+                    k = None
+                if k is not None:
+                    g.setdefault(k, []).append(t)
+            rows = [dict(agg(v), key=k) for k, v in g.items()]
+            rows.sort(key=(lambda x: order.index(x["key"]) if x["key"] in order else 99) if order else (lambda x: -x["n"]))
+            return {"label": label, "rows": rows}
+
+        def wp(t):
+            v = t["cal_prob"] if t["cal_prob"] is not None else t["win_prob"]
+            return None if v is None else "55% 미만" if v < 55 else "55~65%" if v < 65 else "65% 이상"
+
+        def sc(t):
+            return None if t["score"] is None else "70 미만" if t["score"] < 70 else "70~80" if t["score"] < 80 else "80 이상"
+        groups = [group("파는 사유", lambda t: t["reason"] or "기타"),
+                  group("추천 종류", lambda t: "빠른 재추천" if t["lite"] else "정밀 추천", ["정밀 추천", "빠른 재추천"]),
+                  group("시장 · 방식", lambda t: f"{'국내' if t['mkt'] == 'kr' else '미국'} {STYLES[t['style']]['label']}"),
+                  group("실전 · 모의", lambda t: "실전" if t["mode"] == "real" else "모의", ["실전", "모의"]),
+                  group("산 시각(그 시장 기준)", lambda t: f"{t['hour']}시" if t["hour"] else None, [f"{h:02d}시" for h in range(24)]),
+                  group("요일", lambda t: t["dow"], list("월화수목금")),
+                  group("보유 시간", lambda t: self._hold_band(t["hold_min"]), ["30분 미만", "30분~2시간", "2시간~하루", "1~3일", "3일 넘게"]),
+                  group("AI 분위기", lambda t: t["stance"] or None, ["공격", "보통", "관망"]),
+                  group("AI 승률", wp, ["55% 미만", "55~65%", "65% 이상"]),
+                  group("AI 점수", sc, ["70 미만", "70~80", "80 이상"])]
+        groups = [g for g in groups if len(g["rows"]) > 1 or (g["rows"] and g["label"] == "파는 사유")]
+        # 종목별(자주 거래한 종목)
+        by_sym = {}
+        for t in closed:
+            by_sym.setdefault((t["mkt"], t["sym"]), []).append(t)
+        syms = sorted(([dict(agg(v), mkt=m, sym=sy, name=v[-1]["name"]) for (m, sy), v in by_sym.items()]), key=lambda x: -x["n"])[:15]
+        tot = agg(closed)
+        cost_all = round(sum(cost_d.values()))
+        tot.update(ai_cost=cost_all, net=round((tot.get("pnl_krw") or 0) - cost_all), open=sum(1 for t in trades if t["status"] == "open"),
+                   buys=sum(1 for t in trades if t["entry_day"] >= since), days=len(out_d))
+        keep = ("id", "strat", "mode", "mkt", "style", "sym", "name", "qty", "status", "entry_ts", "entry_day", "entry_hm", "entry_price", "exit_ts", "exit_day",
+                "exit_price", "last", "reason", "pnl", "pnl_krw", "pnl_pct", "hold_min", "mfe_pct", "mae_pct", "target_pct", "stop_pct", "score", "win_prob", "stance",
+                "lite", "catalyst", "reasons")
+        sel = [t for t in trades if (not one or t["entry_day"] == one or t.get("exit_day") == one)]
+        sel.sort(key=lambda t: t.get("exit_ts") or t["entry_ts"], reverse=True)
+        out = dict(empty, strategies=out_s, days=out_d, groups=groups, symbols=syms, total=tot,
+                   trades=[{k: t.get(k) for k in keep} | {"strat_label": strats[t["strat"]]["label"], "strat_group": strats[t["strat"]]["group"]} for t in sel[:400]],
+                   trades_n=len(sel), strat_list=[{"key": k, "label": v["label"], "group": v["group"]} for k, v in strats.items()])
+        if one:                                          # 그날 받은 추천(시각·종류·분위기·산 종목)
+            recs, seen = [], set()
+            for x in logs:
+                if x["day"] != one or not x["data"]:
+                    continue
+                d = json.loads(x["data"])
+                r = runs[x["run_id"]]
+                key = (r.get("lab_id") or r["id"], x["ts"][:16])
+                dec = d.get("decisions") or []
+                if key in seen:
+                    rec = next(z for z in recs if z["_k"] == key)
+                    rec["bought"] += sum(1 for z in dec if z.get("act") == "buy")
+                    rec["usd"] += float(d.get("usd") or 0)
+                    continue
+                seen.add(key)
+                recs.append({"_k": key, "ts": x["ts"], "group": strats[key_of[x["run_id"]]]["group"], "lite": bool(d.get("lite")), "stance": d.get("stance"),
+                             "view": d.get("view") or "", "picks": [z.get("name") or z.get("sym") for z in dec][:3], "bought": sum(1 for z in dec if z.get("act") == "buy"),
+                             "usd": float(d.get("usd") or 0), "msg": x["msg"] if not dec else ""})
+            for z in recs:
+                z.pop("_k")
+                z["cost"] = round(z.pop("usd") * fx)
+            out["day"] = {"day": one, "recs": recs[::-1][:60]}
+        return out
+
     def marks(self, mkt, sym, days=30):
         """이 종목에서 자동매매가 한 일(차트에 찍을 것): AI가 추천한 때, 플랜별로 산 때·판 때. 실전과 모의를 가른다."""
         sym = str(sym or "").upper()

@@ -4442,7 +4442,7 @@ const mkt = {
     };
     bindSeg(ov, "크게기간", (v) => { Z.range = v; Z.cd = v === D.range ? D.cd : null; $("#czChart").innerHTML = `<div class="empty small loading">불러오는 중</div>`; if (Z.cd) this.drawZoom(); load(); });
     Z.close = () => {
-      clearInterval(Z.timer); removeEventListener("resize", Z.fit); removeEventListener("keydown", Z.key); removeEventListener("hashchange", Z.close);
+      clearInterval(Z.timer); window.removeEventListener("resize", Z.fit); window.removeEventListener("keydown", Z.key); window.removeEventListener("hashchange", Z.close);
       document.body.style.overflow = Z.prevOverflow; ov.remove(); if (this.zv === Z) this.zv = null; $("#mkZoom")?.focus();
     };
     Z.key = (e) => { if (e.key === "Escape") Z.close(); };

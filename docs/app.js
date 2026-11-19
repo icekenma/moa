@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1958";
+const UI_VERSION = "261119.2015";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -366,6 +366,84 @@ function gameTheme(sec) {
   const mc = document.querySelector('meta[name="theme-color"]');
   if (mc) mc.content = on ? "#0B1830" : getComputedStyle(el).getPropertyValue("--deep").trim() || mc.content;
 }
+
+// ---------- 게임 화면의 그림 도구(투자 탭) ----------
+// 목록 대신 그림으로: 금고 도넛, 장 시간 해 궤도, 보유 종목 지도(면적=금액, 색=수익률), 플랜 경주 트랙, 손익 달력
+const G = {
+  // 도넛: parts = [[값, 색, 이름]]
+  donut(parts, size = 150, w = 20, center = "") {
+    const r = (size - w) / 2, c = size / 2, C = 2 * Math.PI * r, tot = parts.reduce((a, p) => a + Math.max(0, p[0]), 0) || 1;
+    let acc = 0;
+    const seg = parts.filter((p) => p[0] > 0).map(([v, col]) => {
+      const d = Math.max(0, C * v / tot - (parts.length > 1 ? 3 : 0)), o = acc; acc += C * v / tot;
+      return `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${col}" stroke-width="${w}" stroke-dasharray="${d.toFixed(1)} ${(C - d).toFixed(1)}" stroke-dashoffset="${(-o).toFixed(1)}" stroke-linecap="butt" transform="rotate(-90 ${c} ${c})"/>`;
+    }).join("");
+    return `<div class="g-donut" style="width:${size}px;height:${size}px"><svg viewBox="0 0 ${size} ${size}" aria-hidden="true">
+      <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="rgba(0,0,0,.35)" stroke-width="${w + 6}"/>${seg}
+      <circle cx="${c}" cy="${c}" r="${r - w / 2 - 3}" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="1.5"/></svg><div class="g-donut-c">${center}</div></div>`;
+  },
+  // 장 시간을 해가 지나가는 반원으로: 왼쪽 끝 = 첫 시간대 시작, 오른쪽 끝 = 마지막 시간대 끝
+  arc(S) {
+    const W = 156, H = 86, cx = W / 2, cy = 80, R = 66, a0 = S.segs[0][0], z = S.segs[S.segs.length - 1][1];
+    const ang = (t) => Math.PI * (1 - (t - a0) / (z - a0)), pt = (t, rr = R) => [cx + rr * Math.cos(ang(t)), cy - rr * Math.sin(ang(t))];
+    const col = { pre: "#7FA8FF", auction: "#FF9F5A", open: "#4BDB76", after: "#FFC531", day: "#9C8CFF" };
+    const arcs = S.segs.map(([x, y, , k]) => { const [x1, y1] = pt(x), [x2, y2] = pt(y);
+      return `<path d="M${x1.toFixed(1)} ${y1.toFixed(1)} A${R} ${R} 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)}" stroke="${col[k] || "#7FA8FF"}" stroke-width="7" fill="none" stroke-linecap="butt" opacity="${S.now != null && S.now >= x && S.now < y ? 1 : .55}"/>`; }).join("");
+    const inWin = S.now != null && S.now >= a0 && S.now <= z;
+    let body;
+    if (inWin) { const [sx, sy] = pt(S.now);
+      body = `<circle cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" r="11" fill="url(#gSun)" opacity=".55"/><circle cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" r="6.5" fill="#FFE07A" stroke="#FF9F1C" stroke-width="2"/>`; }
+    else body = `<g transform="translate(${cx} 50)"><circle r="12" fill="#DCE6FF"/><circle r="12" cx="6" cy="-4" fill="#14305C"/><text x="12" y="-10" font-size="9" fill="#9FB6DD" font-family="GameD">z</text><text x="18" y="-17" font-size="7" fill="#9FB6DD" font-family="GameD">z</text></g>`;
+    return `<svg class="g-arc" viewBox="0 0 ${W} ${H}" aria-hidden="true"><defs><radialGradient id="gSun"><stop offset="0" stop-color="#FFE07A"/><stop offset="1" stop-color="#FFE07A" stop-opacity="0"/></radialGradient></defs>
+      <path d="M${cx - R} ${cy} A${R} ${R} 0 0 1 ${cx + R} ${cy}" stroke="rgba(0,0,0,.35)" stroke-width="11" fill="none"/>${arcs}
+      <line x1="${cx - R - 8}" y1="${cy}" x2="${cx + R + 8}" y2="${cy}" stroke="rgba(160,200,255,.25)" stroke-width="1.5"/>${body}</svg>`;
+  },
+  // 면적 비례 지도(squarify). items: [{v, ...}] (큰 것부터) → [{x,y,w,h,item}] (0~100)
+  treemap(items, W = 100, H = 100) {
+    const tot = items.reduce((a, x) => a + x.v, 0) || 1, out = [];
+    let rest = items.map((it) => ({ it, a: it.v / tot * W * H })), x = 0, y = 0, w = W, h = H;
+    const worst = (row, side) => { const s = row.reduce((a, r) => a + r.a, 0), mx = Math.max(...row.map((r) => r.a)), mn = Math.min(...row.map((r) => r.a));
+      return Math.max(side * side * mx / (s * s), s * s / (side * side * mn)); };
+    while (rest.length) {
+      const side = Math.min(w, h), row = [rest.shift()];
+      while (rest.length && worst([...row, rest[0]], side) <= worst(row, side)) row.push(rest.shift());
+      const s = row.reduce((a, r) => a + r.a, 0);
+      if (w >= h) { const cw = s / h; let yy = y; row.forEach((r) => { const rh = r.a / cw; out.push({ x, y: yy, w: cw, h: rh, item: r.it }); yy += rh; }); x += cw; w -= cw; }
+      else { const rh = s / w; let xx = x; row.forEach((r) => { const rw = r.a / rh; out.push({ x: xx, y, w: rw, h: rh, item: r.it }); xx += rw; }); y += rh; h -= rh; }
+    }
+    return out;
+  },
+  // 수익률 → 칸 색(오르면 빨강, 내리면 파랑, 진할수록 크게)
+  heat(p, cap = 6) {
+    if (p == null || isNaN(p)) return "rgba(120,150,200,.25)";
+    const k = Math.min(1, Math.abs(p) / cap) * .78 + .16;
+    return p >= 0 ? `rgba(240,64,92,${k.toFixed(2)})` : `rgba(48,134,255,${k.toFixed(2)})`;
+  },
+  // 경주 트랙: 플랜들이 0% 선을 기준으로 왼쪽(손해)·오른쪽(이익)에 선다. 1등엔 왕관
+  trackMini(race) {
+    const xs = (race || []).filter((r) => r.n || r.open);
+    if (!xs.length) return `<div class="g-track empty"><span>아직 출발 전이에요</span></div>`;
+    const R = Math.max(1.5, ...xs.map((r) => Math.abs(r.net || 0))) * 1.15, X = (v) => 50 + (v / R) * 41;
+    const lead = xs.slice().sort((a, b) => b.net - a.net)[0];
+    return `<div class="g-track" role="img" aria-label="플랜 ${xs.length}개의 비용 뺀 수익률 분포, 1등 ${esc(lead.label)} ${pct(lead.net, 2)}">
+      <i class="g-zero"></i>${xs.map((r, i) => `<b class="g-run ${r === lead ? "lead" : ""} ${r.net >= 0 ? "pos" : "neg"}" style="left:${X(r.net).toFixed(1)}%;top:${r === lead ? 50 : 26 + (i % 3) * 24}%"></b>`).join("")}
+      <span class="g-tl">손해</span><span class="g-tr">이익</span></div>`;
+  },
+  hold(m) { return m == null ? "-" : m < 60 ? `${Math.round(m)}분` : m < 1440 ? `${Math.floor(m / 60)}시간` : `${(m / 1440).toFixed(1)}일`; },
+  ico: {
+    bag: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8h12l-1 12H7L6 8z" fill="#FFC531" stroke="#7A4A00" stroke-width="1.6"/><path d="M9 8V6a3 3 0 0 1 6 0v2" fill="none" stroke="#7A4A00" stroke-width="1.6"/></svg>`,
+    flag: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 21V4" stroke="#DCE6FF" stroke-width="2"/><path d="M6 4h11l-2.5 4L17 12H6z" fill="#4BDB76" stroke="#0F6B30" stroke-width="1.4"/></svg>`,
+    radar: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="#7FD3FF" stroke-width="1.6"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="#7FD3FF" stroke-width="1.2"/><path d="M12 12L19 6" stroke="#7FD3FF" stroke-width="2"/></svg>`,
+    coin: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="#FFC531" stroke="#9A5F00" stroke-width="1.6"/><circle cx="12" cy="12" r="5.5" fill="none" stroke="#9A5F00" stroke-width="1.2"/></svg>`,
+    trophy: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10v4a5 5 0 0 1-10 0V4z" fill="#FFC531" stroke="#9A5F00" stroke-width="1.5"/><path d="M7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4" fill="none" stroke="#9A5F00" stroke-width="1.5"/><path d="M10 14h4v3h-4zM8 20h8" stroke="#9A5F00" stroke-width="1.8" fill="#FFC531"/></svg>`,
+    search: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6" fill="rgba(127,211,255,.25)" stroke="#7FD3FF" stroke-width="2"/><path d="M15 15l5 5" stroke="#7FD3FF" stroke-width="2.6" stroke-linecap="round"/></svg>`,
+    star: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.7 5.6 6.1.8-4.5 4.2 1.1 6-5.4-2.9-5.4 2.9 1.1-6L3.2 9.4l6.1-.8z" fill="#FFC531" stroke="#9A5F00" stroke-width="1.3"/></svg>`,
+    bolt: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2L5 14h6l-1 8 8-12h-6z" fill="#FF9F5A" stroke="#7A3300" stroke-width="1.3"/></svg>`,
+    bank: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9l9-5 9 5z" fill="#9FB6DD"/><path d="M5 10h2v8H5zm4 0h2v8H9zm4 0h2v8h-2zm4 0h2v8h-2zM3 19h18v2H3z" fill="#DCE6FF"/></svg>`,
+    bell: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z" fill="#FFC531" stroke="#9A5F00" stroke-width="1.4"/><circle cx="12" cy="20" r="2" fill="#9A5F00"/></svg>`,
+    brain: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 3 3h1V4z" fill="#FF94C4" stroke="#8A1E5A" stroke-width="1.3"/><path d="M15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-3 3h-1V4z" fill="#C3A6FF" stroke="#4B2A8A" stroke-width="1.3"/></svg>`,
+  },
+};
 
 // ---------- 은행·단축어 ----------
 const BANKS = [["하나", "하나은행"], ["NH농협", "NH농협은행"], ["신한", "신한은행"], ["KB국민", "KB국민은행"], ["우리", "우리은행"],
@@ -1647,7 +1725,7 @@ pages.invest = {
     if (this._atBT && Date.now() - this._atBT < (hot ? 3000 : 15000)) return;
     this._atBT = Date.now();
     try { this._atB = await GET("/api/auto/brief"); } catch (e) { return; }
-    if ($("#ihAuto")) $("#ihAuto").innerHTML = this.atBriefHtml();
+    if ($("#ihAuto")) $("#ihAuto").innerHTML = gameOn() ? this.gAutoMini() : this.atBriefHtml();
     if ($("#hmAuto")) $("#hmAuto").innerHTML = this.atHomeGroup(this._atB.runs, this._atB.labs);
   },
   async home(box) {
@@ -1660,6 +1738,7 @@ pages.invest = {
   },
   homeRender(box, d) {
     $(".fab")?.remove();
+    if (gameOn()) return this.gHome(box, d);
     const a = d.account, H = (d.holdings || []).slice();
     const S = this.hs || (this.hs = { sort: "value" });
     const key = { value: (x) => -x.value, pnl: (x) => -(x.pnl_pct || 0), day: (x) => -(x.day_pct || 0) }[S.sort];
@@ -1696,6 +1775,161 @@ pages.invest = {
     fab("주문", () => orderSheet({}));
   },
 
+  // ===== 게임 화면: 투자 홈 = 금고(도넛) · 두 전장(해 궤도) · 자동매매 경주 · 내 부대 지도 · 기지 메뉴 =====
+  gHome(box, d) {
+    const a = d.account, H = (d.holdings || []).slice().sort((x, y) => y.value - x.value);
+    const S = this.hs || (this.hs = { sort: "value", col: "pnl" });
+    const has = a && a.total != null;
+    const krV = H.filter((h) => h.market !== "us").reduce((s, h) => s + (h.value || 0), 0), usV = H.filter((h) => h.market === "us").reduce((s, h) => s + (h.value || 0), 0);
+    const cash = has ? Math.max(0, a.total - krV - usV) : 0, tot = krV + usV + cash || 1;
+    const parts = [[krV, "#FF7A59", "국내 주식"], [usV, "#52ABFF", "미국 주식"], [cash, "#FFC531", "현금"]];
+    const idx = d.indices || [], ix = (n) => idx.find((x) => x.name === n);
+    const arena = (m) => {
+      const S2 = marketSession(m), names = m === "kr" ? ["코스피", "코스닥"] : ["S&P 500", "나스닥"];
+      return `<a class="g-arena ${m}" href="#invest/market" aria-label="${m === "kr" ? "국내" : "미국"} 시장 · ${esc(S2.label)}">
+        <span class="g-arena-h"><b>${m === "kr" ? "국내" : "미국"}</b><em class="ss-${S2.phase}">${esc(S2.label)}</em></span>
+        ${G.arc(S2)}
+        <span class="g-arena-ix">${names.map((n) => { const x = ix(n); return x && x.change_pct != null ? `<span><small>${esc(n)}</small><b class="${tone(x.change_pct)}">${x.change_pct >= 0 ? "▲" : "▼"} ${pct(x.change_pct, 2)}</b></span>` : ""; }).join("")}</span>
+        <span class="g-arena-s">${esc(S2.sub || "")}</span></a>`;
+    };
+    const tiles = has && H.length ? G.treemap(H.map((h) => ({ v: Math.max(h.value, tot * 0.004), h }))) : [];
+    const colv = (h) => (S.col === "day" ? h.day_pct : h.pnl_pct);
+    const fx = idx.find((x) => x.name.includes("환율"));
+    box.innerHTML = `
+      ${a && a.error ? `<div class="notice warn">${a.stale ? "키움 연결이 끊겨 아래 금액은 마지막으로 받은 값이에요. 시세·AI 추천·자동매매도 연결돼야 움직여요.<br>" : ""}${esc(a.error)}${ipHelp(a.error)}</div>` : ""}
+      ${has ? `<section class="g-vault">
+        ${G.donut(parts, 132, 18, `<small>평가손익</small><b class="${tone(a.pnl_pct)}">${pct(a.pnl_pct, 1)}</b>`)}
+        <div class="g-vault-r">
+          <span class="g-lbl">${G.ico.coin}내 금고 · 키움 ${esc(a.server || "")}${a.stale ? " · 연결 끊김" : ""}</span>
+          <b class="g-big">${won(a.total)}<small>원</small></b>
+          <span class="g-today ${tone(d.day_pnl)}">${(d.day_pnl || 0) >= 0 ? "▲" : "▼"} 오늘 ${signed(d.day_pnl)}원 <i>${pct(d.day_pct, 2)}</i></span>
+          <ul class="g-legend">${parts.map(([v, c, n]) => `<li><i style="background:${c}"></i>${n}<b>${Math.round(v / tot * 100)}%</b></li>`).join("")}</ul>
+          <span class="g-cash" role="button" tabindex="0" data-cashwhy>주문 가능 <b>${won(a.orderable)}</b>원${a.us && a.us.usd ? ` · 달러 <b>${usd(a.us.usd)}</b>` : ""} ›</span>
+        </div></section>`
+      : `<section class="g-vault empty"><span class="g-lbl">${G.ico.coin}내 금고</span><b>키움 계좌를 연결하면 금고가 열려요</b><a class="btn dark" href="#settings/accounts">계좌 연결하기</a></section>`}
+      <div class="g-arenas">${arena("kr")}${arena("us")}</div>
+      ${fx && fx.price ? `<div class="g-fx">원달러 <b>${won(fx.price)}</b> <span class="${tone(fx.change_pct)}">${pct(fx.change_pct, 2)}</span></div>` : ""}
+      <div id="ihAuto">${this.gAutoMini()}</div>
+      ${has ? `<section class="g-army">
+        <div class="g-army-h"><b>내 부대 · 보유 ${H.length}종목</b>${seg("색기준", [["pnl", "전체 수익"], ["day", "오늘"]], S.col, "g-mini-seg")}</div>
+        ${H.length ? `<div class="g-map" role="list">${tiles.map((t) => { const h = t.item.h, p = colv(h), big = t.w * t.h > 900;
+          return `<a role="listitem" class="g-tile ${big ? "big" : t.w * t.h < 260 ? "tiny" : ""}" href="#invest/stock?m=${h.market === "us" ? "us" : "kr"}&s=${encodeURIComponent(h.code)}"
+            style="left:${t.x.toFixed(2)}%;top:${t.y.toFixed(2)}%;width:${t.w.toFixed(2)}%;height:${t.h.toFixed(2)}%;background:${G.heat(p)}"
+            aria-label="${esc(h.name)} ${won(h.value)}원 ${pct(p, 2)}"><b>${esc(h.name)}</b><span>${pct(p, 1)}</span>${big ? `<small>${won(h.value)}원</small>` : ""}</a>`; }).join("")}</div>
+          <div class="g-map-l"><span>칸 크기 = 평가금액</span><span><i style="background:${G.heat(5)}"></i>오름 <i style="background:${G.heat(-5)}"></i>내림</span></div>`
+          : `<div class="empty">아직 부대가 없어요. 발견에서 종목을 둘러보세요</div>`}</section>` : ""}
+      <nav class="g-base" aria-label="투자 바로 가기">
+        <a href="#invest/aistat">${G.ico.trophy}<b>AI 성적</b></a>
+        <a href="#invest/discover">${G.ico.bolt}<b>실시간 순위</b></a>
+        <a href="#invest/market">${G.ico.star}<b>관심종목</b></a>
+        <button type="button" id="ihFind">${G.ico.search}<b>종목 검색</b></button>
+        <a href="#invest/account">${G.ico.bank}<b>계좌</b></a>
+        ${(d.alerts || []).length ? `<a href="#invest/market">${G.ico.bell}<b>가격 알림 ${d.alerts.length}</b></a>` : `<a href="#invest/atlog">${G.ico.flag}<b>매매 기록</b></a>`}
+      </nav>
+      ${has ? AI_BTN("portfolio", "AI 포트폴리오 점검") : ""}`;
+    bindSeg(box, "색기준", (v) => { S.col = v; this.gHome(box, d); });
+    $("#ihFind").onclick = () => mkt.search();
+    fab("주문", () => orderSheet({}));
+  },
+  // 투자 홈의 자동매매: 실험마다 경주 트랙 한 줄, 직접 만든 것은 체력 막대
+  gAutoMini() {
+    const B = this._atB;
+    if (!B) return "";
+    const labs = (B.labs || []).slice().sort((x, y) => (x.mkt === y.mkt ? 0 : x.mkt === "kr" ? -1 : 1));
+    if (!labs.length && !B.runs.length) return `<a class="g-quest" href="#invest/auto">${G.ico.radar}<span><b>AI 자동매매</b><small>쓸 돈만 정하면 AI가 플랜을 짜서 사고팔아요. 모의로 먼저 해 볼 수 있어요</small></span><em>›</em></a>`;
+    return `<section class="g-race">
+      <div class="g-race-h"><b>AI 자동매매</b><a href="#invest/auto">전체 ›</a></div>
+      ${B.runs.map((r) => { const m = r.money, hp = Math.max(0, Math.min(100, (m.equity / (r.budget || 1)) * 50)), n = r.now;
+        return `<a class="g-unit ${r.mkt} ${r.mode}" href="#invest/auto" data-atgo="${r.id}">
+          <span class="g-unit-h"><i class="mk-tag ${r.mkt}">${r.mkt === "kr" ? "국내" : "미국"}</i><b>${esc(r.name)}</b><em class="${r.mode === "real" ? "real" : ""}">${r.mode === "real" ? "실전" : "모의"}</em>
+            <span class="live-dot ${r.status === "running" ? "on" : ""}"></span></span>
+          <span class="g-hp" role="img" aria-label="쓸 돈 대비 ${pct(m.ret_pct, 2)}"><i style="width:${hp.toFixed(1)}%" class="${m.ret_pct >= 0 ? "pos" : "neg"}"></i><s></s></span>
+          <span class="g-unit-f"><b>${this.atM(r.mkt, m.equity)}</b><b class="${tone(m.ret_pct)}">${pct(m.ret_pct, 2)}</b><small>${n && n.busy ? "AI 추천 받는 중" : n ? esc(n.next.kind === "at" ? `다음 추천 ${n.next.text}` : n.next.label).slice(0, 24) : ""}</small></span></a>`; }).join("")}
+      ${labs.map((L) => { const lead = (L.race || []).filter((r) => r.n || r.open).sort((a, b) => b.net - a.net)[0];
+        return `<a class="g-lane ${L.mkt}" href="#invest/auto" data-labgo="${L.id}">
+          <span class="g-lane-h"><i class="mk-tag ${L.mkt}">${L.mkt === "kr" ? "국내" : "미국"}</i><b>${esc(L.style_label)} 실험</b>
+            ${L.now && L.now.busy ? `<em class="g-scan">${G.ico.radar}추천 받는 중</em>` : `<span class="live-dot ${L.status === "running" ? "on" : ""}"></span>`}</span>
+          ${G.trackMini(L.race)}
+          <span class="g-lane-f">${lead ? `<span class="g-crown">👑</span><b>${esc(lead.label)}</b><b class="${tone(lead.net)}">${pct(lead.net, 2)}</b>` : "<span>출발 전</span>"}<small>보유 ${L.stocks ?? L.open} · 끝난 거래 ${L.closed}</small></span></a>`; }).join("")}
+    </section>`;
+  },
+  // ===== 게임 화면: 자동매매 대기실 = 연료 계기판 · 네 경기장(경주 트랙) · 내 부대(체력 막대) =====
+  gLobby(O, LB, live, done, oldLabs) {
+    const S = (LB || {}).auto, labs = ((LB || {}).labs || []).filter((L) => L.status !== "ended");
+    const race = (L) => L.runs.map((r) => ({ label: r.label, net: r.net_ret_pct, n: r.closed, open: r.open }));
+    const fuel = S ? Math.min(100, S.usd_today / (S.day_cap_usd || 1) * 100) : 0;
+    const arena = (a) => {
+      const L = labs.find((x) => x.mkt === a.mkt && x.style === a.style), kr = a.mkt === "kr", N = L && L.now;
+      const head = `<span class="g-st-h"><i class="mk-tag ${a.mkt}">${kr ? "국내" : "미국"}</i><b>${esc(a.style_label)}</b>${N && N.busy ? `<em class="g-scan">${G.ico.radar}스캔 중</em>` : L ? `<span class="live-dot ${L.status === "running" ? "on" : ""}"></span>` : ""}</span>`;
+      if (!L) return `<div class="g-st ${a.mkt} off">${head}<div class="g-track empty"><span>${S.on ? "곧 시작해요" : "꺼져 있어요"}</span></div><span class="g-st-f">끝난 거래 ${a.trades}건</span></div>`;
+      const lead = race(L).filter((r) => r.n || r.open).sort((x, y) => y.net - x.net)[0];
+      const when = !N ? "" : N.busy ? "AI 추천 받는 중" : N.next.kind === "at" ? `다음 추천 ${esc(N.next.text)}` : N.next.kind === "soon" ? "곧 추천을 받아요" : esc(N.next.label).slice(0, 22);
+      return `<button type="button" class="g-st ${a.mkt}" data-lab="${L.id}">${head}
+        ${G.trackMini(race(L))}
+        <span class="g-st-lead">${a.best ? `<span class="g-crown">⭐</span><b>실전 후보 · ${esc(a.best.label)}</b><b class="${tone(a.best.net_pct)}">${pct(a.best.net_pct, 2)}</b>` : lead ? `<span class="g-crown">👑</span><b>${esc(lead.label)}</b><b class="${tone(lead.net)}">${pct(lead.net, 2)}</b>` : "<span>출발 전</span>"}</span>
+        <span class="g-st-k"><span title="보유 종목">${G.ico.bag}<b>${L.stocks ?? L.open}</b></span><span title="끝난 거래">${G.ico.flag}<b>${L.closed}</b></span><span title="받은 추천">${G.ico.radar}<b>${L.cycles}</b></span></span>
+        <span class="g-st-f">${when}</span></button>`;
+    };
+    const cand = S ? S.advice.filter((a) => a.best) : [];
+    const unit = (r) => { const m = r.money, n = r.now, hp = Math.max(0, Math.min(100, (m.equity / (r.budget || 1)) * 50)), [lbl] = this.AT_ST[r.status] || [r.status];
+      return `<button type="button" class="g-unit ${r.mkt} ${r.mode}" data-run="${r.id}">
+        <span class="g-unit-h"><i class="mk-tag ${r.mkt}">${r.mkt === "kr" ? "국내" : "미국"}</i><b>${esc(r.name)}</b><em class="${r.mode === "real" ? "real" : ""}">${r.mode === "real" ? "실전" : "모의"}</em>
+          ${r.pending ? `<i class="tag warn">개선안 ${r.pending}</i>` : ""}<span class="live-dot ${r.status === "running" ? "on" : ""}"></span></span>
+        <span class="g-hp" role="img" aria-label="쓸 돈 대비 ${pct(m.ret_pct, 2)}"><i style="width:${hp.toFixed(1)}%" class="${m.ret_pct >= 0 ? "pos" : "neg"}"></i><s></s></span>
+        <span class="g-unit-f"><b>${this.atM(r.mkt, m.equity)}</b><b class="${tone(m.ret_pct)}">${pct(m.ret_pct, 2)}</b>
+          <small>${lbl}${n ? ` · ${n.busy ? "AI 추천 받는 중" : esc(n.next.kind === "at" ? `다음 ${n.next.text}` : n.next.label).slice(0, 22)}` : ""} · 거래 ${r.closed} · 보유 ${r.open}</small></span></button>`; };
+    return `<div class="g-lobby-top"><b>AI 자동매매</b><button type="button" class="btn dark sm" id="atNewBtn">+ 직접 만들기</button></div>
+      ${this.atReadyHtml(O.ready)}
+      ${S ? `<section class="g-test ${S.on ? "on" : ""}">
+        <div class="g-test-h"><span><b>모의 자동 테스트</b><small>가상 돈으로 플랜 ${((LB || {}).presets || []).length}가지를 겨뤄요</small></span>
+          <button type="button" class="switch" role="switch" id="atAutoSw" aria-checked="${!!S.on}" aria-label="모의 자동 테스트"><span></span></button></div>
+        <div class="g-fuel" role="img" aria-label="오늘 AI 비용 $${S.usd_today.toFixed(2)} / 하루 $${S.day_cap_usd}"><span>${G.ico.bolt}AI 연료</span>
+          <span class="g-fuel-bar"><i style="width:${fuel.toFixed(1)}%"></i></span><b>$${S.usd_today.toFixed(2)}<small> / $${S.day_cap_usd}</small></b></div>
+        <div class="g-stadia">${S.advice.slice().sort((a, b) => (a.mkt === b.mkt ? 0 : a.mkt === "kr" ? -1 : 1)).map(arena).join("")}</div>
+        ${cand.map((a) => `<div class="at-cand"><span><b>${a.mkt === "kr" ? "국내" : "미국"} ${esc(a.style_label)} 실전 후보</b><small>${esc(a.text)}</small></span>
+          <button type="button" class="btn sm" data-real="${a.mkt}:${a.style}:${esc(a.best.variant)}">실전 만들기</button></div>`).join("")}
+        <div class="g-legend-row"><span><b class="g-run-s lead"></b>1등</span><span><b class="g-run-s pos"></b>이익 플랜</span><span><b class="g-run-s neg"></b>손해 플랜</span>
+          <span>${G.ico.bag}보유</span><span>${G.ico.flag}끝난 거래</span><span>${G.ico.radar}추천</span><span>AI 비용 누적 $${S.usd_all.toFixed(2)}(${won(S.cur_all)}원)</span></div>
+      </section>` : ""}
+      ${live.length ? `<div class="g-sec">${G.ico.flag}<b>직접 만든 자동매매</b></div><div class="g-units">${live.map(unit).join("")}</div>` : ""}
+      ${done.length || oldLabs.length ? `<details class="at-old"><summary>끝난 것 ${done.length + oldLabs.length}개</summary>
+        <section class="card tight at-rows">${done.map((r) => this.atRow(r)).join("")}${oldLabs.map((L) => `<button type="button" class="at-row" data-lab="${L.id}">
+          <span class="mk-tag ${L.mkt}">${L.mkt === "kr" ? "국내" : "미국"}</span><span class="at-row-n"><b>${esc(L.style_label)} 실험</b><small>${esc(L.start_date.slice(5))}~${esc(L.end_date.slice(5))} · 끝난 거래 ${L.closed}건</small></span>
+          <span class="at-row-v"><small>끝남</small></span></button>`).join("")}</section></details>` : ""}
+      <div class="tiny" style="padding:0 3px">수익을 보장하지 않아요. 손실 한도에 닿으면 스스로 멈추지만, 급변할 때는 한도보다 더 잃을 수 있어요.</div>`;
+  },
+  // ===== 게임 화면: 실험 경기장 = 플랜마다 한 줄씩 달리는 경주(0% 선 기준, 오른쪽이 이익) + 믿을 만함(30건) 게이지 =====
+  gStadium(L, P, tab, adv) {
+    const kr = L.mkt === "kr", N = L.now, rs = L.runs;
+    const R = Math.max(1.5, ...rs.map((r) => Math.abs(r.net_ret_pct || 0))) * 1.12, X = (v) => 50 + (v / R) * 44;
+    const medal = ["gold", "silver", "bronze"];
+    const ranked = rs.filter((r) => r.closed >= 10);
+    const lanes = rs.map((r, i) => {
+      const rank = ranked.indexOf(r), started = r.closed || r.open, x = X(r.net_ret_pct || 0);
+      return `<button type="button" class="g-lane2" data-run="${r.id}" aria-label="${esc(r.label)} 비용 뺀 ${pct(r.net_ret_pct, 2)}, 끝난 거래 ${r.closed}건">
+        <span class="g-lane2-n"><i class="g-medal ${rank >= 0 && rank < 3 ? medal[rank] : ""}">${rank >= 0 ? rank + 1 : "·"}</i><b>${esc(r.label)}</b></span>
+        <span class="g-lane2-t">${started ? `<span class="g-lane2-trail ${r.net_ret_pct >= 0 ? "pos" : "neg"}" style="left:${Math.min(50, x).toFixed(1)}%;width:${Math.abs(x - 50).toFixed(1)}%"></span>
+          <span class="g-runner ${r.net_ret_pct >= 0 ? "pos" : "neg"} ${rank === 0 ? "lead" : ""}" style="left:${x.toFixed(1)}%">${r.open ? `<em>${r.open}</em>` : ""}</span>` : `<span class="g-lane2-wait">출발 전</span>`}</span>
+        <span class="g-lane2-v"><b class="${tone(r.net_ret_pct)}">${started ? pct(r.net_ret_pct, 2) : "-"}</b>
+          <span class="g-cred" title="믿을 만함 ${Math.min(r.closed, 30)}/30"><i style="width:${Math.min(100, r.closed / 30 * 100).toFixed(0)}%"></i></span></span></button>`;
+    }).join("");
+    return `<section class="g-stadium ${L.mkt}">
+        <button type="button" class="at-back" id="atBack">‹ 대기실</button>
+        <div class="g-stadium-h"><i class="mk-tag ${L.mkt}">${kr ? "국내장" : "미국장"}</i><b>${esc(L.style_label)} 경기장</b>
+          <span class="tag ${{ running: "y", paused: "g", ended: "" }[L.status]}">${{ running: "가동 중", paused: "멈춤", ended: "끝남" }[L.status]}</span></div>
+        ${N ? (N.busy ? this.atScanHtml(N) : `<div class="at-nowline ${N.next.kind}"><span class="at-dot ${L.status === "running" ? "on" : ""}"></span><div><b>${esc(N.next.label)}</b><span>${this.atNextLine(N)}</span></div></div>`) : ""}
+        <div class="g-st-k big"><span>${G.ico.bag}<small>보유</small><b>${L.stocks ?? L.open}종목</b></span><span>${G.ico.flag}<small>끝난 거래</small><b>${L.closed}</b></span>
+          <span>${G.ico.radar}<small>추천${L.plan && L.plan.quick_gap_min ? ` · ${L.plan.quick_gap_min}분마다` : ""}</small><b>${L.cycles}번</b></span><span>${G.ico.bolt}<small>AI 비용</small><b>$${Number(L.usd).toFixed(2)}</b></span></div>
+        <div class="g-field" role="list" aria-label="플랜 경주">
+          <div class="g-field-ax"><span>${pct(-R, 1)} 손해</span><span>0%</span><span>이익 ${pct(R, 1)}</span></div>
+          ${lanes}
+          <div class="g-field-l"><span>점 위치 = AI 비용 뺀 수익률 · 점 안 숫자 = 지금 보유 종목 수</span><span>막대 = 믿을 만함(끝난 거래 30건)</span></div>
+        </div>
+        ${seg("실험탭", [["hold", `보유 ${L.positions.length}`], ["last", "추천"], ["rank", "성적표"], ["sold", `판 기록 ${L.trades.length}`]], tab, "ap-mkt")}
+      </section>
+      <div id="atBody">${adv && adv.best ? `<div class="at-cand"><span><b>실전 후보</b><small>${esc(adv.text)}</small></span><button type="button" class="btn sm" data-real="${L.mkt}:${L.style}:${esc(adv.best.variant)}">실전 만들기</button></div>` : ""}
+        <section class="card lab ${L.mkt}">${P[tab]}</section></div>`;
+  },
   // ---------- AI 자동매매 ----------
   AT_ST: { running: ["가동 중", "y"], paused: ["새 매수 멈춤", "g"], closing: ["정리 중", "warn"], ended: ["종료", ""] },
   atM(mkt, v, sign) {  // 시장 통화로 금액 표시
@@ -1822,7 +2056,7 @@ pages.invest = {
     if (investState.tab !== "auto" || A.view !== "list") return;
     const live = O.runs.filter((r) => r.status !== "ended"), done = O.runs.filter((r) => r.status === "ended");
     const oldLabs = ((LB || {}).labs || []).filter((L) => L.status === "ended");
-    box.innerHTML = `<div class="at-top"><div><b>AI 자동매매</b><span>AI가 고르고, 플랜대로 사고팔고, 기록으로 고쳐 가요</span></div>
+    box.innerHTML = gameOn() ? this.gLobby(O, LB, live, done, oldLabs) : `<div class="at-top"><div><b>AI 자동매매</b><span>AI가 고르고, 플랜대로 사고팔고, 기록으로 고쳐 가요</span></div>
         <button type="button" class="btn dark sm" id="atNewBtn">+ 직접 만들기</button></div>
       ${this.atReadyHtml(O.ready)}
       ${this.atAutoHtml(LB)}
@@ -1896,7 +2130,7 @@ pages.invest = {
     if (!L) { A.view = "list"; return this.atList(box); }
     const kr = L.mkt === "kr", N = L.now, tab = (A.labTab = A.labTab || "hold"), P = this.atLabParts(L);
     const adv = ((LB.auto || {}).advice || []).find((a) => a.mkt === L.mkt && a.style === L.style);
-    box.innerHTML = `<section class="ap-hero at-hero lab-hero ${L.mkt}">
+    box.innerHTML = gameOn() ? this.gStadium(L, P, tab, adv) : `<section class="ap-hero at-hero lab-hero ${L.mkt}">
         <button type="button" class="at-back" id="atBack">‹ 목록</button>
         <div class="at-hero-top"><b><span class="mk-tag ${L.mkt}">${kr ? "국내장" : "미국장"}</span>${esc(L.style_label)} 실험 · 플랜 ${L.runs.length}개</b>
           <span class="tag ${{ running: "y", paused: "g", ended: "" }[L.status]}">${{ running: "가동 중", paused: "멈춤", ended: "끝남" }[L.status]}</span></div>
@@ -2398,6 +2632,7 @@ pages.invest = {
           catch (err) { H.dd[day] = { error: err.message }; }
           if (H.openDay === day && $("#hxBody")) $("#hxBody").innerHTML = this.hxBody();
         }
+        if (gameOn() && H.openDay) $(".g-day")?.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
         return;
       }
       if (st) { H.openSt = H.openSt === st.dataset.hxst ? "" : st.dataset.hxst; $("#hxBody").innerHTML = this.hxBody(); }
@@ -2413,6 +2648,7 @@ pages.invest = {
         ${d.trades.length > n ? `<button type="button" class="btn wide" data-hxmore="trade">거래 더 보기(${won(Math.min(40, d.trades.length - n))}건)</button>` : ""}
         ${d.trades_n > d.trades.length && d.trades.length <= n ? `<div class="tiny" style="padding:0 3px">최근 ${d.trades.length}건까지만 보여요. 기간이나 전략을 좁혀 보세요.</div>` : ""}`;
     }
+    if (gameOn()) return this.gCal(d);
     return `<section class="card tight hx-list">${d.days.map((x) => {
       const S = x.stats, on = H.openDay === x.day;
       return `<div class="hx-item ${on ? "on" : ""}"><button type="button" class="hx-row" data-hxday="${x.day}" aria-expanded="${on}">
@@ -2423,6 +2659,45 @@ pages.invest = {
           <span class="hx-val"><b class="${tone(x.net)}">${signed(x.net)}</b><small>AI ${won(x.ai_cost)}원 뺌</small></span></button>
         ${on ? `<div class="hx-more">${this.hxDay(x)}</div>` : ""}</div>`;
     }).join("") || `<div class="empty small">기록이 없어요</div>`}</section>`;
+  },
+  // ===== 게임 화면: 매매 기록 날짜별 = 손익 달력(칸 색 = 비용 뺀 손익), 날짜를 누르면 그날 전투 기록 =====
+  gCal(d) {
+    const H = this.hx, days = d.days || [];
+    if (!days.length) return `<section class="card"><div class="empty small">기록이 없어요</div></section>`;
+    const by = Object.fromEntries(days.map((x) => [x.day, x])), mx = Math.max(1, ...days.map((x) => Math.abs(x.net)));
+    const short = (v) => { const a = Math.abs(v), sg = v > 0 ? "+" : v < 0 ? "-" : ""; return a >= 1e8 ? `${sg}${(a / 1e8).toFixed(1)}억` : a >= 1e4 ? `${sg}${Math.round(a / 1e4)}만` : `${sg}${won(a)}`; };
+    const months = [...new Set(days.map((x) => x.day.slice(0, 7)))].sort().reverse();
+    const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+    const cal = months.map((ym) => {
+      const [y, m] = ym.split("-").map(Number), first = new Date(Date.UTC(y, m - 1, 1)), n = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      const cells = [];
+      let lead = (first.getUTCDay() + 6) % 7;                 // 월요일부터
+      if (lead > 4) lead = 0;                                  // 주말에 시작하면 다음 월요일부터
+      for (let i = 0; i < lead; i++) cells.push(`<span class="g-cd pad"></span>`);
+      for (let dd = 1; dd <= n; dd++) {
+        const dt = new Date(Date.UTC(y, m - 1, dd)), wd = dt.getUTCDay();
+        if (wd === 0 || wd === 6) continue;
+        const key = `${ym}-${String(dd).padStart(2, "0")}`, x = by[key];
+        if (!x) { cells.push(`<span class="g-cd none ${key === today ? "today" : ""}"><i>${dd}</i></span>`); continue; }
+        const k = Math.min(1, Math.abs(x.net) / mx) * .8 + .2, bg = x.net >= 0 ? `rgba(240,64,92,${k.toFixed(2)})` : `rgba(48,134,255,${k.toFixed(2)})`;
+        cells.push(`<button type="button" class="g-cd ${H.openDay === key ? "on" : ""} ${key === today ? "today" : ""}" data-hxday="${key}" style="background:${bg}"
+          aria-label="${m}월 ${dd}일 비용 뺀 손익 ${signed(x.net)}원, 매도 ${x.sells}건" aria-pressed="${H.openDay === key}">
+          <i>${dd}</i><b>${short(x.net)}</b>${x.stats.n ? `<small>${x.stats.win_rate}%</small>` : ""}</button>`);
+      }
+      const sum = days.filter((x) => x.day.startsWith(ym)).reduce((a, x) => a + x.net, 0);
+      return `<div class="g-cal-m"><div class="g-cal-h"><b>${y}년 ${m}월</b><span class="${tone(sum)}">${signed(sum)}원</span></div>
+        <div class="g-cal-w">${"월화수목금".split("").map((w) => `<span>${w}</span>`).join("")}</div><div class="g-cal">${cells.join("")}</div></div>`;
+    }).join("");
+    const x = by[H.openDay];
+    return `<section class="g-calbox">${cal}
+        <div class="g-map-l"><span>칸 = 그날 AI 비용 뺀 손익 · 작은 숫자 = 승률</span><span><i style="background:${G.heat(5)}"></i>이익 <i style="background:${G.heat(-5)}"></i>손해</span></div></section>
+      ${x ? `<section class="g-day">
+          <div class="g-day-h"><b>${esc(x.day.slice(5).replace("-", "/"))}(${x.dow}) 전투 기록</b><b class="${tone(x.net)}">${signed(x.net)}원</b></div>
+          <div class="g-st-k big"><span>${G.ico.flag}<small>매도 · 승률</small><b>${x.stats.n ? `${x.sells} · ${x.stats.win_rate}%` : x.sells}</b></span><span>${G.ico.bag}<small>매수</small><b>${x.buys}</b></span>
+            <span>${G.ico.radar}<small>추천${x.quick ? `(빠른 ${x.quick})` : ""}</small><b>${x.cycles}</b></span><span>${G.ico.bolt}<small>AI 비용</small><b>${won(x.ai_cost)}</b></span></div>
+          ${x.best && x.best.pnl > 0 ? `<div class="g-mvp">${G.ico.trophy}<span><small>오늘의 MVP</small><b>${esc(x.best.label)}</b><em>${esc(x.best.group)}</em></span><b class="up">${signed(x.best.pnl)}원</b></div>` : ""}
+          <div class="hx-more">${this.hxDay(x)}</div></section>`
+        : `<div class="g-hint">${G.ico.search}<span>달력에서 날짜를 누르면 그날 지수·전략별 성적·받은 추천·거래가 열려요</span></div>`}`;
   },
   hxDay(x) {
     const D = this.hx.dd[x.day];

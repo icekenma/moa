@@ -2768,6 +2768,7 @@ class AutoTrade:
         labs = []
         try:
             labs = [{k: L.get(k) for k in ("id", "mkt", "style_label", "status", "lead", "note", "closed", "usd", "now", "open", "holders", "bought", "cycles", "quick", "plan", "stocks", "last_line")} | {"hold": [{"name": g["name"], "pct": g["pct"]} for g in L.get("positions", [])[:4]]} | {"n": len(L["runs"])}
+                    | {"race": [{"label": r["label"], "variant": r["variant"], "net": r["net_ret_pct"], "n": r["closed"], "open": r["open"]} for r in L["runs"]]}
                     for L in self.labs()["labs"] if L["status"] != "ended"]
         except Exception as e:
             self.rt.db.log("system", "error", f"실험 요약 오류: {type(e).__name__}: {e}", self._now())

@@ -639,8 +639,9 @@ class AutoTrade:
         if AP.mkt_date(mkt) > run["end_date"]:
             return False, "over", "기간이 끝났어요"
         hm = self._local(mkt).strftime("%H:%M")
-        if not (p["entry_start"] <= hm <= p["entry_end"]):
-            return False, "time", f"매수 시간({p['entry_start']}~{p['entry_end']})이 아니에요"
+        es, ee = self._entry(run, self._local(mkt).date())
+        if not (es <= hm <= ee):
+            return False, "time", f"매수 시간({es}~{ee})이 아니에요"
         opens = self._open(run["id"])
         if len(opens) >= p["max_positions"]:
             return False, "full", "보유 종목 수가 꽉 찼어요"
@@ -673,6 +674,18 @@ class AutoTrade:
     # ------------------------------------------------------------------ 지금 상태(화면용)
     HOURS = {"kr": ("09:00", "15:20"), "us": ("09:30", "16:00")}   # 그 시장 시각 기준 정규장
     WD = "월화수목금토일"
+
+    def _hours(self, mkt, d):
+        """그날의 정규장 시작·끝(그 시장 시각). 수능일처럼 늦게 여는 날은 밀린 시각."""
+        o, c = self.HOURS[mkt]
+        so, sc = AP.kr_shift(d) if mkt == "kr" else (0, 0)
+        return AP.hm_add(o, so), AP.hm_add(c, sc)
+
+    def _entry(self, run, d):
+        """그날의 매수 시작·끝 시각. 플랜 값은 평소 기준이고, 장이 늦게 여는 날은 그만큼 밀어 쓴다."""
+        p = run["params"]
+        so, sc = AP.kr_shift(d) if run["mkt"] == "kr" else (0, 0)
+        return AP.hm_add(p["entry_start"], so), AP.hm_add(p["entry_end"], sc)
 
     def _trading_day(self, mkt, d):
         if d.weekday() >= 5:
@@ -721,7 +734,7 @@ class AutoTrade:
         end = datetime.strptime(run["end_date"], "%Y-%m-%d").date()
 
         def entry(d):
-            h, m = map(int, p["entry_start"].split(":"))
+            h, m = map(int, self._entry(run, d)[0].split(":"))
             return datetime(d.year, d.month, d.day, h, m)
 
         def nxt(label, d):
@@ -732,8 +745,9 @@ class AutoTrade:
         if code in ("closed", "time"):
             if not tday:
                 return nxt("오늘은 장이 쉬어요. 다음 거래일에 AI 추천을 받아 매수를 시작해요", self._next_day(mkt, today))
-            if hm < p["entry_start"]:
-                return nxt("장 시작 전이에요. 매수 시작 시각에 AI 추천을 받아요" if hm < self.HOURS[mkt][0] else "장은 열렸고, 매수 시작 시각을 기다려요", today)
+            if hm < self._entry(run, today)[0]:
+                late = AP.kr_note(today) if mkt == "kr" else ""
+                return nxt((late + ". " if late else "") + ("장 시작 전이에요. 매수 시작 시각에 AI 추천을 받아요" if hm < self._hours(mkt, today)[0] else "장은 열렸고, 매수 시작 시각을 기다려요"), today)
             return nxt("오늘 매수 시간은 끝났어요. 다음 거래일에 이어 가요", self._next_day(mkt, today))
         if code == "over":
             return {"kind": "hold", "label": why}
@@ -741,7 +755,7 @@ class AutoTrade:
             return nxt(why + ". 다음 거래일에 다시 시작해요" if code != "cycles" else "오늘 추천 횟수를 다 썼어요. 다음 거래일에 다시 받아요", self._next_day(mkt, today))
         if code == "gap":
             at = loc + timedelta(minutes=math.ceil(max(0, (run["last_cycle"] or 0) + p["cycle_gap_min"] * 60 - time.time()) / 60))
-            if at.strftime("%H:%M") > p["entry_end"]:
+            if at.strftime("%H:%M") > self._entry(run, today)[1]:
                 return nxt("오늘은 매수 시간이 끝나기 전에 다음 추천 차례가 오지 않아요", self._next_day(mkt, today))
             return {"kind": "at", "label": f"추천 간격({p['cycle_gap_min']}분)을 기다리는 중이에요", **self._when(mkt, at)}
         if code in ("full", "cash"):
@@ -755,7 +769,7 @@ class AutoTrade:
         today, hm = loc.date(), loc.strftime("%H:%M")
         day = AP.mkt_date(mkt)
         ss = self._session(mkt)
-        o_hm, c_hm = self.HOURS[mkt]
+        o_hm, c_hm = self._hours(mkt, today)
         tday = self._trading_day(mkt, today)
         phase = "open" if ss["open"] else "off" if not tday else "pre" if hm < o_hm else "post"
         opens = self._open(rid)
@@ -798,12 +812,14 @@ class AutoTrade:
         total_days = (end - start).days + 1
         # 오늘(쉬는 날·장 마감 뒤면 다음 거래일)의 시간표. 시각은 그 시장 기준이고, 미국은 한국 시각을 함께 준다
         show = today if tday and phase != "post" else self._next_day(mkt, today)
-        soon = (datetime.strptime(c_hm, "%H:%M") - timedelta(minutes=8)).strftime("%H:%M")
-        rows = [(o_hm, "장 시작", "보유 종목 감시 시작"), (p["entry_start"], "매수 시작", f"AI 추천을 받아요(하루 최대 {p['cycles_per_day']}번, {p['cycle_gap_min']}분 간격)"),
-                (p["entry_end"], "매수 끝", "이 뒤로는 새로 사지 않아요")]
+        s_o, s_c = self._hours(mkt, show)
+        s_es, s_ee = self._entry(run, show)
+        soon = (datetime.strptime(s_c, "%H:%M") - timedelta(minutes=8)).strftime("%H:%M")
+        rows = [(s_o, "장 시작", "보유 종목 감시 시작"), (s_es, "매수 시작", f"AI 추천을 받아요(하루 최대 {p['cycles_per_day']}번, {p['cycle_gap_min']}분 간격)"),
+                (s_ee, "매수 끝", "이 뒤로는 새로 사지 않아요")]
         if run["style"] == "day":
             rows.append((soon, "전부 정리", "들고 있는 종목을 모두 팔아요"))
-        rows.append((c_hm, "장 마감", "오늘 평가액을 기록해요"))
+        rows.append((s_c, "장 마감", "오늘 평가액을 기록해요"))
         steps = []
         for t, name, sub in sorted(rows):
             h, mi = map(int, t.split(":"))
@@ -813,7 +829,8 @@ class AutoTrade:
         return {
             "phase": phase, "busy": busy, "next": self._next(run, loc, busy),
             "clock": {"kst": f"{AP.kst_now():%H:%M}", "local": f"{loc:%H:%M}" if mkt == "us" else None, "left_min": ss.get("left_min") or 0},
-            "steps": {"day": show.isoformat(), "today": show == today, "label": "오늘" if show == today else f"{show.month}/{show.day}({self.WD[show.weekday()]})", "rows": steps},
+            "steps": {"day": show.isoformat(), "today": show == today, "label": "오늘" if show == today else f"{show.month}/{show.day}({self.WD[show.weekday()]})", "rows": steps,
+                      "note": (AP.kr_note(show).replace("오늘은", "오늘은" if show == today else "이날은") if mkt == "kr" else "")},
             "today": {"cycles": len(cyc_today), "cycles_max": p["cycles_per_day"], "buys": buys, "sells": len(closed),
                       "wins": sum(1 for c in closed if (c["pnl"] or 0) > 0), "pnl": round(day_real, 2), "unreal": round(day_unreal, 2),
                       "limit": round(run["budget"] * p["daily_loss_pct"] / 100, 2), "streak": streak, "streak_max": int(p["loss_streak"])},

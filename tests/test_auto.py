@@ -532,24 +532,24 @@ def test_now_tells_what_happens_next_and_what_happened_today(env):
     # 간격이 매수 끝 시각을 넘기면 다음 거래일로
     env.hm = "14:00"
     n = at.now(run())
-    assert n["next"]["text"] == "내일 09:10" and "다음 추천 차례가 오지 않아요" in n["next"]["label"]
+    assert n["next"]["text"] == "내일 10:10" and "다음 추천 차례가 오지 않아요" in n["next"]["label"]
     # 5) 오늘 추천 횟수를 다 쓰면 다음 거래일
     env.hm = "11:00"
     at.rt.db.x("UPDATE at_runs SET last_cycle=0 WHERE id=?", (rid,))
     for _ in range(2):
         at.log(rid, "cycle", "추천", {"usd": 0.05})
     n = at.now(run())
-    assert n["next"]["kind"] == "at" and n["next"]["text"] == "내일 09:10" and "추천 횟수" in n["next"]["label"] and n["today"]["cycles"] == 3
+    assert n["next"]["kind"] == "at" and n["next"]["text"] == "내일 10:10" and "추천 횟수" in n["next"]["label"] and n["today"]["cycles"] == 3
     # 6) 자리가 꽉 차면 시각 없이 '자리가 나면'
     at.rt.db.x("DELETE FROM at_log WHERE run_id=? AND kind='cycle' AND msg='추천'", (rid,))
     at.edit(rid, {"max_positions": 1})
     n = at.now(run())
     assert n["next"]["kind"] == "slot" and "자리가 나면" in n["next"]["label"] and "at" not in n["next"]
     at.edit(rid, {"max_positions": 3})
-    # 7) 장 마감 뒤: 시간표는 다음 거래일 것으로 바뀐다. 휴장일(설정)과 주말은 건너뛴다
+    # 7) 장 마감 뒤: 시간표는 다음 거래일 것으로 바뀐다(11/19는 수능일이라 10:10). 휴장일(설정)과 주말은 건너뛴다
     env.open, env.hm = False, "16:00"
     n = at.now(run())
-    assert n["phase"] == "post" and n["next"]["text"] == "내일 09:10" and n["steps"]["today"] is False and n["steps"]["label"] == "11/19(목)"
+    assert n["phase"] == "post" and n["next"]["text"] == "내일 10:10" and n["steps"]["today"] is False and n["steps"]["label"] == "11/19(목)"
     at.rt.settings.update({"holidays": ["2026-11-19"]})
     n = at.now(run())
     assert n["next"]["text"] == "11/20(금) 09:10" and n["steps"]["day"] == "2026-11-20" and n["next"]["in_min"] == (24 + 17) * 60 + 10
@@ -736,7 +736,7 @@ def test_daily_review_runs_by_days_and_paper_can_apply_itself(env, monkeypatch):
     rid = env.run(budget=1_000_000)
     notes = []
     monkeypatch.setattr(env.rt, "notify", lambda m: notes.append(m))
-    close = lambda: (setattr(env, "open", False), setattr(env, "hm", "16:00"), at.tick(force=True), setattr(env, "open", True), setattr(env, "hm", "10:30"))
+    close = lambda: (setattr(env, "open", False), setattr(env, "hm", "17:00"), at.tick(force=True), setattr(env, "open", True), setattr(env, "hm", "10:30"))
     props = lambda: at.rt.db.q("SELECT status, source, changes FROM at_proposals WHERE run_id=? ORDER BY id", (rid,))
     # 첫날: 두 번 추천받았지만 돈이 모자라 못 삼 → 아직 하루뿐이라 지켜본다
     _cyc(env, rid, 1, [env.pick("035420")])
@@ -828,3 +828,42 @@ def test_updater_and_restore_respect_autotrade(env):
     assert rt.autotrade.active() is True
     ok, why = rt.backup.can_restore()
     assert ok is False and "자동매매" in why
+
+
+def test_late_open_days_shift_the_schedule(env, monkeypatch):
+    """수능일(개장·마감 1시간 늦음)·새해 첫 거래일(개장만 늦음): 장 열리기 전에 추천을 받지 않고, 시간표와 매수 시각을 그만큼 민다."""
+    from datetime import date, datetime as dt
+    assert [AP.suneung(y).isoformat() for y in (2021, 2022, 2023, 2024, 2025, 2026)] == ["2021-11-18", "2022-11-17", "2023-11-16", "2024-11-14", "2025-11-13", "2026-11-19"]
+    assert AP.kr_shift(date(2026, 11, 19)) == (60, 60) and AP.kr_shift(date(2026, 11, 18)) == (0, 0) and AP.kr_shift(date(2026, 11, 12)) == (0, 0)
+    assert AP.kr_shift(date(2027, 1, 4)) == (60, 0) and AP.kr_shift(date(2027, 1, 5)) == (0, 0) and AP.kr_shift(date(2026, 1, 2)) == (60, 0)
+    assert "10:00~16:30" in AP.kr_note(date(2026, 11, 19)) and "10:00~15:30" in AP.kr_note(date(2027, 1, 4)) and AP.kr_note(date(2026, 11, 18)) == ""
+    assert AP.hm_add("09:10", 60) == "10:10" and AP.hm_add("15:20", 0) == "15:20"
+    # 추천 평가 창과 장 구간도 그날 시간에 맞춘다
+    assert AP.phase_at("kr", dt(2026, 11, 19, 9, 30))[0] == "pre" and AP.phase_at("kr", dt(2026, 11, 19, 16, 0))[0] == "open" and AP.phase_at("kr", dt(2026, 11, 18, 9, 30))[0] == "open"
+    assert AP.window_end("kr", dt(2026, 11, 19, 10, 30)) == dt(2026, 11, 19, 16, 20) and AP.window_end("kr", dt(2026, 11, 18, 10, 30)) == dt(2026, 11, 18, 15, 20)
+    assert AP.window_end("kr", dt(2026, 11, 18, 15, 25)) == dt(2026, 11, 19, 16, 20) and AP.window_end("kr", dt(2026, 11, 19, 10, 30), "14:50") == dt(2026, 11, 19, 14, 50)
+    monkeypatch.setattr(AP, "kst_now", lambda: dt(2026, 11, 19, 9, 11))
+    ss = AP.session("kr")
+    assert ss["open"] is False and "수능일" in ss["note"] and ss["close_kst"] == "16:20"
+    monkeypatch.setattr(AP, "kst_now", lambda: dt(2026, 11, 19, 16, 15))
+    assert AP.session("kr")["open"] is True and AP.session("kr")["left_min"] == 5
+    monkeypatch.setattr(AP, "kst_now", lambda: dt(2026, 11, 18, 9, 11))
+    assert AP.session("kr")["open"] is True and "note" not in AP.session("kr")
+    # 자동매매: 수능일 09:30(평소라면 매수 시간)에는 막고, 10:10부터 받는다
+    at = env.at
+    env.day = "2026-11-19"
+    rid = env.run()
+    run = at._run(rid)
+    assert at._hours("kr", date(2026, 11, 19)) == ("10:00", "16:20") and at._entry(run, date(2026, 11, 19)) == ("10:10", "15:30") and at._entry(run, date(2026, 11, 20)) == ("09:10", "14:30")
+    env.hm = "10:05"
+    assert at.gate_code(run)[1] == "time" and "10:10~15:30" in at.gate_code(run)[2]
+    env.hm = "10:10"
+    assert at.gate_code(run)[0] is True
+    env.hm = "15:20"
+    assert at.gate_code(run)[0] is True
+    n = at.now(run)
+    rows = {r["name"]: r["hm"] for r in n["steps"]["rows"]}
+    assert rows == {"장 시작": "10:00", "매수 시작": "10:10", "매수 끝": "15:30", "전부 정리": "16:12", "장 마감": "16:20"} and "수능일" in n["steps"]["note"]
+    env.day, env.hm = "2026-11-20", "09:30"
+    n = at.now(at._run(rid))
+    assert {r["name"]: r["hm"] for r in n["steps"]["rows"]}["매수 시작"] == "09:10" and n["steps"]["note"] == ""

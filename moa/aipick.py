@@ -112,8 +112,50 @@ def et_now():
     return u + timedelta(hours=-4 if _us_dst(u) else -5)
 
 
+KR_LATE = {}   # 날짜별 덮어쓰기: {"YYYY-MM-DD": (개장 늦춤 분, 마감 늦춤 분)}. 규칙과 다른 해가 생기면 여기에 넣는다
+
+
+def suneung(year):
+    """수능일: 11월 셋째 주(일요일 시작) 목요일. 2021~2026년 실제 날짜와 맞는다."""
+    from datetime import date
+    nov1 = date(year, 11, 1)
+    return nov1 - timedelta(days=(nov1.weekday() + 1) % 7) + timedelta(days=18)
+
+
+def kr_shift(d):
+    """그날 국내 정규장이 평소보다 늦는 분: (개장, 마감). 수능일은 (60, 60), 새해 첫 거래일은 (60, 0), 보통 날은 (0, 0)."""
+    from datetime import date
+    if isinstance(d, datetime):
+        d = d.date()
+    if d.isoformat() in KR_LATE:
+        return tuple(KR_LATE[d.isoformat()])
+    if d == suneung(d.year):
+        return 60, 60
+    if d.month == 1 and d.day <= 4:
+        first = date(d.year, 1, 2)
+        while first.weekday() >= 5:
+            first += timedelta(days=1)
+        if d == first:
+            return 60, 0
+    return 0, 0
+
+
+def kr_note(d):
+    so, sc = kr_shift(d)
+    if not so and not sc:
+        return ""
+    f = lambda m: f"{m // 60:02d}:{m % 60:02d}"
+    return f"오늘은 {'수능일' if sc else '새해 첫 거래일'}이라 정규장이 {f(540 + so)}~{f(930 + sc)}예요(평소 09:00~15:30)"
+
+
+def hm_add(hm, minutes):
+    h, m = map(int, hm.split(":"))
+    t = min(23 * 60 + 59, max(0, h * 60 + m + minutes))
+    return f"{t // 60:02d}:{t % 60:02d}"
+
+
 def session(mkt):
-    """정규장 여부와 남은 분(서버 기준). 휴장일 표는 화면 쪽에 있고, 여기선 주말·시간만 본다."""
+    """정규장 여부와 남은 분(서버 기준). 휴장일 표는 화면 쪽에 있고, 여기선 주말·시간과 늦게 여는 날(수능일 등)만 본다."""
     if mkt == "us":
         n = et_now()
         mins = n.hour * 60 + n.minute
@@ -122,9 +164,14 @@ def session(mkt):
                 "kst": kst_now().strftime("%Y-%m-%d %H:%M"), "close_kst": (kst_now() + timedelta(minutes=960 - mins)).strftime("%H:%M")}
     n = kst_now()
     mins = n.hour * 60 + n.minute
-    open_ = n.weekday() < 5 and 540 <= mins < 920
-    return {"open": open_, "left_min": 920 - mins if open_ else 0, "local": n.strftime("%Y-%m-%d %H:%M"),
-            "kst": n.strftime("%Y-%m-%d %H:%M"), "close_kst": "15:20"}
+    so, sc = kr_shift(n)
+    o, c = 540 + so, 920 + sc
+    open_ = n.weekday() < 5 and o <= mins < c
+    out = {"open": open_, "left_min": c - mins if open_ else 0, "local": n.strftime("%Y-%m-%d %H:%M"),
+           "kst": n.strftime("%Y-%m-%d %H:%M"), "close_kst": f"{c // 60:02d}:{c % 60:02d}"}
+    if so or sc:
+        out["note"] = kr_note(n)
+    return out
 
 
 def bar_features(bars):
@@ -183,7 +230,8 @@ def phase_at(mkt, ts):
         loc = u + timedelta(hours=-4 if _us_dst(u.replace(tzinfo=timezone.utc)) else -5)
         o, c = 570, 960
     else:
-        loc, o, c = ts, 540, 930
+        so, sc = kr_shift(ts)
+        loc, o, c = ts, 540 + so, 930 + sc
     if loc.weekday() >= 5:
         return "post", loc.date()
     mins = loc.hour * 60 + loc.minute
@@ -825,12 +873,15 @@ def _bar_dt(t, ref):
 def window_end(mkt, ts, exit_by=""):
     """추천을 평가할 마지막 시각(한국 시간, naive). 국내는 그날(또는 다음 거래일) 정리 시각, 미국은 그 정규장 마감."""
     if mkt == "kr":
-        hm = exit_by if re.match(r"^\d\d:\d\d$", exit_by or "") and exit_by <= "15:20" else "15:20"
+        cap = hm_add("15:20", kr_shift(ts)[1])
+        hm = exit_by if re.match(r"^\d\d:\d\d$", exit_by or "") and exit_by <= cap else cap
         d = ts
         if ts.strftime("%H:%M") >= hm or ts.weekday() >= 5:
             d = ts + timedelta(days=1)
             while d.weekday() >= 5:
                 d += timedelta(days=1)
+            cap = hm_add("15:20", kr_shift(d)[1])
+            hm = exit_by if re.match(r"^\d\d:\d\d$", exit_by or "") and exit_by <= cap else cap
         h, m = map(int, hm.split(":"))
         return d.replace(hour=h, minute=m, second=0, microsecond=0)
     # 미국: 추천 시각을 뉴욕 시간으로 바꿔 그 정규장(또는 다음 정규장) 16:00

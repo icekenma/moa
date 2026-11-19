@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.0853";
+const UI_VERSION = "261119.0924";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1773,6 +1773,7 @@ pages.invest = {
     return `${this.atReadyHtml(d.ready)}${warn.map((w) => `<div class="notice warn">${esc(w)}</div>`).join("")}
       <section class="card at-sched">
         <div class="card-head"><h2>${N.steps.today ? "오늘" : esc(N.steps.label)} 시간표</h2><span class="tiny">지금 ${esc(N.clock.kst)}${N.clock.local ? ` · 뉴욕 ${esc(N.clock.local)}` : ""}${N.phase === "open" ? ` · 마감까지 ${N.clock.left_min}분` : ""}</span></div>
+        ${N.steps.note ? `<div class="notice">${esc(N.steps.note)}. 시간표와 매수 시각을 그만큼 미뤘어요.</div>` : ""}
         <ol class="at-steps">${rows.map((x, i) => `<li class="${x.done ? "done" : ""} ${i === nextIdx ? "next" : ""}"><time>${esc(x.hm)}${x.local ? `<small>뉴욕 ${esc(x.local)}</small>` : ""}</time>
           <div><b>${esc(x.name)}${i === nextIdx && N.steps.today ? ` <em>다음</em>` : ""}</b><span>${esc(x.sub)}</span></div></li>`).join("")}</ol>
         ${N.steps.today ? "" : `<div class="tiny">${N.phase === "off" ? "오늘은 장이 쉬는 날이라" : "오늘 장은 끝나서"} 다음 거래일 시간표를 보여 드려요.</div>`}
@@ -3547,9 +3548,29 @@ function tzParts(tz, d = new Date()) {
     .formatToParts(d).map((x) => [x.type, x.value]));
   return { ymd: `${p.year}-${p.month}-${p.day}`, min: Number(p.hour) * 60 + Number(p.minute) + Number(p.second) / 60, wd: p.weekday };
 }
+// 국내 정규장이 늦게 여는 날: 수능일(11월 셋째 주 목요일)은 개장·마감 모두 1시간, 새해 첫 거래일은 개장만 1시간. [개장 늦춤 분, 마감 늦춤 분, 이름]
+function krLate(ymd) {
+  const [y, mo, d] = ymd.split("-").map(Number);
+  if (mo === 11) {
+    const nov1 = new Date(Date.UTC(y, 10, 1)).getUTCDay();          // 0=일
+    if (d === 1 - nov1 + 18) return [60, 60, "수능일"];
+  }
+  if (mo === 1 && d <= 4) {
+    let f = 2;
+    while ([0, 6].includes(new Date(Date.UTC(y, 0, f)).getUTCDay())) f++;
+    if (d === f) return [60, 0, "새해 첫 거래일"];
+  }
+  return [0, 0, ""];
+}
 function mkSegs(m, ymd) {
-  if (m === "kr") return [[480, 510, "프리마켓", "pre", "NXT 08:00~08:50"], [510, 540, "장 시작 동시호가", "auction", "08:30~09:00 주문만 받고 9시에 한 번에 체결"],
-    [540, 920, "정규장", "open", "09:00~15:20"], [920, 930, "장 마감 동시호가", "auction", "15:20~15:30"], [930, 1200, "애프터마켓", "after", "NXT 15:30~20:00 · KRX 시간외 15:40~18:00"]];
+  if (m === "kr") {
+    const [so, sc, why] = krLate(ymd), T = (v) => `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(v % 60).padStart(2, "0")}`;
+    if (so || sc) return [[510 + so, 540 + so, "장 시작 동시호가", "auction", `${why}이라 ${T(510 + so)}~${T(540 + so)} · 프리마켓은 쉬어요`],
+      [540 + so, 920 + sc, `정규장(${why})`, "open", `${T(540 + so)}~${T(920 + sc)}`], [920 + sc, 930 + sc, "장 마감 동시호가", "auction", `${T(920 + sc)}~${T(930 + sc)}`],
+      [sc ? 1020 : 930, 1200, "애프터마켓", "after", sc ? "NXT 17:00~20:00" : "NXT 15:30~20:00 · KRX 시간외 15:40~18:00"]];
+    return [[480, 510, "프리마켓", "pre", "NXT 08:00~08:50"], [510, 540, "장 시작 동시호가", "auction", "08:30~09:00 주문만 받고 9시에 한 번에 체결"],
+      [540, 920, "정규장", "open", "09:00~15:20"], [920, 930, "장 마감 동시호가", "auction", "15:20~15:30"], [930, 1200, "애프터마켓", "after", "NXT 15:30~20:00 · KRX 시간외 15:40~18:00"]];
+  }
   const close = (MK_HALF.us || []).includes(ymd) ? 780 : 960;
   return [[240, 570, "프리마켓", "pre", ""], [570, close, close < 960 ? "정규장(조기 마감)" : "정규장", "open", ""], [close, 1200, "애프터마켓", "after", ""]];
 }
@@ -3572,7 +3593,8 @@ function marketSession(m) {
   }
   const left = (t) => { const x = Math.max(0, Math.round(t)); return x >= 60 ? `${Math.floor(x / 60)}시간${x % 60 ? ` ${x % 60}분` : ""}` : `${x}분`; };
   // 다음 정규장 시작까지
-  const openAt = m === "kr" ? 540 : 570;
+  const openOf = (ymd) => (m === "kr" ? 540 + krLate(ymd)[0] : 570);
+  let openAt = openOf(P.ymd);
   let next = "";
   if (!cur || cur[3] !== "open") {
     let mins = 0, d = new Date(now), dP = P, guard = 0;
@@ -3580,6 +3602,7 @@ function marketSession(m) {
     else {
       mins = 1440 - P.min;
       while (guard++ < 15) { d = new Date(d.getTime() + 864e5); dP = tzParts(tz, d); if (!mkDayKind(m, dP.ymd, dP.wd)) break; mins += 1440; }
+      openAt = openOf(dP.ymd);
       mins += openAt;
     }
     next = mins < 1440 ? `정규장 시작까지 ${left(mins)}` : `다음 정규장 ${dP.ymd.slice(5).replace("-", "/")}(${{ Mon: "월", Tue: "화", Wed: "수", Thu: "목", Fri: "금", Sat: "토", Sun: "일" }[dP.wd]}) ${kst(openAt)}`;

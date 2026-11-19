@@ -1792,3 +1792,25 @@ def test_lab_cap_not_eaten_by_one_full_pick(env, monkeypatch):
     F = at.flow(b["id"])
     assert F["ai"]["shared"] and abs(F["ai"]["usd"] - 0.3) < 0.01 and F["ai"]["mine"] < 0.1
     assert p["quick_gap_min"] > 0
+
+
+def test_engine_notes_overview_timeline_logic_plan(env):
+    """엔진 노트: 한눈에(성적·비용·누적 곡선) · 걸어온 길(앱 개선 + 플랜 조정·엔진·실험) · 지금 로직 · 앞으로."""
+    at, ev = env.at, env.rt.evolution
+    rid = env.run()
+    assert env.enter(rid, [env.pick("005930")]) == 1
+    env.px["005930"] = 72_500.0
+    at._manage(at._run(rid))
+    at.auto_set(True)
+    E = ev.all()
+    O = E["overview"]
+    assert O["auto"]["paper"]["n"] == 1 and O["auto"]["paper"]["win"] == 100 and O["auto"]["paper"]["net"] < O["auto"]["paper"]["pnl"]
+    assert O["curve"]["days"] and len(O["curve"]["paper"]) == len(O["curve"]["days"]) and O["since"]
+    kinds = {x["kind"] for x in E["timeline"]}
+    assert {"dev", "lab", "run"} <= kinds and E["timeline"][0]["ts"] >= E["timeline"][-1]["ts"]
+    L = E["logic"]
+    assert [s["key"] for s in L["sections"]][:2] == ["ai", "auto"] and L["runs"][0]["keys"] and L["labs"] and len(L["horizons"]) == 3
+    P = E["plan"]
+    assert any(s["area"] == "lab" for s in P["steps"]) and P["ideas"] and all("prog" not in s or s["prog"][0] <= s["prog"][1] for s in P["steps"])
+    from moa.app import create_app
+    assert create_app(env.rt).test_client().get("/api/evo").status_code == 200

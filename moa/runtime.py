@@ -37,6 +37,8 @@ class Runtime:
         self.aipick = AIPick(self)
         from .dividend import Dividend
         self.dividend = Dividend(self)
+        from .evolution import Evolution
+        self.evolution = Evolution(self)
         from .autotrade import AutoTrade
         self.autotrade = AutoTrade(self)
         from .payoff import Payoff

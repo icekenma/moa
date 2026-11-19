@@ -2323,7 +2323,8 @@ class AutoTrade:
             else:
                 top = max(rows, key=lambda x: x["n"], default=None)
                 text = f"아직 자료를 모으는 중이에요(가장 많이 한 플랜 {top['n'] if top else 0}/{READY_N}건 · {top['days'] if top else 0}/{READY_DAYS}거래일)."
-            out.append({"mkt": mkt, "style": style, "style_label": STYLES[style]["label"], "trades": n_all, "best": best, "text": text, "top": rows[:3]})
+            out.append({"mkt": mkt, "style": style, "style_label": STYLES[style]["label"], "trades": n_all, "best": best, "text": text, "top": rows[:3],
+                        "max_n": max((x["n"] for x in rows), default=0), "max_days": max((x["days"] for x in rows), default=0)})
         return out
 
     def auto_state(self):

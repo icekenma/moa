@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261120.0500";
+const UI_VERSION = "261120.0538";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -645,7 +645,7 @@ const MENU = {
   ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["analysis", "분석"], ["budget", "예산"], ["fixed", "고정비"], ["cards", "카드"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
   // 투자는 성격이 같은 화면을 묶는다(AI 추천·자동매매 / 관심·발견·주문 / 적립·배당). 묶음 안은 화면 위 탭으로 오간다
-  invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "종목"], ["dca", "적립·배당"]],
+  invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "종목"], ["dca", "적립·배당"], ["evo", "엔진 노트"]],
     groups: { ai: [["ai", "AI 추천"], ["auto", "자동매매"], ["atlog", "매매 기록"]], market: [["market", "관심"], ["discover", "발견"], ["trade", "주문"]], dca: [["dca", "적립"], ["dividend", "배당"]] }, extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
   // 설정: 자주 바꾸는 것부터. 한 번만 맞추면 되는 서버 연결은 뒤로.
   settings: { title: "설정", subs: [["all", "전체"], ["theme", "화면"], ["ai", "AI"], ["accounts", "계좌"], ["trading", "주문·알림"], ["security", "보안"], ["backup", "백업"], ["connect", "서버"], ["app", "앱 정보"]] },
@@ -1675,7 +1675,7 @@ pages.invest = {
     if (sub === "sweep") return this.sweep();
     if (sub === "stock") return mkt.detail(h);
     if (sub === "aistat") return this.aiStat();
-    investState.tab = ["home", "ai", "market", "discover", "account", "trade", "dca", "dividend", "auto", "atlog"].includes(sub) ? sub : sub === "scalp" ? "ai" : "home";
+    investState.tab = ["home", "ai", "market", "discover", "account", "trade", "dca", "dividend", "auto", "atlog", "evo"].includes(sub) ? sub : sub === "scalp" ? "ai" : "home";
     const tabs = groupTabs("invest", investState.tab);
     setTop("투자", { menu: "invest", sub: investState.tab });
     view.innerHTML = `${tabs}<div id="iv" style="display:flex;flex-direction:column;gap:8.5px"></div>`;
@@ -1687,7 +1687,7 @@ pages.invest = {
     if (h.sub === "aistat") return;
     if (h.sub === "sweep") return this.sweepPoll();
     if (investState.tab === "ai") { this.apSess(); if (!this._apT || Date.now() - this._apT > 5000) { this._apT = Date.now(); this.apGuards(); } return; }
-    if (investState.tab === "dividend" || investState.tab === "atlog") return;  // 입력·읽는 화면이라 주기적으로 다시 그리지 않는다
+    if (["dividend", "atlog", "evo"].includes(investState.tab)) return;  // 입력·읽는 화면이라 주기적으로 다시 그리지 않는다
     if (investState.tab === "auto") {  // 자세히 보는 화면만 6초마다 새로(입력 화면·펼쳐 읽는 중에는 그대로)
       const A = this.at;
       const lab = A && A.view === "lab";
@@ -1709,6 +1709,7 @@ pages.invest = {
     if (investState.tab === "dividend") return this.dividend(box);
     if (investState.tab === "auto") return this.auto(box);
     if (investState.tab === "atlog") return this.atLog(box);
+    if (investState.tab === "evo") return this.evo(box);
     if (investState.tab === "scalp") return this.scalp(box);
     return this.dca(box);
   },
@@ -2455,6 +2456,110 @@ pages.invest = {
   atFlowBtn(rs) {
     const b = (rs || []).find((r) => r.variant === "base") || (rs || [])[0];
     return b ? `<button type="button" class="fl-go" data-run="${b.id}" data-attab="flow"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M5 7.5v9M7.3 6l9.4 4.8M7.3 18l9.4-4.8"/></svg><span><b>전 과정 흐름도</b><small>기본 플랜이 지금 어느 단계인지</small></span><i aria-hidden="true">›</i></button>` : "";
+  },
+  // ===== 엔진 노트: 걸어온 길 · 지금 로직 · 앞으로 =====
+  async evo(box) {
+    const E = (this.ev = this.ev || { tab: store.get("evoTab") || "now", f: "all", d: null });
+    if (!E.d) box.innerHTML = `<div class="empty loading">엔진 노트를 모으는 중</div>`;
+    else this.evoDraw(box);
+    let d;
+    try { d = await GET("/api/evo"); } catch (e) {
+      if (e.code === "old_server") return oldServerBox(box, () => this.evo(box));
+      if (!E.d) box.innerHTML = `<div class="notice warn">${esc(e.message)}</div>`; return;
+    }
+    if (investState.tab !== "evo") return;
+    E.d = d;
+    this.evoDraw(box);
+  },
+  evoDraw(box) {
+    const E = this.ev, D = E.d, O = D.overview;
+    const P = { now: () => this.evoNow(D), road: () => this.evoRoad(D), logic: () => this.evoLogic(D), next: () => this.evoNext(D) };
+    box.innerHTML = `<section class="ev-hero card">
+        <div class="ev-hh"><b>엔진 노트</b><span>${O.since ? `${esc(O.since.slice(2).replace(/-/g, "."))}부터 ${O.days}일째 · ` : ""}수익률을 높이려고 해 온 일과 지금 규칙, 다음 수</span></div>
+        ${seg("엔진노트", [["now", "한눈에"], ["road", "걸어온 길"], ["logic", "지금 로직"], ["next", "앞으로"]], E.tab, "ap-mkt")}
+      </section><div id="evBody" class="ev-body">${P[E.tab]()}</div>`;
+    bindSeg(box, "엔진노트", (v) => { E.tab = v; store.set("evoTab", v); this.evoDraw(box); window.scrollTo(0, 0); });
+    box.onclick = (e) => {
+      const f = e.target.closest("[data-evf]");
+      if (f) { E.f = f.dataset.evf; $("#evBody").innerHTML = this.evoRoad(D); return; }
+      const g = e.target.closest("[data-evtab]");
+      if (g) { E.tab = g.dataset.evtab; store.set("evoTab", E.tab); this.evoDraw(box); window.scrollTo(0, 0); }
+    };
+  },
+  evoCurve(C) {
+    const W = 320, H = 92, xs = C.days || [], lines = [["paper", "모의"], ["real", "실전"]].filter(([k]) => (C[k] || []).some((v) => v));
+    if (xs.length < 2 || !lines.length) return `<div class="ev-nocurve">끝난 거래가 쌓이면 날마다 AI 비용까지 뺀 누적 손익을 선으로 그려요.</div>`;
+    const all = lines.flatMap(([k]) => C[k]).concat(0), mn = Math.min(...all), mx = Math.max(...all), sp = mx - mn || 1;
+    const X = (i) => (i / (xs.length - 1)) * W, Y = (v) => 6 + (1 - (v - mn) / sp) * (H - 12);
+    const path = (k) => C[k].map((v, i) => `${i ? "L" : "M"}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join(" ");
+    return `<svg class="ev-curve" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="날짜별 누적 손익(AI 비용 뺌)">
+        <line class="z" x1="0" x2="${W}" y1="${Y(0).toFixed(1)}" y2="${Y(0).toFixed(1)}"/>${lines.map(([k]) => `<path class="${k}" d="${path(k)}"/>`).join("")}</svg>
+      <div class="ev-cx"><span>${esc(xs[0].slice(5).replace("-", "/"))}</span><span class="ev-lg">${lines.map(([k, t]) => `<i class="${k}"></i>${t}`).join(" ")}</span><span>${esc(xs[xs.length - 1].slice(5).replace("-", "/"))}</span></div>`;
+  },
+  evoNow(D) {
+    const O = D.overview, A = O.auto, L = D.logic;
+    const money = (v) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${won(Math.abs(v))}원`;
+    const k = (t, v, sub, cls = "") => `<div class="ev-k ${cls}"><span>${t}</span><b>${v}</b>${sub ? `<small>${sub}</small>` : ""}</div>`;
+    const mode = (m, t) => { const x = A[m]; return x.n ? k(t, `<em class="${tone(x.net)}">${money(x.net)}</em>`, `${x.n}건 · 승률 ${x.win}% · 평균 ${pct(x.avg, 2)} · AI 비용 ${won(x.cost)}원 뺌`) : k(t, "-", t === "실전 자동매매" ? "아직 실전 거래가 없어요" : "끝난 거래가 아직 없어요"); };
+    return `<section class="card ev-main">
+        <div class="ev-mh"><span>AI 비용까지 뺀 누적 손익</span></div>
+        ${this.evoCurve(O.curve)}
+        <div class="ev-ks two">${mode("paper", "모의 자동매매")}${mode("real", "실전 자동매매")}</div>
+      </section>
+      <section class="card"><div class="ev-ks">
+        ${k("AI 추천", `${won(O.picks)}번`, O.graded ? `채점 ${won(O.graded)}건 · 평균 ${pct(O.pick_avg, 2)} · 이익 ${O.pick_win}%` : "채점 전")}
+        ${k("AI 비용", `${won(O.cost_all)}원`, `전체 $${O.usd_all} · 이번 달 $${O.usd_month}`)}
+        ${k("돌고 있는 자동매매", `${O.runs}개`, O.auto_on ? "모의 자동 테스트 켜짐" : "모의 자동 테스트 꺼짐")}
+        ${k("스스로 고친 횟수", `${O.changes.plan + O.changes.engine + O.changes.lessons}번`, `플랜 ${O.changes.plan} · 엔진 ${O.changes.engine} · 추천 규칙 ${O.changes.lessons}판`)}
+      </div><button type="button" class="ev-more" data-evtab="road">앱 개선 ${O.dev}번과 스스로 고친 기록 보기 ›</button></section>
+      <section class="card"><h2 class="ev-h2">수익률을 위한 원칙</h2>
+        <ol class="ev-pr">${L.principles.map((x) => `<li><b>${esc(x.t)}</b><span>${esc(x.d)}</span></li>`).join("")}</ol></section>
+      <div class="tiny" style="padding:0 3px">${esc(D.at.replace("T", " "))} 기준 · 미국 손익은 지금 환율(${won(O.fx)}원)로 바꿔 더했어요.</div>`;
+  },
+  evoRoad(D) {
+    const E = this.ev;
+    const F = [["all", "전체"], ["dev", "앱 개선"], ["plan", "플랜 조정"], ["engine", "엔진·비용"], ["learn", "학습"], ["lab", "실험·시작"]];
+    const pass = (x) => E.f === "all" || (E.f === "dev" ? x.kind === "dev" : E.f === "plan" ? ["plan", "proposal"].includes(x.kind) : E.f === "engine" ? ["engine", "cost"].includes(x.kind)
+      : E.f === "learn" ? ["review", "lesson"].includes(x.kind) : ["lab", "run"].includes(x.kind));
+    const rows = D.timeline.filter(pass), by = [];
+    rows.forEach((x) => { const g = by[by.length - 1]; if (g && g.day === x.day) g.items.push(x); else by.push({ day: x.day, items: [x] }); });
+    const W = "일월화수목금토";
+    return `<div class="ev-fs">${F.map(([k2, t]) => `<button type="button" class="chip" data-evf="${k2}" aria-pressed="${E.f === k2}">${t}</button>`).join("")}</div>
+      ${by.length ? `<ol class="ev-tl">${by.map((g) => `<li class="ev-day"><div class="ev-dd"><b>${esc(g.day.slice(5).replace("-", "/"))}</b><small>${W[new Date(g.day + "T00:00").getDay()]}</small></div>
+        <ul>${g.items.map((x) => `<li class="ev-it ${x.area} ${x.kind}${x.pending ? " pend" : ""}"><i aria-hidden="true"></i>
+          <div><span class="ev-tag">${esc(x.area_label)}</span><b>${esc(x.title)}</b>${x.what ? `<p>${esc(x.what)}</p>` : ""}${x.why ? `<small>${x.kind === "dev" ? "왜: " : ""}${esc(x.why)}</small>` : ""}</div></li>`).join("")}</ul></li>`).join("")}</ol>`
+        : `<div class="empty">이 분류의 기록이 아직 없어요</div>`}`;
+  },
+  evoLogic(D) {
+    const L = D.logic;
+    const hz = L.horizons.map((h) => `<div class="ev-hz"><div class="ev-hzh"><b>${esc(h.label)} 추천</b><span>${h.overall ? `채점 ${h.n}건 · 평균 ${pct(h.overall.avg, 2)} · 이익 ${h.overall.win_rate}%` : `채점 ${h.n}건`}</span></div>
+        ${h.tune ? `<div class="ev-tn">실제 결과로 맞춘 폭: 익절 ${h.tune.tp}% · 손절 ${h.tune.sl}%${h.tune.avoid && h.tune.avoid.length ? ` · 피할 조건 ${esc([].concat(h.tune.avoid).slice(0, 2).join(", "))}` : ""}</div>` : ""}
+        ${(h.insights || []).map((t) => `<div class="ev-in">${esc(t)}</div>`).join("")}
+        ${h.lesson ? `<details class="ev-ls"><summary>추천 규칙 ${h.lesson.ver}판 (${esc(h.lesson.at)})</summary><div>${esc(h.lesson.text)}</div></details>` : ""}
+        <div class="ev-nx">${h.n < h.min ? `첫 규칙까지 ${h.next_lesson}건 더` : `다음 규칙 고치기까지 ${h.next_lesson}건`}</div></div>`).join("");
+    const runs = L.runs.map((r) => `<div class="ev-run"><div class="ev-rh"><b>${esc(r.name)}</b><span class="tag ${r.mode === "real" ? "warn" : ""}">${r.mode === "real" ? "실전" : "모의"}</span><span class="tiny">플랜 ${r.ver}판 · ${esc(r.model)}</span></div>
+        <dl class="ev-kv">${r.keys.map(([a, b]) => `<div><dt>${esc(a)}</dt><dd>${esc(b)}</dd></div>`).join("")}</dl>
+        <a class="ev-more" href="#invest/auto" data-atgo="${r.id}" data-attab="flow">이 플랜의 흐름도 보기 ›</a></div>`).join("");
+    const labs = L.labs.map((l) => `<div class="ev-lab"><b>${esc(l.label)} 실험</b><ol>${l.plans.map((p) => `<li><span>${esc(p.label)}<small>${esc(p.desc)}</small></span><em class="${tone(p.net)}">${p.n ? pct(p.net, 2) : "-"}</em></li>`).join("")}</ol></div>`).join("");
+    return `${L.sections.map((S) => `<section class="card ev-sec ${S.key}"><h2 class="ev-h2">${esc(S.t)}</h2>
+        <dl class="ev-rows">${S.items.map(([a, b]) => `<div><dt>${esc(a)}</dt><dd>${esc(b)}</dd></div>`).join("")}</dl>
+        ${S.key === "ai" ? `<h3 class="ev-h3">지금까지 배운 것</h3>${hz}` : ""}
+        ${S.key === "auto" && runs ? `<h3 class="ev-h3">직접 만든 자동매매</h3>${runs}` : ""}
+        ${S.key === "learn" && labs ? `<h3 class="ev-h3">실험 플랜 순위(비용 뺀 수익률)</h3>${labs}` : ""}</section>`).join("")}`;
+  },
+  evoNext(D) {
+    const P = D.plan, ST = { done: ["완료", "g"], doing: ["진행 중", "y"], wait: ["승인 대기", "warn"], idea: ["제안", "v"] };
+    const bar = (p) => (p ? `<span class="ev-pg" role="img" aria-label="${p[0]}/${p[1]}"><i style="width:${Math.min(100, (p[0] / (p[1] || 1)) * 100).toFixed(0)}%"></i></span><em>${p[0]}/${p[1]}</em>` : "");
+    const area = { lab: "실험", learn: "학습", ai: "엔진" };
+    return `${P.goal ? `<section class="card ev-goal"><span>최종 목표</span><b>${esc(P.goal.name)}</b><small>${won(P.goal.amount)}원 · ${esc(P.goal.deadline)}까지</small></section>` : ""}
+      <section class="card"><h2 class="ev-h2">지금 진행 중인 단계</h2>
+        <ul class="ev-steps">${P.steps.map((x) => `<li class="${x.st}"><div class="ev-sh"><span class="tag ${ST[x.st][1]}">${ST[x.st][0]}</span><span class="ev-ar">${area[x.area] || ""}</span><b>${esc(x.t)}</b></div>
+          <p>${esc(x.d)}</p>${x.prog ? `<div class="ev-pr2">${x.prog2 ? `<span class="ev-pgl">한 플랜의 끝난 거래</span>` : ""}${bar(x.prog)}${x.prog2 ? `<span class="ev-pgl">거래일</span>${bar(x.prog2)}` : ""}</div>` : ""}
+          ${x.top && x.top.length ? `<div class="ev-top">${x.top.map((t, i) => `<span>${i + 1}. ${esc(t.label)} <em class="${tone(t.net)}">${pct(t.net, 2)}</em> <small>${t.n}건</small></span>`).join("")}</div>` : ""}
+          ${x.run ? `<a class="ev-more" href="#invest/auto" data-atgo="${x.run}">개선안 보러 가기 ›</a>` : ""}</li>`).join("")}</ul></section>
+      <section class="card"><h2 class="ev-h2">다음에 해 볼 만한 것</h2>
+        <ul class="ev-steps">${P.ideas.map((x) => `<li class="idea"><div class="ev-sh"><span class="tag v">제안</span><b>${esc(x.t)}</b></div><p>${esc(x.d)}</p></li>`).join("")}</ul>
+        <div class="tiny">제안은 아직 반영하지 않았어요. 해 보고 싶은 것을 말해 주면 넣어 드릴게요.</div></section>`;
   },
   // ===== 흐름도: 이 플랜이 한 바퀴 도는 전 과정과 지금 위치 =====
   async atFlow(el, rid) {

@@ -1153,6 +1153,10 @@ def create_app(rt, updater=None):
         rt.dividend.remove_custom(mkt, sym)
         return jsonify(ok=True)
 
+    @app.get("/api/evo")
+    def evo_all():
+        return jsonify(rt.evolution.all())
+
     @app.get("/api/div/events")
     def div_events():
         return jsonify(rt.dividend.events())

@@ -1122,13 +1122,13 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     with pytest.raises(ValueError, match="두 개 이상"):
         at.lab_create({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 20, "variants": ["base"]})
     L = at.lab_create({"budget": 3_000_000, "mkt": "kr", "style": "day", "days": 20, "model": "claude-sonnet-5-5"})["labs"][0]
-    assert len(L["runs"]) == 9 and L["status"] == "running" and {x["variant"] for x in L["runs"]} == set(VARIANTS)
+    assert len(L["runs"]) == 10 and L["status"] == "running" and {x["variant"] for x in L["runs"]} == set(VARIANTS)
     with pytest.raises(ValueError, match="이미 돌고"):
         at.lab_create({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 20})
     ids = {x["variant"]: x["id"] for x in L["runs"]}
     lab = L["id"]
     P = lambda k: at._run(ids[k])["params"]
-    assert lab == ids["base"] and P("loose")["min_win_prob"] == 50 and P("strict")["min_score"] == 70 and P("watch_skip")["skip_watch"] is True
+    assert lab == ids["base"] and (P("loose")["min_win_prob"], P("loose")["min_rr"], P("all")["min_win_prob"]) == (48, 1.2, 40) and P("strict")["min_score"] == 70 and P("watch_skip")["skip_watch"] is True
     assert (P("tight")["exit_mult"], P("wide")["exit_mult"], P("wide")["tp_cap"], P("base").get("exit_mult")) == (0.5, 1.5, 6.0, None) and (P("focus")["max_positions"], P("spread")["per_trade_pct"]) == (1, 20)
     at.rt.db.x("UPDATE at_runs SET status='paused' WHERE id=?", (solo,))
     calls = []
@@ -1158,7 +1158,7 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     lp = {x["sym"]: x for x in B["last"]["picks"]}
     assert lp["005930"]["bought"] == len(g["plans"]) and any(k["why"] == "AI가 관망 권함" for k in lp["005930"]["skips"])
     usd = [json.loads(r["data"])["usd"] for r in at.rt.db.q("SELECT data FROM at_log WHERE kind='cycle' AND data IS NOT NULL AND run_id!=?", (solo,))]
-    assert len(usd) == 9 and all(u == 0.1 for u in usd)                  # 비용은 똑같이 나눠 적는다
+    assert len(usd) == 10 and all(u == 0.09 for u in usd)                  # 비용은 똑같이 나눠 적는다
     # 다음 추천도 묶음 전체에서 한 번: 한 종목 집중은 자리가 없어 건너뛰고, 나머지는 각자 판단
     at.rt.db.x("UPDATE at_runs SET last_cycle=? WHERE lab_id=?", (time.time() - 130 * 60, lab))
     at.tick(force=True)
@@ -1180,7 +1180,7 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     assert L["runs"][0]["variant"] == "loose" and L["lead"] == "느슨한 기준" and "30건이 쌓여야" in L["note"] and L["runs"][0]["net_ret_pct"] < L["runs"][0]["ret_pct"]
     # 홈 요약과 목록에서는 묶음 하나로 보인다
     b = at.brief()
-    assert [r["id"] for r in b["runs"]] == [solo] and b["labs"][0]["n"] == 9 and b["labs"][0]["lead"] == "느슨한 기준"
+    assert [r["id"] for r in b["runs"]] == [solo] and b["labs"][0]["n"] == 10 and b["labs"][0]["lead"] == "느슨한 기준"
     assert [r["id"] for r in at.overview()["runs"]] == [solo]
     # 한꺼번에 멈추고 끝낸다
     assert at.lab_control(lab, "pause")["labs"][0]["status"] == "paused"
@@ -1198,7 +1198,7 @@ def test_autopilot_only_needs_on_off_and_feeds_a_real_plan(env, monkeypatch):
     assert at.labs()["labs"] == []                                       # 꺼져 있으면 아무것도 만들지 않는다
     S = at.auto_set(True)
     L = at.labs()["labs"]
-    assert S["on"] is True and sorted((x["mkt"], x["style"]) for x in L) == sorted(AUTO_SET) and all(len(x["runs"]) == 9 for x in L)
+    assert S["on"] is True and sorted((x["mkt"], x["style"]) for x in L) == sorted(AUTO_SET) and all(len(x["runs"]) == 10 for x in L)
     kd = at._run(next(x["id"] for x in L if (x["mkt"], x["style"]) == ("kr", "day")))
     ks = at._run(next(x["id"] for x in L if (x["mkt"], x["style"]) == ("kr", "swing")))
     # 비용은 앱이 정한다: 단타 하루 $0.35 → Haiku 3번, 스윙 $0.15 → Haiku 1번
@@ -1227,6 +1227,28 @@ def test_autopilot_only_needs_on_off_and_feeds_a_real_plan(env, monkeypatch):
     assert b["variant"] == "loose" and b["n"] == 40 and b["net_pct"] > 0 and b["win_rate"] == 100
     # 그 플랜으로 실전 미리보기: 기준은 가져오되, 관망에 쉬는 것은 실전 기본을 지킨다
     pv = at.preview({"budget": 5_000_000, "mkt": "kr", "style": "day", "days": 30, "mode": "real", "model": "auto", "variant": "loose"})
-    assert pv["variant"] == {"key": "loose", "label": "느슨한 기준"} and (pv["params"]["min_win_prob"], pv["params"]["min_rr"], pv["params"]["skip_watch"]) == (50, 1.2, True)
+    assert pv["variant"] == {"key": "loose", "label": "느슨한 기준"} and (pv["params"]["min_win_prob"], pv["params"]["min_rr"], pv["params"]["skip_watch"]) == (48, 1.2, True)
     pv = at.preview({"budget": 5_000_000, "mkt": "kr", "style": "day", "days": 30, "mode": "real", "model": "auto", "variant": "watch_full"})
     assert pv["params"]["skip_watch"] is True and pv["ready"]["ok"] is True
+
+
+def test_running_experiments_pick_up_new_and_fixed_plans(env, monkeypatch):
+    """돌고 있는 실험에도 새 플랜(가리지 않고 사기)이 붙고, 느슨·엄격은 기본 대비 값으로 고쳐진다(스윙에서 기본과 같아지던 문제)."""
+    at = env.at
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (0.1, {"fx": 1400.0}))
+    at.auto_set(True)
+    lab = next(x for x in at.labs()["labs"] if (x["mkt"], x["style"]) == ("kr", "swing"))
+    ids = {x["variant"]: x["id"] for x in lab["runs"]}
+    assert at._run(ids["base"])["params"]["min_win_prob"] == 50 and at._run(ids["loose"])["params"]["min_win_prob"] == 43
+    # 예전 판 상태로 되돌려 놓고(느슨 = 고정 50, '가리지 않고 사기' 없음, 길게 끌기에 배수 없음) 다시 점검
+    at.rt.db.x("DELETE FROM at_runs WHERE id=?", (ids["all"],))
+    at.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.min_win_prob',50,'$.idx_floor',-1.5) WHERE id=?", (ids["loose"],))
+    at.rt.db.x("UPDATE at_runs SET params=json_remove(params,'$.exit_mult') WHERE id=?", (ids["wide"],))
+    at._auto_at = 0
+    at.tick(force=True)
+    runs = {r["variant"]: r for r in at._runs("WHERE lab_id=?", (lab["id"],))}
+    assert len(runs) == 10 and runs["all"]["params"]["min_win_prob"] == 40 and runs["all"]["status"] == "running"
+    assert runs["loose"]["params"]["min_win_prob"] == 43 and runs["loose"]["params"]["idx_floor"] == 0 and runs["wide"]["params"]["exit_mult"] == 1.5
+    at._auto_at = 0
+    at.tick(force=True)
+    assert len(at._runs("WHERE lab_id=?", (lab["id"],))) == 10                # 두 번 붙이지 않는다

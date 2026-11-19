@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1248";
+const UI_VERSION = "261119.1254";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1821,7 +1821,7 @@ pages.invest = {
     if (!S) return "";
     return `<section class="card at-auto ${S.on ? "on" : ""}">
         <div class="card-head"><div><h2>모의 자동 테스트</h2>
-          <div class="tiny">켜 두면 앱이 국내·미국, 단타·스윙에 플랜 9가지씩을 가상 돈으로 계속 시험해요. 설정할 것은 없어요.</div></div>
+          <div class="tiny">켜 두면 앱이 국내·미국, 단타·스윙에 플랜 ${((LB || {}).presets || []).length}가지씩을 가상 돈으로 계속 시험해요. 설정할 것은 없어요.</div></div>
           <button type="button" class="switch" role="switch" id="atAutoSw" aria-checked="${!!S.on}" aria-label="모의 자동 테스트"><span></span></button></div>
         <div class="sc-kpi"><div><span>AI 비용 상한</span><b>하루 $${S.day_cap_usd}<small> · 한 달 약 ${won(S.month_cap_cur)}원</small></b></div>
           <div><span>오늘 쓴 비용</span><b>$${S.usd_today.toFixed(2)}</b></div><div><span>지금까지</span><b>$${S.usd_all.toFixed(2)}<small> · ${won(S.cur_all)}원</small></b></div></div>
@@ -1829,7 +1829,7 @@ pages.invest = {
             <div class="at-adv-top"><b><span class="mk-tag ${a.mkt}">${a.mkt === "kr" ? "국내장" : "미국장"}</span>${esc(a.style_label)}</b><span class="tiny">끝난 거래 ${a.trades}건</span></div>
             <span>${esc(a.text)}</span>
             ${a.best ? `<button type="button" class="btn sm" data-real="${a.mkt}:${a.style}:${esc(a.best.variant)}">이 플랜으로 실전 만들기</button>` : ""}</div>`).join("")}</div>
-        <div class="tiny">모의도 AI 비용은 실제로 나가요. 장이 나쁜 날은 AI를 부르지 않고, 추천 한 번을 플랜 9개가 함께 써서 비용을 아껴요. 실전 후보는 한 플랜에 30건(10거래일 이상)이 쌓이고 AI 비용을 빼고도 플러스일 때만 알려요. 모의 결과가 실전 수익을 보장하지는 않아요.</div>
+        <div class="tiny">모의도 AI 비용은 실제로 나가요. 장이 나쁜 날은 AI를 부르지 않고, 추천 한 번을 모든 플랜이 함께 써서 비용을 아껴요. 실전 후보는 한 플랜에 30건(10거래일 이상)이 쌓이고 AI 비용을 빼고도 플러스일 때만 알려요. 모의 결과가 실전 수익을 보장하지는 않아요.</div>
       </section>`;
   },
   // 모의 실험실: 같은 AI 추천을 플랜 여러 개에 동시에 흘려, AI 비용까지 뺀 수익률로 줄 세운다

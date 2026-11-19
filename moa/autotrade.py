@@ -122,8 +122,9 @@ def make_plan(budget, mkt, style, days, mode="real"):
 # 모의 실험실: 같은 AI 추천을 여러 플랜에 동시에 흘려, 어떤 조건이 실제로 나은지 비교한다(추천 비용은 한 번만 든다)
 VARIANTS = {
     "base": ("기본", "처음 플랜 그대로", {}),
-    "loose": ("느슨한 기준", "승률 50 · 점수 50 · 손익비 1.2 이상이면 매수", {"min_win_prob": 50, "min_score": 50, "min_rr": 1.2, "chase_pct": 1.0}),
-    "strict": ("엄격한 기준", "승률 60 · 점수 70 · 손익비 1.8 이상만 매수", {"min_win_prob": 60, "min_score": 70, "min_rr": 1.8}),
+    "loose": ("느슨한 기준", "기본보다 승률 -7 · 점수 -10 · 손익비 -0.3", {"min_win_prob": "-7", "min_score": "-10", "min_rr": "-0.3", "chase_pct": "+0.5"}),
+    "strict": ("엄격한 기준", "기본보다 승률 +5 · 점수 +10 · 손익비 +0.3", {"min_win_prob": "+5", "min_score": "+10", "min_rr": "+0.3"}),
+    "all": ("가리지 않고 사기", "AI가 낸 종목은 거의 다 사 봄(AI 추천 자체의 성적을 재는 기준선)", {"min_win_prob": 40, "min_score": 30, "min_rr": 1.0, "chase_pct": 2.0, "skip_watch": False}),
     "watch_skip": ("관망엔 쉬기", "AI가 관망이면 사지 않음(실전 기본)", {"skip_watch": True}),
     "watch_full": ("관망 무시", "관망이어도 평소 크기로 매수", {"skip_watch": False, "watch_mult": 1.0}),
     "tight": ("짧게 끊기", "AI가 낸 익절·손절 폭의 절반에서 팔기", {"exit_mult": 0.5}),
@@ -131,6 +132,19 @@ VARIANTS = {
     "focus": ("한 종목 집중", "1종목에 절반씩", {"max_positions": 1, "per_trade_pct": 50}),
     "spread": ("여러 종목 분산", "5종목에 20%씩", {"max_positions": 5, "per_trade_pct": 20}),
 }
+def apply_variant(p, key, keep=()):
+    """플랜 값에 실험 플랜의 차이를 입힌다. '*1.5'는 곱하기, '+5'·'-7'은 더하기·빼기, 그 밖은 그 값으로."""
+    for k, v in VARIANTS[key][2].items():
+        if k in keep:
+            continue
+        if isinstance(v, str) and v[:1] == "*":
+            v = p[k] * float(v[1:])
+        elif isinstance(v, str) and v[:1] in "+-":
+            v = p[k] + float(v)
+        p[k] = _clamp_key(k, v)
+    return p
+
+
 READY_DAYS = 10        # 그리고 그 거래가 이만큼의 거래일에 걸쳐 있어야 한다(하루 이틀의 운을 거른다)
 READY_N = 30           # 실전을 권하려면 모의에서 끝난 거래가 이만큼은 있어야 한다
 MONTH_DAYS = 21        # 한 달 거래일
@@ -455,10 +469,7 @@ class AutoTrade:
         p.update(patch)
         var = d.get("variant") if d.get("variant") in VARIANTS else None
         if var:                                      # 모의 실험에서 검증한 플랜을 그대로 가져온다(실전은 관망에 쉬는 것을 지킨다)
-            for kk, v in VARIANTS[var][2].items():
-                if mode == "real" and kk in ("skip_watch", "watch_mult"):
-                    continue
-                p[kk] = _clamp_key(kk, p[kk] * float(v[1:]) if isinstance(v, str) and v.startswith("*") else v)
+            apply_variant(p, var, keep=("skip_watch", "watch_mult") if mode == "real" else ())
         run = {"mkt": mkt, "style": style, "budget": budget, "params": p, "mode": mode}
         _, m = self._per_usd(style, model, p["web_search"])
         warn = None
@@ -1888,13 +1899,34 @@ class AutoTrade:
         if not self.auto_on() or time.time() - getattr(self, "_auto_at", 0) < 300:
             return
         self._auto_at = time.time()
-        # 예전 판에서 만든 실험은 약한 장에 쉬게 되어 있었다 → 모의는 쉬지 않게 고친다
+        # 예전 판에서 만든 실험을 지금 설계에 맞춘다(바뀐 것이 있을 때만 한 번 쓴다)
         for r in self._runs("WHERE lab_id IS NOT NULL AND status IN ('running','paused')"):
-            if float(r["params"].get("idx_floor") or 0) < 0:
-                self.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.idx_floor',0.0) WHERE id=?", (r["id"],))
+            p, old = r["params"], json.dumps(r["params"], sort_keys=True)
+            if float(p.get("idx_floor") or 0) < 0:
+                p["idx_floor"] = 0.0                                   # 모의는 약한 장에도 쉬지 않는다
+            if r["variant"] in ("loose", "strict"):                    # 고정값이라 스윙에서는 기본과 같았다 → 기본 대비로
+                base = self.rt.db.one("SELECT params FROM at_runs WHERE lab_id=? AND variant='base'", (r["lab_id"],))
+                if base:
+                    want = apply_variant(json.loads(base["params"]), r["variant"])
+                    p.update({k: want[k] for k in VARIANTS[r["variant"]][2]})
             em = VARIANTS.get(r["variant"] or "", ("", "", {}))[2].get("exit_mult")
-            if em and r["params"].get("exit_mult") != em:      # 예전 '짧게·길게'는 상한만 바꿔 차이가 없었다 → 폭 자체를 바꾼다
-                self.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.exit_mult',?) WHERE id=?", (em, r["id"]))
+            if em:                                                     # 짧게·길게는 상한만 바꿔 차이가 없었다 → 폭 자체를 바꾼다
+                p["exit_mult"] = em
+            if json.dumps(p, sort_keys=True) != old:
+                self.rt.db.x("UPDATE at_runs SET params=? WHERE id=?", (json.dumps(p, ensure_ascii=False), r["id"]))
+        for lab in {r["lab_id"] for r in self._runs("WHERE lab_id IS NOT NULL AND status IN ('running','paused')")}:
+            have = {r["variant"]: r for r in self._runs("WHERE lab_id=?", (lab,))}
+            b = have.get("base")
+            for k in VARIANTS:
+                if k in have or not b or b["status"] == "ended":
+                    continue
+                p = apply_variant(copy.deepcopy(b["params"]), k)
+                rid = self.rt.db.x(
+                    "INSERT INTO at_runs(created_at,name,mode,mkt,style,model,budget,start_date,end_date,status,params,lab_id,variant,last_cycle) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (self._now(), f"실험 · {VARIANTS[k][0]}", "paper", b["mkt"], b["style"], b["model"], b["budget"], b["start_date"], b["end_date"], b["status"],
+                     json.dumps(p, ensure_ascii=False), lab, k, b["last_cycle"]))
+                self.rt.db.x("INSERT INTO at_changes(run_id,ts,ver,source,changes,stats) VALUES(?,?,?,?,?,?)", (rid, self._now(), 1, "start", "[]", None))
+                self.log(rid, "start", f"실험에 플랜을 보탰어요 · {VARIANTS[k][0]}", {"params": p, "lab": lab})
         rd = self.ready()
         if not (rd["ai"] and rd["data"]):
             return
@@ -1973,9 +2005,7 @@ class AutoTrade:
         lab = None
         for k in keys:
             label, _, patch = VARIANTS[k]
-            p = copy.deepcopy(pv["params"])
-            for kk, v in patch.items():
-                p[kk] = _clamp_key(kk, p[kk] * float(v[1:]) if isinstance(v, str) and v.startswith("*") else v)
+            p = apply_variant(copy.deepcopy(pv["params"]), k)
             name = f"실험 · {label}"
             rid = self.rt.db.x(
                 "INSERT INTO at_runs(created_at,name,mode,mkt,style,model,budget,start_date,end_date,status,params,lab_id,variant) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",

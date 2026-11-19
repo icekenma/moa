@@ -2435,3 +2435,24 @@ html.dark-theme .pf-bar{background:rgba(255,255,255,.1)}
 html.dark-theme .pf-bar>em{background:#fff}
 .at-hero-tip{all:unset;box-sizing:border-box;display:block;padding:7px 10px;border-radius:9px;background:rgba(255,255,255,.1);font-size:11.5px;color:var(--on-deep2);cursor:pointer}
 .at-hero-tip b{color:#FDE68A;font-weight:800}
+
+/* ---------- v4.54 국내장·미국장 구분: 국내 = 주황, 미국 = 파랑 ---------- */
+.kr{--mk:#FFA35C;--mk2:#FF7A8A}.us{--mk:#5AB0FF;--mk2:#7CE0FF}
+html:not(.dark-theme) .kr{--mk:#D9661A;--mk2:#E0457A}html:not(.dark-theme) .us{--mk:#1E6FD9;--mk2:#1AA6C8}
+.bot-mk{display:flex;align-items:center;gap:8px;padding:9px 13px 7px;border-top:1px solid var(--bot-line);background:linear-gradient(90deg,color-mix(in srgb,var(--mk) 22%,transparent),transparent 70%)}
+.bot-head+.bot-mk{border-top:0}
+.bot-mk b{font-size:12px;font-weight:800;color:var(--mk);letter-spacing:-.01em}
+.bot-mk b::before{content:"";display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;background:linear-gradient(135deg,var(--mk),var(--mk2));vertical-align:0}
+.bot-mk span{font-size:10.5px;font-weight:700;color:var(--bot-ink3)}
+.bot-mk span.on{color:var(--bot-ink)}
+.bot-mk+.bot-run{border-top:0}
+.bot-run.kr::before,.bot-run.us::before{background:repeating-linear-gradient(180deg,var(--mk) 0 5px,transparent 5px 9px)}
+.bot-run.real.kr::before,.bot-run.real.us::before{background:linear-gradient(180deg,var(--mk),var(--mk2))}
+.bot-run.lab.kr::before,.bot-run.lab.us::before{background:repeating-linear-gradient(180deg,var(--mk) 0 2px,transparent 2px 5px)}
+.bot-run.kr .bot-mode,.bot-run.us .bot-mode{color:var(--mk);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--mk) 70%,transparent);background:color-mix(in srgb,var(--mk) 12%,transparent)}
+.bot-run.real.kr .bot-mode,.bot-run.real.us .bot-mode{background:linear-gradient(90deg,var(--mk),var(--mk2));color:#1A1024;box-shadow:none}
+.mk-tag{display:inline-block;margin-right:6px;padding:2px 7px;border-radius:6px;font-size:10px;font-weight:800;line-height:1.5;vertical-align:1px;
+  color:var(--mk);background:color-mix(in srgb,var(--mk) 14%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--mk) 60%,transparent)}
+.card.lab.kr,.card.lab.us{border-left:3px solid var(--mk)}
+.card.lab.kr .lab-nm i,.card.lab.us .lab-nm i{background:color-mix(in srgb,var(--mk) 18%,transparent);color:var(--mk)}
+.card.lab.kr .lab-tr:nth-child(2) .lab-nm i:not(.few),.card.lab.us .lab-tr:nth-child(2) .lab-nm i:not(.few){background:var(--mk);color:#1A1024}

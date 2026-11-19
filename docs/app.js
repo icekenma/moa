@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1211";
+const UI_VERSION = "261119.1215";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1725,7 +1725,7 @@ pages.invest = {
   atHomeCard(r) {
     const [lbl] = this.AT_ST[r.status] || [r.status], m = r.money, n = r.now, t = n.today, live = r.status === "running" && n.engine.ok, real = r.mode === "real";
     const kpi = [["추천", `${t.cycles}/${t.cycles_max}`], ["매수", t.buys], ["매도", t.sells], ["보유", `${n.size.slots_used}/${n.size.slots}`], ["기간", `${n.period.day}/${n.period.days}일`]];
-    return `<a class="bot-run at-home ${real ? "real" : "paper"}" href="#invest/auto" data-atgo="${r.id}">
+    return `<a class="bot-run at-home ${real ? "real" : "paper"} ${r.mkt}" href="#invest/auto" data-atgo="${r.id}">
       <div class="bot-top"><span class="bot-mode">${real ? "실전" : "모의"}</span><b class="bot-name">${esc(r.name)}</b>
         <span class="bot-st live-dot ${live ? "on" : ""}">${lbl}${n.engine.ok ? "" : " · 엔진 확인 필요"}</span></div>
       <div class="bot-eq"><b>${this.atM(r.mkt, m.equity)}</b><em class="${tone(m.ret_pct)}">${pct(m.ret_pct, 2)}</em></div>
@@ -1741,12 +1741,18 @@ pages.invest = {
     return `<section class="bot ${live ? "live" : ""}" style="--sync:-${Date.now() % 2400}ms" aria-label="AI 자동매매">
       <header class="bot-head"><span class="bot-ico" aria-hidden="true"><i></i><i></i><i></i></span><h2>AI 자동매매</h2>
         <span class="bot-sub">${busy ? "AI 추천 받는 중" : live ? `${live}개 가동 중` : `${runs.length + labs.length}개 · 쉬는 중`}</span><a href="#invest/auto">전체 ›</a></header>
-      ${runs.map((r) => this.atHomeCard(r)).join("")}
-      ${labs.map((L) => `<a class="bot-run lab" href="#invest/auto">
-        <div class="bot-top"><span class="bot-mode">실험</span><b class="bot-name">${L.mkt === "kr" ? "국내" : "미국"} ${esc(L.style_label)} · 플랜 ${L.n}개</b>
+      ${["kr", "us"].map((mk) => {      // 국내장·미국장을 따로 묶어, 색으로도 가른다(국내 = 주황, 미국 = 파랑)
+        const rs = runs.filter((r) => r.mkt === mk), ls = labs.filter((L) => L.mkt === mk);
+        if (!rs.length && !ls.length) return "";
+        const ss = marketSession(mk);
+        return `<div class="bot-mk ${mk}"><b>${mk === "kr" ? "국내장" : "미국장"}</b><span class="${ss.phase === "open" ? "on" : ""}">${esc(ss.label)}${ss.sub ? ` · ${esc(ss.sub)}` : ""}</span></div>
+      ${rs.map((r) => this.atHomeCard(r)).join("")}
+      ${ls.map((L) => `<a class="bot-run lab ${mk}" href="#invest/auto">
+        <div class="bot-top"><span class="bot-mode">실험</span><b class="bot-name">${esc(L.style_label)} · 플랜 ${L.n}개</b>
           <span class="bot-st live-dot ${L.status === "running" ? "on" : ""}">${L.status === "running" ? "가동 중" : "멈춤"}</span></div>
         ${L.now ? (L.now.busy ? this.atScanHtml(L.now, true) : `<div class="bot-now"><b>${esc(L.now.next.label)}</b><span>${this.atNextLine(L.now)}</span></div>`) : ""}
-        <div class="bot-note">${esc(L.note)} 끝난 거래 ${L.closed}건 · AI 비용 $${Number(L.usd).toFixed(2)}</div></a>`).join("")}</section>`;
+        <div class="bot-note">${esc(L.note)} 끝난 거래 ${L.closed}건 · AI 비용 $${Number(L.usd).toFixed(2)}</div></a>`).join("")}`;
+      }).join("")}</section>`;
   },
   atReadyHtml(R) {
     const rows = [];
@@ -1816,7 +1822,7 @@ pages.invest = {
         <div class="sc-kpi"><div><span>AI 비용 상한</span><b>하루 $${S.day_cap_usd}<small> · 한 달 약 ${won(S.month_cap_cur)}원</small></b></div>
           <div><span>오늘 쓴 비용</span><b>$${S.usd_today.toFixed(2)}</b></div><div><span>지금까지</span><b>$${S.usd_all.toFixed(2)}<small> · ${won(S.cur_all)}원</small></b></div></div>
         <div class="at-adv">${S.advice.map((a) => `<div class="${a.best ? "ok" : ""}">
-            <div class="at-adv-top"><b>${a.mkt === "kr" ? "국내" : "미국"} ${esc(a.style_label)}</b><span class="tiny">끝난 거래 ${a.trades}건</span></div>
+            <div class="at-adv-top"><b><span class="mk-tag ${a.mkt}">${a.mkt === "kr" ? "국내장" : "미국장"}</span>${esc(a.style_label)}</b><span class="tiny">끝난 거래 ${a.trades}건</span></div>
             <span>${esc(a.text)}</span>
             ${a.best ? `<button type="button" class="btn sm" data-real="${a.mkt}:${a.style}:${esc(a.best.variant)}">이 플랜으로 실전 만들기</button>` : ""}</div>`).join("")}</div>
         <div class="tiny">모의도 AI 비용은 실제로 나가요. 장이 나쁜 날은 AI를 부르지 않고, 추천 한 번을 플랜 9개가 함께 써서 비용을 아껴요. 실전 후보는 한 플랜에 30건(10거래일 이상)이 쌓이고 AI 비용을 빼고도 플러스일 때만 알려요. 모의 결과가 실전 수익을 보장하지는 않아요.</div>
@@ -1824,11 +1830,11 @@ pages.invest = {
   },
   // 모의 실험실: 같은 AI 추천을 플랜 여러 개에 동시에 흘려, AI 비용까지 뺀 수익률로 줄 세운다
   atLabHtml(LB) {
-    const labs = (LB || {}).labs || [], act = labs.filter((L) => L.status !== "ended"), old = labs.filter((L) => L.status === "ended").slice(0, 1);
+    const labs = ((LB || {}).labs || []).slice().sort((a, b) => (a.mkt === b.mkt ? 0 : a.mkt === "kr" ? -1 : 1)), act = labs.filter((L) => L.status !== "ended"), old = labs.filter((L) => L.status === "ended").slice(0, 1);
     const one = (L) => {
       const kr = L.mkt === "kr", N = L.now;
-      return `<section class="card lab ${L.status}">
-        <div class="card-head"><div><h2>${kr ? "국내" : "미국"} ${esc(L.style_label)} 실험 · 플랜 ${L.runs.length}개</h2>
+      return `<section class="card lab ${L.status} ${L.mkt}">
+        <div class="card-head"><div><h2><span class="mk-tag ${L.mkt}">${kr ? "국내장" : "미국장"}</span>${esc(L.style_label)} 실험 · 플랜 ${L.runs.length}개</h2>
           <div class="tiny">${esc(L.start_date.slice(5))}~${esc(L.end_date.slice(5))} · 추천 ${L.cycles}번 · 끝난 거래 ${L.closed}건 · AI 비용 $${L.usd.toFixed(2)}(모두 합쳐)</div></div>
           <span class="tag ${{ running: "y", paused: "g", ended: "" }[L.status]}">${{ running: "가동 중", paused: "멈춤", ended: "끝남" }[L.status]}</span></div>
         ${N ? (N.busy ? this.atScanHtml(N, true) : `<div class="lab-now"><b>${esc(N.next.label)}</b><span>${this.atNextLine(N)}</span></div>`) : ""}

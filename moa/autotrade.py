@@ -109,8 +109,10 @@ def make_plan(budget, mkt, style, days, mode="real"):
              "entry_start": "09:30" if mkt == "kr" else "09:45", "entry_end": "15:00" if mkt == "kr" else "15:30"}
     p["per_trade_pct"] = round(min(100 / p["max_positions"], {"day": 33.0, "swing": 25.0, "month": 20.0}[style]), 1)
     # 관망: 실전은 쉰다. 모의는 자료를 모으는 것이 목적이라 AI가 낸 종목을 작게 산다
-    # 지수가 크게 내린 날은 AI를 부르기 전에 앱이 먼저 걸러 비용을 아낀다
-    p.update(loss_streak=3, chase_pct=0.5, skip_watch=mode == "real", watch_mult=0.5, idx_floor={"day": -1.0, "swing": -1.5, "month": -2.0}[style],
+    # 지수가 크게 내린 날: 실전은 AI를 부르기 전에 앱이 먼저 걸러 비용을 아낀다.
+    # 모의는 약한 장도 시험해야 할 자료라 거르지 않는다(비용은 하루 상한과 '관망 뒤 쉬기'로 묶는다)
+    p.update(loss_streak=3, chase_pct=0.5, skip_watch=mode == "real", watch_mult=0.5,
+             idx_floor={"day": -1.0, "swing": -1.5, "month": -2.0}[style] if mode == "real" else 0.0,
              warmup_trades=10, warmup_mult=0.5,
              review_every=30, review_days=5, auto_apply=False, ai_review=True, ai_daily_usd=1.0, web_search=True)
     return p
@@ -924,6 +926,8 @@ class AutoTrade:
         if code == "over":
             return {"kind": "hold", "label": why}
         if code in ("dayloss", "streak", "cycles", "aicost"):
+            if code == "aicost" and run.get("lab_id"):      # 실험은 비용 상한을 앱이 정한다(사용자가 올릴 일이 없다)
+                return nxt("오늘 쓸 AI 비용을 다 썼어요. 다음 거래일에 이어 가요", self._next_day(mkt, today), today_why="오늘 쓸 AI 비용을 다 썼어요")
             if code == "aicost":
                 why = f"오늘 AI 추천 비용 한도(${float(p.get('ai_daily_usd') or 1):g})를 다 썼어요. 플랜에서 한도를 올리면 바로 다시 받아요"
                 return dict(nxt(why.replace("바로 다시 받아요", "오늘도 더 받아요") + ". 그대로 두면 다음 거래일에 다시 시작해요", self._next_day(mkt, today), today_why=why), code=code)
@@ -1871,6 +1875,10 @@ class AutoTrade:
         if not self.auto_on() or time.time() - getattr(self, "_auto_at", 0) < 300:
             return
         self._auto_at = time.time()
+        # 예전 판에서 만든 실험은 약한 장에 쉬게 되어 있었다 → 모의는 쉬지 않게 고친다
+        for r in self._runs("WHERE lab_id IS NOT NULL AND status IN ('running','paused')"):
+            if float(r["params"].get("idx_floor") or 0) < 0:
+                self.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.idx_floor',0.0) WHERE id=?", (r["id"],))
         rd = self.ready()
         if not (rd["ai"] and rd["data"]):
             return

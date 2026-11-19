@@ -1025,8 +1025,11 @@ def test_free_precheck_watch_backoff_and_paper_buys_small_on_watch(env, monkeypa
     rid = env.run(new_defaults=True)
     run = lambda: at._run(rid)
     p = run()["params"]
-    assert p["skip_watch"] is False and p["watch_mult"] == 0.5 and p["idx_floor"] == -1.0
+    assert p["skip_watch"] is False and p["watch_mult"] == 0.5 and p["idx_floor"] == 0      # 모의는 약한 장도 시험한다(거르지 않는다)
     assert make_plan(3_000_000, "kr", "day", 30)["skip_watch"] is True and make_plan(3_000_000, "kr", "swing", 30)["idx_floor"] == -1.5
+    env.idx = -1.46
+    assert at.gate_code(run())[0] is True
+    at.edit(rid, {"idx_floor": -1.0})                                    # 아래는 실전 기본값(-1%)에서의 동작
     calls = []
 
     def stream(kind, d):

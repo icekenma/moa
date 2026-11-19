@@ -1198,7 +1198,7 @@ def test_autopilot_only_needs_on_off_and_feeds_a_real_plan(env, monkeypatch):
     at = env.at
     monkeypatch.setattr(at, "_per_usd", lambda style, model, web: ({"claude-sonnet-5-5": 0.2, "claude-haiku-4-5": 0.1}.get(model, 0.8) * (1 if web else 0.6), {"fx": 1400.0}))
     S = at.auto_state()
-    assert S["on"] is False and S["day_cap_usd"] == 1.0 and len(S["advice"]) == 4 and at.labs()["labs"] == []
+    assert S["on"] is False and S["day_cap_usd"] == 3.0 and len(S["advice"]) == 4 and at.labs()["labs"] == []
     at.tick(force=True)
     assert at.labs()["labs"] == []                                       # 꺼져 있으면 아무것도 만들지 않는다
     S = at.auto_set(True)
@@ -1206,9 +1206,10 @@ def test_autopilot_only_needs_on_off_and_feeds_a_real_plan(env, monkeypatch):
     assert S["on"] is True and sorted((x["mkt"], x["style"]) for x in L) == sorted(AUTO_SET) and all(len(x["runs"]) == 10 for x in L)
     kd = at._run(next(x["id"] for x in L if (x["mkt"], x["style"]) == ("kr", "day")))
     ks = at._run(next(x["id"] for x in L if (x["mkt"], x["style"]) == ("kr", "swing")))
-    # 비용은 앱이 정한다: 단타 하루 $0.35 → 20분마다 빠른 재추천 + 정밀 추천 Haiku 2번, 스윙 $0.15 → 60분마다 + Haiku 1번
-    assert (kd["model"], kd["params"]["cycles_per_day"], kd["params"]["quick_gap_min"]) == ("claude-haiku-4-5", 2, 20)
-    assert (ks["model"], ks["params"]["cycles_per_day"], ks["params"]["quick_gap_min"]) == ("claude-haiku-4-5", 1, 60)
+    # 비용은 앱이 정한다(전체 하루 $3): 단타 하루 $1.05 → 20분마다 빠른 재추천 + 정밀 추천 Sonnet 2번(뉴스 검색), 스윙 $0.45 → 60분마다 + Sonnet 1번
+    assert (kd["model"], kd["params"]["cycles_per_day"], kd["params"]["quick_gap_min"], kd["params"]["web_search"]) == ("claude-sonnet-5-5", 2, 20, True)
+    assert (ks["model"], ks["params"]["cycles_per_day"], ks["params"]["quick_gap_min"], ks["params"]["web_search"]) == ("claude-sonnet-5-5", 1, 60, True)
+    assert kd["params"]["lab_day_usd"] == 1.05 and ks["params"]["lab_day_usd"] == 0.45
     at._auto_at = 0
     at.tick(force=True)
     assert len(at.labs()["labs"]) == 4                                   # 이미 있으면 또 만들지 않는다
@@ -1579,3 +1580,44 @@ def test_old_runs_show_full_plan_in_order(env):
     assert (d["params"]["exit_mult"], d["params"]["watch_mult"], d["params"]["idx_floor"], d["params"]["quick_gap_min"]) == (1.0, 0.5, 0.0, 0)
     assert [k for k, _ in d["keys"]] == list(PLAN_KEYS)
     assert "quick_gap_min" not in json.loads(env.rt.db.one("SELECT params FROM at_runs WHERE id=?", (rid,))["params"])   # 저장 값은 그대로(_upgrade가 알아보게)
+
+
+def test_lab_refits_when_daily_ai_budget_changes(env, monkeypatch):
+    """하루 AI 비용 목표가 바뀌면(예전 $1 → $3) 돌고 있는 실험의 엔진·횟수를 묶음마다 한 번 다시 맞춘다."""
+    at = env.at
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: ({"claude-sonnet-5-5": 0.2, "claude-haiku-4-5": 0.1}.get(model, 0.8) * (1 if web else 0.6), {"fx": 1400.0}))
+    at.auto_set(True)
+    lab = next(x for x in at.labs()["labs"] if (x["mkt"], x["style"]) == ("kr", "day"))
+    env.rt.db.x("UPDATE at_runs SET model='claude-haiku-4-5', params=json_set(params,'$.lab_day_usd',0.35,'$.cycles_per_day',2) WHERE lab_id=?", (lab["id"],))
+    env.open = False
+    at._auto_at = 0
+    at.tick(force=True)
+    rs = at._runs("WHERE lab_id=?", (lab["id"],))
+    assert all((r["model"], r["params"]["lab_day_usd"], r["params"]["cycles_per_day"]) == ("claude-sonnet-5-5", 1.05, 2) for r in rs)
+    msgs = [x["msg"] for x in env.rt.db.q("SELECT msg FROM at_log WHERE kind='control' AND run_id=?", (lab["id"],))]
+    assert any("$0.35 → $1.05" in m and "Sonnet" in m for m in msgs)
+    at._auto_at = 0
+    at.tick(force=True)
+    assert len([m for m in (x["msg"] for x in env.rt.db.q("SELECT msg FROM at_log WHERE kind='control' AND run_id=?", (lab["id"],))) if "비용 목표" in m]) == 1
+
+
+def test_learning_uses_full_scans_only(env):
+    """빠른 재추천의 성적은 성적표에 따로 보이지만, 자체 학습(통계·승률 보정·복기)에는 넣지 않는다."""
+    ap, db = env.rt.aipick, env.rt.db
+    from moa import aipick as AP2
+    AP2._ensure_cols(db)
+    for i, lite in enumerate([0, 0, 1, 1, 1]):
+        pid = db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text,horizon,lv,lite) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                   (f"2026-11-1{i}T10:00:00", "kr", "claude-haiku-4-5" if lite else "claude-sonnet-5-5", 0.1, "보통", "v", "[]", "", "day", 0, lite))
+        db.x("INSERT INTO ai_outcomes(pick_id,idx,ts,mkt,model,sym,name,stance,auto,score,win_prob,entry_type,rec_price,entry_price,target_pct,stop_pct,end_ts,"
+             "cost_usd,feat,horizon,status,result,net_pct,ret_pct,filled,lite) VALUES(?,0,?,?,?,?,?,?,0,70,60,'limit',100,100,2,1,?,0.1,'{}','day','done','익절',1.8,2,1,0)",
+             (pid, f"2026-11-1{i}T10:00:00", "kr", "m", f"S{i}", f"종목{i}", "보통", f"2026-11-1{i}T15:00:00"))
+    db._lite_marked = False
+    AP2._ensure_cols(db)                                                  # 예전 판에 들어간 줄도 한 번 표시한다
+    assert [r["lite"] for r in db.q("SELECT lite FROM ai_outcomes ORDER BY pick_id")] == [0, 0, 1, 1, 1]
+    assert len(AP2._done_rows(ap, None, "day")) == 2
+    st = ap.stats(0, "", "", "day")
+    assert st["all"]["n"] == 5 and {x["key"]: x["n"] for x in st["by_kind"]} == {"정밀 추천": 2, "빠른 재추천": 3}
+    assert ap.stats(0, "", "", "day", "lite")["all"]["n"] == 3 and ap.stats(0, "", "", "day", "full")["all"]["n"] == 2
+    c = create_app(env.rt).test_client()
+    assert c.get("/api/ai/stats?h=day&kind=full").get_json()["all"]["n"] == 2

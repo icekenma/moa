@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1700";
+const UI_VERSION = "261119.1813";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2768,7 +2768,7 @@ pages.invest = {
     const arrow = (a, b) => a === b ? `<b>${b}%</b>` : `<span>${a}%</span><i aria-hidden="true">→</i><b>${b}%</b>`;
     el.innerHTML = `<div class="card-head"><h2>자체 학습 · ${HL} 추천</h2><span class="tag ${step ? "g" : "y"}">${esc(L.stage)}</span></div>
       <div class="lr-steps">${[["자료 쌓기", `채점 ${L.n}/${L.min}건${L.live ? ` · 진행 ${L.live}` : ""}`], ["통계·자동 조정", "추천할 때마다 자동"], ["AI 복기 규칙", ls.at && ls.text ? esc(ls.at.slice(5).replace("T", " ")) + ` · ${ls.ver}판` : "아직 없음"]].map(([a, b], i) => `<div class="${i <= step ? "on" : ""}"><i>${i + 1}</i><b>${a}</b><span>${b}</span></div>`).join("")}</div>
-      <div class="tiny">추천 뒤 실제 가격을 추적한 결과를 다음 ${HL} 추천 때 AI에게 함께 보여 줘요. 잘 통한 조건은 더 고르고, 안 통한 조건은 피하고, 승률·목표·손절${hz === "day" ? "" : "·보유일"}을 실제 결과에 맞추게 돼요. 당일·1주·1달은 서로 섞지 않고 따로 배워요.</div>
+      <div class="tiny">추천 뒤 실제 가격을 추적한 결과를 다음 ${HL} 추천 때 AI에게 함께 보여 줘요. 잘 통한 조건은 더 고르고, 안 통한 조건은 피하고, 승률·목표·손절${hz === "day" ? "" : "·보유일"}을 실제 결과에 맞추게 돼요. 당일·1주·1달은 서로 섞지 않고 따로 배워요. 자동매매의 빠른 재추천(싼 엔진, 뉴스 없이)은 배우는 자료에 넣지 않아요.</div>
       ${L.n < L.min ? `<div class="bar"><div style="width:${L.n / L.min * 100}%"></div></div><div class="tiny">채점이 ${L.min}건 쌓이면 학습 내용이 추천에 들어가기 시작해요. 추천을 받아 두기만 해도(사지 않아도) 쌓여요.${hz === "day" ? "" : ` ${HL} 추천은 결과가 나오기까지 최대 ${AI_H[hz].days}거래일이 걸려요.`}</div>` : `
       ${T.ready ? `<h3 class="lr-h">자동 조정값</h3>
         <div class="lr-tune"><div><span>목표 폭</span><p>${arrow(T.now_tp, T.tp)}</p><small>절반은 실제로 닿았던 상승폭</small></div>
@@ -2793,11 +2793,11 @@ pages.invest = {
   },
   async aiStat() {
     setTop("AI 추천 성적", { back: "#invest/ai", menu: "invest", sub: "aistat" });
-    const F = this.sf || (this.sf = { days: 30, mkt: "", model: "", h: (this.ap || {}).h || "day" });
+    const F = this.sf || (this.sf = { days: 30, mkt: "", model: "", kind: "", h: (this.ap || {}).h || "day" });
     if (!AI_H[F.h]) F.h = "day";
     view.innerHTML = `<div id="asRoot" class="as"><div class="empty loading">채점하는 중</div></div>`;
     const load = async (refresh) => {
-      const st = await GET(`/api/ai/stats?h=${F.h}&days=${F.days}&mkt=${F.mkt}&model=${encodeURIComponent(F.model)}${refresh ? "&refresh=1" : ""}`);
+      const st = await GET(`/api/ai/stats?h=${F.h}&days=${F.days}&mkt=${F.mkt}&model=${encodeURIComponent(F.model)}&kind=${F.kind || ""}${refresh ? "&refresh=1" : ""}`);
       if (!$("#asRoot")) return;
       this.asDraw(st, F, load);
     };
@@ -2839,6 +2839,7 @@ pages.invest = {
         ${chips("days", [[7, "7일"], [30, "30일"], [90, "90일"], [0, "전체"]], F.days)}
         ${chips("mkt", [["", "전체 시장"], ["kr", "국내"], ["us", "미국"]], F.mkt)}
         ${chips("model", [["", "모든 엔진"], ...Object.entries(M)], F.model)}
+        ${chips("kind", [["", "모든 추천"], ["full", "정밀 추천"], ["lite", "빠른 재추천"]], F.kind || "")}
       </div>
       <section class="card as-hero">
         <div class="as-big"><span>추천 1건당 평균 수익(비용 뺀 뒤)</span><b class="${tone(a.avg)}">${a.avg == null ? "-" : pct(a.avg, 2)}</b>
@@ -2886,6 +2887,7 @@ pages.invest = {
       ${table("추천 받은 시간대별", st.by_tod, (k) => k)}
       ${table("추천 받은 요일별", st.by_dow || [], (k) => k + "요일")}
       ${table("직접 산 것 vs 안 산 것", st.by_bought, (k) => k)}
+      ${(st.by_kind || []).length > 1 ? table("정밀 추천 vs 빠른 재추천", st.by_kind, (k) => k, `<div class="tiny">빠른 재추천은 자동매매가 정밀 추천 사이에 가장 싼 엔진으로 뉴스 없이 다시 물은 것이에요. 자체 학습(통계·승률 보정·복기)에는 정밀 추천만 써요.</div>`) : ""}
       ${(st.by_lv || []).length > 1 ? table("자체 학습 규칙 판별", st.by_lv, (k) => k, `<div class="tiny">AI 복기 규칙을 고칠 때마다 판이 올라가요. 판이 올라갈수록 평균이 좋아지면 학습이 통하고 있는 거예요.</div>`) : ""}
       ${(st.by_feat || []).length ? `<section class="card"><h2>추천 순간의 조건별</h2><div class="tiny">추천할 때 그 종목이 어떤 상태였는지로 나눈 성적이에요(3건 이상 모인 조건만). 차이가 큰 조건은 자체 학습이 다음 추천에 반영해요.</div>
         ${st.by_feat.map((g) => `<details class="as-fg" ${g.items.length > 1 && Math.max(...g.items.map((x) => x.avg)) - Math.min(...g.items.map((x) => x.avg)) >= (sw ? 1.5 : 0.5) ? "open" : ""}><summary><b>${esc(g.group)}</b><span class="tiny">${g.items.map((x) => `${esc(x.key)} ${pct(x.avg, 1)}`).join(" · ")}</span></summary>

@@ -1112,7 +1112,7 @@ def create_app(rt, updater=None):
         if request.args.get("refresh"):
             rt.aipick.evaluate(force=True)
         return jsonify(rt.aipick.stats(int(request.args.get("days") or 0), request.args.get("mkt") or "",
-                                       request.args.get("model") or "", request.args.get("h") or "day"))
+                                       request.args.get("model") or "", request.args.get("h") or "day", request.args.get("kind") or ""))
 
     @app.get("/api/ai/picks")
     def ai_picks():

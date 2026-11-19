@@ -1096,14 +1096,14 @@ def _sync_outcomes(self):
                 continue
             end = window_end(p["mkt"], ts, x.get("exit_by") or "") if h == "day" else swing_end(p["mkt"], ts, HORIZONS[h]["days"])[0]
             self.rt.db.x("INSERT OR IGNORE INTO ai_outcomes(pick_id,idx,ts,mkt,model,sym,name,stance,auto,score,win_prob,entry_type,"
-                         "rec_price,entry_price,target_pct,stop_pct,end_ts,cost_usd,feat,horizon,hold_days,lv,theme,cat,idx0,idx_sym) "
-                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                         "rec_price,entry_price,target_pct,stop_pct,end_ts,cost_usd,feat,horizon,hold_days,lv,theme,cat,idx0,idx_sym,lite) "
+                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                          (p["id"], i, p["ts"], p["mkt"], p["model"], x["sym"], x.get("name"), p.get("stance"), int(bool(x.get("auto"))),
                           x.get("score"), x.get("win_prob"), x.get("entry_type"), x["price"], x.get("entry_price") or x["price"],
                           x.get("target_pct"), x.get("stop_pct"), end.isoformat(timespec="minutes"),
                           (p.get("usd") or 0) / max(1, len(picks)), json.dumps(x.get("feat") or {}, ensure_ascii=False),
                           h, x.get("hold_days"), p.get("lv") or 0, x.get("theme") or "", x.get("catalyst_type") or "",
-                          x.get("idx0"), x.get("idx_sym") or ""))
+                          x.get("idx0"), x.get("idx_sym") or "", 1 if p.get("lite") else 0))
 
 
 PATH_DAYS = (1, 3, 5, 10, 20)  # '손절·익절 없이 그냥 들고 있었다면' 며칠 뒤 수익률을 재는 지점(거래일)
@@ -1295,7 +1295,7 @@ HIST = {"day": ([-3, -2, -1, 0, 1, 2, 3], ["−3%↓", "−3~−2", "−2~−1",
         "month": ([-15, -10, -5, 0, 5, 10, 15], ["−15%↓", "−15~−10", "−10~−5", "−5~0", "0~5", "5~10", "10~15", "15%↑"])}
 
 
-def stats(self, days=0, mkt="", model="", horizon="day"):
+def stats(self, days=0, mkt="", model="", horizon="day", kind=""):
     """성적 요약(추천 종류별): 전체·시장·엔진·승률 구간·순위·태도·시간대·요일·규칙 판·조건별 + 개별 목록.
 
     중기는 재료 유형·테마·후보 안팎·걸린 기간·지수 대비·'들고 있었다면' 경로까지."""
@@ -1312,6 +1312,9 @@ def stats(self, days=0, mkt="", model="", horizon="day"):
     if model:
         q += " AND model=?"
         a.append(model)
+    if kind in ("full", "lite"):                 # 정밀 추천만 · 빠른 재추천만
+        q += " AND COALESCE(lite,0)=?"
+        a.append(1 if kind == "lite" else 0)
     rows = self.rt.db.q(q + " ORDER BY ts DESC, idx", a)
     bought = {(g["pick_id"], g["sym"]) for g in self.rt.db.q("SELECT pick_id, sym FROM ai_guards WHERE pick_id IS NOT NULL")}
     for r in rows:
@@ -1402,6 +1405,7 @@ def stats(self, days=0, mkt="", model="", horizon="day"):
            "by_tod": by(tod), "by_bought": by(lambda r: "샀음" if r["bought"] else "안 삼"),
            "by_dow": by(lambda r: DOW[datetime.fromisoformat(r["ts"]).weekday()]),
            "by_lv": by(lambda r: f"규칙 {r['lv']}판" if r.get("lv") else "규칙 없음"),
+           "by_kind": by(lambda r: "빠른 재추천" if r.get("lite") else "정밀 추천"),
            "by_feat": [{"group": g, "items": xs} for g, xs in feat.items()],
            "curve": curve, "hist": hist, "hist_labels": labels, "rows": rows[:200], "fx": fx,
            "models": {k: v[0].split(" · ")[0] for k, v in MODELS.items()}}
@@ -1496,12 +1500,19 @@ def _ensure_cols(db):
     _col(db, "ai_outcomes", (("feat", "TEXT"), ("alt_result", "TEXT"), ("alt_net", "REAL"), ("gv", "INTEGER"),
                              ("horizon", "TEXT"), ("hold_days", "INTEGER"), ("path", "TEXT"), ("pathd", "INTEGER"), ("bench", "REAL"),
                              ("days_held", "INTEGER"), ("lv", "INTEGER"), ("theme", "TEXT"), ("cat", "TEXT"), ("d0", "TEXT"),
-                             ("idx0", "REAL"), ("idx_sym", "TEXT")))
+                             ("idx0", "REAL"), ("idx_sym", "TEXT"), ("lite", "INTEGER NOT NULL DEFAULT 0")))
+    if not getattr(db, "_lite_marked", False):           # 빠른 재추천에서 나온 성적표 줄 표시(이 판 전에 들어간 것도 한 번 맞춘다)
+        db._lite_marked = True
+        try:
+            db.x("UPDATE ai_outcomes SET lite=1 WHERE COALESCE(lite,0)=0 AND pick_id IN (SELECT id FROM ai_picks WHERE COALESCE(lite,0)=1)")
+        except Exception:
+            pass
 
 
 def _done_rows(self, mkt=None, h="day"):
     _ensure_cols(self.rt.db)
-    rows = self.rt.db.q("SELECT * FROM ai_outcomes WHERE status='done' AND net_pct IS NOT NULL AND COALESCE(horizon,'day')=? ORDER BY ts", (hz(h),))
+    # 학습(통계·승률 보정·자동 조정·복기·과거성적 가산점)은 정밀 추천만 쓴다. 빠른 재추천(가장 싼 엔진, 뉴스 없이)은 성적표에서만 따로 본다
+    rows = self.rt.db.q("SELECT * FROM ai_outcomes WHERE status='done' AND net_pct IS NOT NULL AND COALESCE(horizon,'day')=? AND COALESCE(lite,0)=0 ORDER BY ts", (hz(h),))
     rows = [r for r in rows if r["result"] in FIN]
     for r in rows:
         try:
@@ -1747,7 +1758,7 @@ def learn_view(self, h="day"):
         vers.setdefault(int(r.get("lv") or 0), []).append(r["net_pct"])
     by_ver = [{"ver": v, "n": len(xs), "avg": round(sum(xs) / len(xs), 2), "win": round(sum(1 for x in xs if x > 0) / len(xs) * 100)}
               for v, xs in sorted(vers.items())]
-    live = self.rt.db.one("SELECT COUNT(*) n FROM ai_outcomes WHERE status='live' AND COALESCE(horizon,'day')=?", (h,))["n"]
+    live = self.rt.db.one("SELECT COUNT(*) n FROM ai_outcomes WHERE status='live' AND COALESCE(horizon,'day')=? AND COALESCE(lite,0)=0", (h,))["n"]
     return {"horizon": h, "label": H["label"], "n": n, "min": H["min"], "live": live, "stage": stage, "overall": st["overall"], "insights": st["insights"],
             "buckets": st["buckets"], "bands": bands, "lessons": ls, "auto": True if auto is None else bool(auto),
             "next_in": max(0, H["step"] - (n - int(ls.get("n") or 0))), "step": H["step"], "tune": tune(self, h), "by_ver": by_ver}

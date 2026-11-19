@@ -165,9 +165,11 @@ MONTH_DAYS = 21        # 한 달 거래일
 COST_PCT = 1.0         # 실전: 한 달 AI 비용이 쓸 돈의 이 비율(%)을 넘지 않게
 PAPER_DAY_USD = 0.6    # 모의·실험: 하루 AI 비용 목표(달러)
 # 모의 자동 테스트: 사용자는 켜고 끄기만 한다. 시장·방식별 실험 묶음을 앱이 만들고, 끝나면 다시 만든다.
-# (시장, 방식) → (하루 AI 비용 상한 달러, 플랜마다 쓰는 가상 돈). 모두 합쳐 하루 1달러 안팎
+# (시장, 방식) → (하루 AI 비용 상한 달러, 플랜마다 쓰는 가상 돈). 모두 합쳐 하루 AUTO_DAY_USD(3달러)
 # 가상 돈은 넉넉히 준다: 값이 비싼 종목도 플랜대로 살 수 있어야 '플랜'을 시험할 수 있다(돈이 모자라 못 사는 것은 시험이 아니다)
-AUTO_SET = {("kr", "day"): (0.35, 10_000_000), ("us", "day"): (0.35, 10_000), ("kr", "swing"): (0.15, 10_000_000), ("us", "swing"): (0.15, 10_000)}
+AUTO_DAY_USD = 3.0     # 모의 자동 테스트 전체의 하루 AI 비용 목표(달러). 단타 35%씩, 스윙 15%씩 나눈다
+AUTO_SET = {("kr", "day"): (round(AUTO_DAY_USD * .35, 2), 10_000_000), ("us", "day"): (round(AUTO_DAY_USD * .35, 2), 10_000),
+            ("kr", "swing"): (round(AUTO_DAY_USD * .15, 2), 10_000_000), ("us", "swing"): (round(AUTO_DAY_USD * .15, 2), 10_000)}
 AUTO_DAYS = 90
 
 
@@ -2042,6 +2044,7 @@ class AutoTrade:
                 model, patch, _ = self.fit_cost(b["budget"], b["mkt"], b["style"], "paper", p0, "auto", AUTO_SET.get((b["mkt"], b["style"]), (PAPER_DAY_USD,))[0])
             except Exception as e:
                 self.rt.db.log("system", "error", f"실험 추천 주기 맞추기 실패: {type(e).__name__}: {e}", self._now())
+            patch["lab_day_usd"] = AUTO_SET.get((b["mkt"], b["style"]), (PAPER_DAY_USD,))[0]
             for r in rs:
                 self.rt.db.x("UPDATE at_runs SET params=?, model=? WHERE id=?", (json.dumps(dict(r["params"], **patch), ensure_ascii=False), model, r["id"]))
             self.log(b["id"], "control", f"추천을 더 자주 받게 바꿨어요 · 정밀 추천 하루 {patch.get('cycles_per_day', b['params']['cycles_per_day'])}번 + {patch['quick_gap_min']}분마다 빠른 재추천(하루 비용 상한은 그대로)", {"patch": patch})
@@ -2094,6 +2097,7 @@ class AutoTrade:
             if want and r["budget"] < want:                            # 가상 돈이 모자라 못 사는 일이 없게 늘린다
                 self.rt.db.x("UPDATE at_runs SET budget=? WHERE id=?", (want, r["id"]))
                 self.log(r["id"], "control", f"가상 돈을 {r['budget']:,.0f} → {want:,.0f}로 늘렸어요(돈이 모자라 못 사는 일을 없애려고)", {"budget": {"from": r["budget"], "to": want}})
+        self._lab_budget()
         for lab in {r["lab_id"] for r in self._runs("WHERE lab_id IS NOT NULL AND status IN ('running','paused')")}:
             have = {r["variant"]: r for r in self._runs("WHERE lab_id=?", (lab,))}
             b = have.get("base")
@@ -2117,6 +2121,31 @@ class AutoTrade:
                 self.lab_create({"mkt": mkt, "style": style, "budget": budget, "days": AUTO_DAYS, "model": "auto", "day_usd": usd})
             except ValueError as e:
                 self.rt.db.log("system", "error", f"모의 자동 테스트({mkt} {style}) 시작 실패: {e}", self._now())
+
+    def _lab_budget(self):
+        """하루 AI 비용 목표가 바뀌면 돌고 있는 실험의 엔진·정밀 추천 횟수·빠른 재추천 간격을 다시 맞춘다(묶음마다 한 번)."""
+        labs = {}
+        for r in self._runs("WHERE lab_id IS NOT NULL AND status IN ('running','paused')"):
+            labs.setdefault(r["lab_id"], []).append(r)
+        for lab, rs in labs.items():
+            b = next((x for x in rs if x["variant"] == "base"), rs[0])
+            want = AUTO_SET.get((b["mkt"], b["style"]), (PAPER_DAY_USD,))[0]
+            if "quick_gap_min" not in b["params"] or b["params"].get("lab_day_usd") == want:
+                continue                              # 예전 판(빠른 재추천 전)은 _upgrade가 맞춘다
+            was = b["params"].get("lab_day_usd")
+            p0 = dict(b["params"], quick_gap_min=QUICK_GAP[b["style"]], cycles_per_day=make_plan(b["budget"], b["mkt"], b["style"], 30, "paper")["cycles_per_day"])
+            try:
+                model, patch, c = self.fit_cost(b["budget"], b["mkt"], b["style"], "paper", p0, "auto", want)
+            except Exception as e:
+                self.rt.db.log("system", "error", f"실험 비용 다시 맞추기 실패: {type(e).__name__}: {e}", self._now())
+                continue
+            patch["lab_day_usd"] = want
+            for r in rs:
+                self.rt.db.x("UPDATE at_runs SET params=?, model=? WHERE id=?", (json.dumps(dict(r["params"], **patch), ensure_ascii=False), model, r["id"]))
+            from .ai import MODELS
+            self.log(b["id"], "control", f"하루 AI 비용 목표를 {'$' + format(was, 'g') if was else '예전 값'} → ${want:g}로 바꿔 다시 맞췄어요 · 정밀 추천 {MODELS[model][0].split(' · ')[0]} "
+                                         f"하루 {patch['cycles_per_day']}번{'' if patch.get('web_search') else '(뉴스 검색 없이)'} + {patch.get('quick_gap_min')}분마다 빠른 재추천",
+                     {"patch": patch, "model": model, "day_usd": want})
 
     def advice(self):
         """지금까지의 모의 결과에서 실전 후보를 뽑는다. (시장, 방식, 플랜)별로 모든 실험의 거래를 합쳐,
@@ -2187,6 +2216,7 @@ class AutoTrade:
             label, _, patch = VARIANTS[k]
             p = apply_variant(copy.deepcopy(pv["params"]), k)
             p["warmup_trades"] = 0                      # 실험은 처음부터 정해진 크기로 산다(검증 단계는 실전을 위한 것)
+            p["lab_day_usd"] = float(d.get("day_usd") or PAPER_DAY_USD)   # 이 값으로 비용을 맞췄다(목표가 바뀌면 _lab_budget이 다시 맞춘다)
             name = f"실험 · {label}"
             rid = self.rt.db.x(
                 "INSERT INTO at_runs(created_at,name,mode,mkt,style,model,budget,start_date,end_date,status,params,lab_id,variant) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",

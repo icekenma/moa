@@ -1268,6 +1268,12 @@ def create_app(rt, updater=None):
     def auto_labs():
         return jsonify(rt.autotrade.labs())
 
+    @app.post("/api/auto/lab/auto")
+    def auto_lab_switch():
+        with rt._lock:
+            rt.autotrade.auto_set(bool(body().get("on")))
+            return jsonify(rt.autotrade.labs())
+
     @app.post("/api/auto/lab")
     def auto_lab_create():
         with rt._lock:

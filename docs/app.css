@@ -2391,3 +2391,15 @@ html:not(.dark-theme) .bot-run.lab .bot-mode{color:#4A3FC0}
 .lab-nm i.few{background:color-mix(in srgb,var(--ink) 8%,transparent);color:var(--ink3)}
 .lab-tr:nth-child(2) .lab-nm i.few{background:color-mix(in srgb,var(--ink) 8%,transparent);color:var(--ink3)}
 .lab-th>span:first-child{text-align:left;align-items:flex-start}
+
+/* ---------- v4.52 모의 자동 테스트 ---------- */
+.at-auto{display:flex;flex-direction:column;gap:10px}
+.at-auto.on{box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--sec) 55%,transparent)}
+.at-auto .sc-kpi b small{font-size:9.5px;font-weight:700;color:var(--ink3)}
+.at-adv{display:flex;flex-direction:column;gap:6px}
+.at-adv>div{display:flex;flex-direction:column;gap:4px;padding:9px 11px;border-radius:11px;background:var(--bg);font-size:11.5px;line-height:1.5;color:var(--ink2)}
+.at-adv>div.ok{box-shadow:inset 0 0 0 1px color-mix(in srgb,#1FA971 60%,transparent)}
+.at-adv-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.at-adv-top b{font-size:12.5px;font-weight:800;color:var(--ink)}
+.at-adv .btn{align-self:flex-start;margin-top:3px}
+html.dark-theme .at-adv>div{background:rgba(255,255,255,.06)}

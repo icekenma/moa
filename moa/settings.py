@@ -55,6 +55,7 @@ DEFAULTS = {
     "inbox_auto": {"card": True, "income": False, "outflow": False},
     # 백업: 하루 한 번 자동(노트북이 켜져 있을 때), 자동 백업 보관 개수, 함께 복사해 둘 다른 폴더(클라우드·USB 등)
     "backup": {"auto": True, "keep": 14, "extra_dir": ""},
+    "autolab": {"on": False},          # 모의 자동 테스트(국내·미국, 단타·스윙을 앱이 알아서 돌린다)
     # 내 계좌 보기(조회 전용): 주문은 절대 나가지 않는다
     "kiwoom_view": {"appkey": "", "secretkey": "", "mock": False},            # GitHub에 새 버전이 올라오면 노트북 서버가 알아서 받아 다시 시작
 }

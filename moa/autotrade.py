@@ -128,10 +128,15 @@ VARIANTS = {
     "focus": ("한 종목 집중", "1종목에 절반씩", {"max_positions": 1, "per_trade_pct": 50}),
     "spread": ("여러 종목 분산", "5종목에 20%씩", {"max_positions": 5, "per_trade_pct": 20}),
 }
+READY_DAYS = 10        # 그리고 그 거래가 이만큼의 거래일에 걸쳐 있어야 한다(하루 이틀의 운을 거른다)
 READY_N = 30           # 실전을 권하려면 모의에서 끝난 거래가 이만큼은 있어야 한다
 MONTH_DAYS = 21        # 한 달 거래일
 COST_PCT = 1.0         # 실전: 한 달 AI 비용이 쓸 돈의 이 비율(%)을 넘지 않게
 PAPER_DAY_USD = 0.6    # 모의·실험: 하루 AI 비용 목표(달러)
+# 모의 자동 테스트: 사용자는 켜고 끄기만 한다. 시장·방식별 실험 묶음을 앱이 만들고, 끝나면 다시 만든다.
+# (시장, 방식) → (하루 AI 비용 상한 달러, 플랜마다 쓰는 가상 돈). 모두 합쳐 하루 1달러 안팎
+AUTO_SET = {("kr", "day"): (0.35, 3_000_000), ("us", "day"): (0.35, 3_000), ("kr", "swing"): (0.15, 3_000_000), ("us", "swing"): (0.15, 3_000)}
+AUTO_DAYS = 90
 
 
 def plan_text(run):
@@ -359,13 +364,13 @@ class AutoTrade:
         m = self.rt.ai.meter("pick" if style == "day" else "pickw", model, web)
         return (m["avg_usd"] if m.get("avg_usd") is not None else (m["usd_lo"] + m["usd_hi"]) / 2), m
 
-    def fit_cost(self, budget, mkt, style, mode, p, model):
+    def fit_cost(self, budget, mkt, style, mode, p, model, day_usd=None):
         """AI 비용을 쓸 돈에 맞춘다. 실전은 한 달 비용이 쓸 돈의 1%를, 모의는 하루 0.6달러를 넘지 않게
         모델·하루 횟수·웹 검색을 고른다(model이 'auto'일 때). 직접 고른 모델이면 계산만 해서 알려 준다.
         반환: (모델, 바뀐 플랜 값, 안내)"""
         from .ai import MODELS
         fx = self.rt.ai.fx()
-        cap_month = (budget / (fx if mkt == "kr" else 1.0)) * COST_PCT / 100 if mode == "real" else PAPER_DAY_USD * MONTH_DAYS
+        cap_month = (budget / (fx if mkt == "kr" else 1.0)) * COST_PCT / 100 if mode == "real" else (day_usd or PAPER_DAY_USD) * MONTH_DAYS
         conf = self.rt.ai.conf().get("model") or "claude-sonnet-5-5"
 
         def info(mdl, cycles, web):
@@ -432,8 +437,14 @@ class AutoTrade:
         for k in ("daily_loss_pct", "total_loss_pct"):
             if d.get(k) not in (None, ""):
                 p[k] = _clamp_key(k, d[k])
-        model, patch, cost = self.fit_cost(budget, mkt, style, mode, p, model)
+        model, patch, cost = self.fit_cost(budget, mkt, style, mode, p, model, d.get("day_usd"))
         p.update(patch)
+        var = d.get("variant") if d.get("variant") in VARIANTS else None
+        if var:                                      # 모의 실험에서 검증한 플랜을 그대로 가져온다(실전은 관망에 쉬는 것을 지킨다)
+            for kk, v in VARIANTS[var][2].items():
+                if mode == "real" and kk in ("skip_watch", "watch_mult"):
+                    continue
+                p[kk] = _clamp_key(kk, p[kk] * float(v[1:]) if isinstance(v, str) and v.startswith("*") else v)
         run = {"mkt": mkt, "style": style, "budget": budget, "params": p, "mode": mode}
         _, m = self._per_usd(style, model, p["web_search"])
         warn = None
@@ -442,6 +453,7 @@ class AutoTrade:
                     if mode == "real" else f"AI 비용이 한 달에 약 ${cost['month_usd']:g}예요(모의도 AI 비용은 실제로 나가요).")
         return {"mkt": mkt, "style": style, "budget": budget, "days": days, "model": model, "params": p, "plan": plan_text(run), "mode": mode,
                 "cost": dict(cost, warn=warn), "ready": self.readiness(mkt, style) if mode == "real" else None,
+                "variant": {"key": var, "label": VARIANTS[var][0]} if var else None,
                 "ai_cost": {"per_usd": cost["per_usd"], "day_usd": round(min(cost["per_usd"] * p["cycles_per_day"], p["ai_daily_usd"]), 2),
                             "fx": m.get("fx"), "budget_usd": m.get("budget_usd"), "month_usd": m.get("month_usd")}}
 
@@ -516,6 +528,10 @@ class AutoTrade:
         if not force and time.time() - self._last < 5:
             return
         self._last = time.time()
+        try:
+            self._autopilot()
+        except Exception as e:
+            self.rt.db.log("system", "error", f"모의 자동 테스트 오류: {type(e).__name__}: {e}", self._now())
         for run in self._runs("WHERE status IN ('running','paused','closing')"):
             try:
                 self._manage(run)
@@ -1826,6 +1842,91 @@ class AutoTrade:
             "money": m, "closed": n["n"], "wins": int(n["w"] or 0), "open": len(self._open(run["id"])), "pending": pend,
             "style_label": STYLES[run["style"]]["label"], "lab_id": run.get("lab_id"), "variant": run.get("variant")}
 
+    # ------------------------------------------------------------------ 모의 자동 테스트(켜고 끄기만)
+    def auto_on(self):
+        return bool((self.rt.settings.get("autolab") or {}).get("on"))
+
+    def auto_set(self, on):
+        """켜면 시장·방식별 실험을 앱이 만들어 돌리고, 끄면 새 매수를 멈춘다(들고 있는 종목은 계속 지켜본다)."""
+        on = bool(on)
+        if on:
+            rd = self.ready()
+            if not rd["ai"]:
+                raise ValueError("설정 → AI에서 Claude API 키를 먼저 넣어 주세요")
+            if not rd["data"]:
+                raise ValueError("실시간 순위가 필요해요. 설정 → 계좌에서 키움 계좌를 먼저 연결해 주세요")
+        self.rt.settings.update({"autolab": {"on": on}})
+        for r in self._runs("WHERE lab_id IS NOT NULL AND status IN ('running','paused')"):
+            try:
+                self.control(r["id"], "resume" if on else "pause")
+            except ValueError:
+                pass
+        self._auto_at = 0
+        if on:
+            self._autopilot()
+        return self.auto_state()
+
+    def _autopilot(self):
+        """켜져 있으면, 비어 있는 (시장, 방식) 칸에 실험 묶음을 만든다. 5분에 한 번만 본다."""
+        if not self.auto_on() or time.time() - getattr(self, "_auto_at", 0) < 300:
+            return
+        self._auto_at = time.time()
+        rd = self.ready()
+        if not (rd["ai"] and rd["data"]):
+            return
+        for (mkt, style), (usd, budget) in AUTO_SET.items():
+            if self._runs("WHERE status IN ('running','paused','closing') AND lab_id IS NOT NULL AND mkt=? AND style=?", (mkt, style)):
+                continue
+            try:
+                self.lab_create({"mkt": mkt, "style": style, "budget": budget, "days": AUTO_DAYS, "model": "auto", "day_usd": usd})
+            except ValueError as e:
+                self.rt.db.log("system", "error", f"모의 자동 테스트({mkt} {style}) 시작 실패: {e}", self._now())
+
+    def advice(self):
+        """지금까지의 모의 결과에서 실전 후보를 뽑는다. (시장, 방식, 플랜)별로 모든 실험의 거래를 합쳐,
+        30건 이상이고 AI 비용까지 빼고 플러스인 것 중 가장 나은 플랜."""
+        agg = {}
+        for r in self._runs("WHERE mode='paper' AND lab_id IS NOT NULL"):
+            a = self.rt.db.one("SELECT COUNT(*) n, COALESCE(SUM(pnl),0) pnl, COALESCE(SUM(pnl>0),0) w, COALESCE(SUM(pnl_pct),0) sp FROM at_trades WHERE run_id=? AND status='closed'", (r["id"],))
+            g = agg.setdefault((r["mkt"], r["style"], r["variant"]), {"n": 0, "pnl": 0.0, "w": 0, "sp": 0.0, "usd": 0.0, "budget": r["budget"], "days": set()})
+            g["n"] += a["n"]; g["pnl"] += a["pnl"]; g["w"] += int(a["w"] or 0); g["sp"] += a["sp"]; g["usd"] += self._ai_usd(r["id"])
+            g["days"].update(x["entry_day"] for x in self.rt.db.q("SELECT DISTINCT entry_day FROM at_trades WHERE run_id=?", (r["id"],)))
+        out = []
+        for mkt, style in AUTO_SET:
+            fx = self.rt.ai.fx() if mkt == "kr" else 1.0
+            rows = []
+            for (m, s, v), g in agg.items():
+                if (m, s) != (mkt, style) or not g["n"]:
+                    continue
+                net = g["pnl"] - g["usd"] * fx
+                rows.append({"variant": v, "label": VARIANTS.get(v, (v,))[0], "n": g["n"], "win_rate": round(g["w"] / g["n"] * 100), "avg_pct": round(g["sp"] / g["n"], 2),
+                             "net_pct": round(net / g["budget"] * 100, 2), "days": len(g["days"]), "enough": g["n"] >= READY_N and len(g["days"]) >= READY_DAYS})
+            rows.sort(key=lambda x: (-x["enough"], -x["net_pct"]))
+            n_all = sum(x["n"] for x in rows)
+            best = next((x for x in rows if x["enough"] and x["net_pct"] > 0), None)
+            if best:
+                text = f"'{best['label']}' 플랜이 {best['n']}건({best['days']}거래일)에서 AI 비용까지 빼고 {best['net_pct']:+.2f}%였어요. 실전 후보예요."
+            elif any(x["enough"] for x in rows):
+                text = "충분히 해 본 플랜이 있지만, AI 비용까지 빼면 플러스인 것이 아직 없어요. 실전을 권하지 않아요."
+            else:
+                top = max(rows, key=lambda x: x["n"], default=None)
+                text = f"아직 자료를 모으는 중이에요(가장 많이 한 플랜 {top['n'] if top else 0}/{READY_N}건 · {top['days'] if top else 0}/{READY_DAYS}거래일)."
+            out.append({"mkt": mkt, "style": style, "style_label": STYLES[style]["label"], "trades": n_all, "best": best, "text": text, "top": rows[:3]})
+        return out
+
+    def auto_state(self):
+        day_cap = sum(v[0] for v in AUTO_SET.values())
+        usd_today = usd_all = 0.0
+        today = {m: AP.mkt_date(m) for m in ("kr", "us")}
+        for r in self.rt.db.q("SELECT l.day, l.data, r.mkt FROM at_log l JOIN at_runs r ON r.id=l.run_id WHERE r.lab_id IS NOT NULL AND l.kind='cycle' AND l.data IS NOT NULL"):
+            u = float((json.loads(r["data"]) or {}).get("usd") or 0)
+            usd_all += u
+            if r["day"] == today[r["mkt"]]:
+                usd_today += u
+        fx = self.rt.ai.fx()
+        return {"on": self.auto_on(), "day_cap_usd": round(day_cap, 2), "month_cap_cur": round(day_cap * MONTH_DAYS * fx), "usd_today": round(usd_today, 2), "usd_all": round(usd_all, 2),
+                "cur_all": round(usd_all * fx), "sets": [{"mkt": m, "style": s, "style_label": STYLES[s]["label"]} for m, s in AUTO_SET], "advice": self.advice()}
+
     # ------------------------------------------------------------------ 모의 실험실
     def lab_create(self, d):
         """같은 시장·방식에 플랜만 다른 모의 자동매매 여러 개를 한꺼번에 시작한다. 추천은 한 번만 받아 모두에게 나눈다."""
@@ -1841,8 +1942,8 @@ class AutoTrade:
             keys.insert(0, "base")
         if len(keys) < 2:
             raise ValueError("비교하려면 실험을 두 개 이상 골라 주세요")
-        if self._runs("WHERE status IN ('running','paused','closing') AND lab_id IS NOT NULL AND mkt=?", (pv["mkt"],)):
-            raise ValueError(f"{'국내' if pv['mkt'] == 'kr' else '미국'} 실험이 이미 돌고 있어요. 먼저 끝내 주세요")
+        if self._runs("WHERE status IN ('running','paused','closing') AND lab_id IS NOT NULL AND mkt=? AND style=?", (pv["mkt"], pv["style"])):
+            raise ValueError(f"{'국내' if pv['mkt'] == 'kr' else '미국'} {STYLES[pv['style']]['label']} 실험이 이미 돌고 있어요. 먼저 끝내 주세요")
         today = self._local(pv["mkt"]).date()
         end = today + timedelta(days=pv["days"] - 1)
         lab = None
@@ -1910,7 +2011,7 @@ class AutoTrade:
                 except Exception:
                     L["now"] = None
             labs.append(L)
-        return {"labs": labs, "presets": [{"key": k, "label": v[0], "desc": v[1]} for k, v in VARIANTS.items()]}
+        return {"labs": labs, "presets": [{"key": k, "label": v[0], "desc": v[1]} for k, v in VARIANTS.items()], "auto": self.auto_state()}
 
     def brief(self):
         """홈 화면용: 돌고 있는 자동매매의 지금 상태를 가볍게(시세를 새로 묻지 않는다)."""

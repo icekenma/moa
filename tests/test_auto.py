@@ -1172,3 +1172,48 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     # 한꺼번에 멈추고 끝낸다
     assert at.lab_control(lab, "pause")["labs"][0]["status"] == "paused"
     assert at.lab_control(lab, "end")["labs"][0]["status"] in ("ended", "paused", "running")
+
+
+def test_autopilot_only_needs_on_off_and_feeds_a_real_plan(env, monkeypatch):
+    """모의 자동 테스트: 켜면 시장·방식별 실험을 앱이 만들고, 끄면 멈춘다. 결과가 쌓이면 실전 후보 플랜을 알려 준다."""
+    from moa.autotrade import AUTO_SET
+    at = env.at
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: ({"claude-sonnet-5-5": 0.2, "claude-haiku-4-5": 0.1}.get(model, 0.8) * (1 if web else 0.6), {"fx": 1400.0}))
+    S = at.auto_state()
+    assert S["on"] is False and S["day_cap_usd"] == 1.0 and len(S["advice"]) == 4 and at.labs()["labs"] == []
+    at.tick(force=True)
+    assert at.labs()["labs"] == []                                       # 꺼져 있으면 아무것도 만들지 않는다
+    S = at.auto_set(True)
+    L = at.labs()["labs"]
+    assert S["on"] is True and sorted((x["mkt"], x["style"]) for x in L) == sorted(AUTO_SET) and all(len(x["runs"]) == 9 for x in L)
+    kd = at._run(next(x["id"] for x in L if (x["mkt"], x["style"]) == ("kr", "day")))
+    ks = at._run(next(x["id"] for x in L if (x["mkt"], x["style"]) == ("kr", "swing")))
+    # 비용은 앱이 정한다: 단타 하루 $0.35 → Haiku 3번, 스윙 $0.15 → Haiku 1번
+    assert (kd["model"], kd["params"]["cycles_per_day"]) == ("claude-haiku-4-5", 3) and (ks["model"], ks["params"]["cycles_per_day"]) == ("claude-haiku-4-5", 1)
+    at._auto_at = 0
+    at.tick(force=True)
+    assert len(at.labs()["labs"]) == 4                                   # 이미 있으면 또 만들지 않는다
+    # 끄면 새 매수를 멈추고, 켜면 이어 간다
+    assert at.auto_set(False)["on"] is False and all(x["status"] == "paused" for x in at.labs()["labs"])
+    assert at.auto_set(True)["on"] is True and all(x["status"] == "running" for x in at.labs()["labs"])
+    # 한 묶음이 끝나면 다시 만든다
+    at.lab_control(kd["id"], "end")
+    at._auto_at = 0
+    at.tick(force=True)
+    assert len([x for x in at.labs()["labs"] if (x["mkt"], x["style"]) == ("kr", "day") and x["status"] == "running"]) == 1
+    # 실전 후보: (시장, 방식, 플랜)별로 모든 실험의 거래를 합쳐 30건 이상 + AI 비용 빼고 플러스
+    A = {(a["mkt"], a["style"]): a for a in at.advice()}
+    assert A[("kr", "day")]["best"] is None and "모으는 중" in A[("kr", "day")]["text"]
+    rid = at.rt.db.one("SELECT id FROM at_runs WHERE lab_id IS NOT NULL AND mkt='kr' AND style='day' AND variant='loose' AND status='running'")["id"]
+    _seed(env, rid, 40)
+    at.rt.db.x("UPDATE at_trades SET pnl=ABS(pnl)+100, pnl_pct=ABS(pnl_pct)+0.1, entry_day='2026-11-18' WHERE run_id=?", (rid,))
+    one = {(a["mkt"], a["style"]): a for a in at.advice()}[("kr", "day")]
+    assert one["best"] is None and "1/10거래일" in one["text"]            # 하루에 몰린 40건은 후보로 치지 않는다
+    at.rt.db.x("UPDATE at_trades SET entry_day=printf('2026-11-%02d', 2 + id % 12) WHERE run_id=?", (rid,))
+    b = {(a["mkt"], a["style"]): a for a in at.advice()}[("kr", "day")]["best"]
+    assert b["variant"] == "loose" and b["n"] == 40 and b["net_pct"] > 0 and b["win_rate"] == 100
+    # 그 플랜으로 실전 미리보기: 기준은 가져오되, 관망에 쉬는 것은 실전 기본을 지킨다
+    pv = at.preview({"budget": 5_000_000, "mkt": "kr", "style": "day", "days": 30, "mode": "real", "model": "auto", "variant": "loose"})
+    assert pv["variant"] == {"key": "loose", "label": "느슨한 기준"} and (pv["params"]["min_win_prob"], pv["params"]["min_rr"], pv["params"]["skip_watch"]) == (50, 1.2, True)
+    pv = at.preview({"budget": 5_000_000, "mkt": "kr", "style": "day", "days": 30, "mode": "real", "model": "auto", "variant": "watch_full"})
+    assert pv["params"]["skip_watch"] is True and pv["ready"]["ok"] is True

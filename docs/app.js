@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1200";
+const UI_VERSION = "261119.1206";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1692,7 +1692,8 @@ pages.invest = {
       ${this.atReadyHtml(O.ready)}
       ${live.length ? `<div class="sec-title">돌고 있는 자동매매</div>${live.map((r) => this.atCard(r)).join("")}` : `<section class="card"><div class="empty">아직 돌고 있는 자동매매가 없어요.<br>모의로 먼저 돌려 기록을 쌓아 보는 걸 권해요.</div></section>`}
       <button type="button" class="btn dark wide" id="atNewBtn">새 자동매매 만들기</button>
-      <div class="sec-title">모의 실험실</div>
+      <div class="sec-title">모의 자동 테스트</div>
+      ${this.atAutoHtml(LB)}
       ${this.atLabHtml(LB)}
       ${done.length ? `<div class="sec-title">끝난 자동매매</div>${done.map((r) => this.atCard(r)).join("")}` : ""}
       <div class="tiny" style="padding:0 3px">자동매매는 수익을 보장하지 않아요. 손실 한도에 닿으면 스스로 멈추지만, 급변할 때는 한도보다 더 잃을 수 있어요.</div>`;
@@ -1700,6 +1701,18 @@ pages.invest = {
     box.onclick = async (e) => {
       const b = e.target.closest("[data-run]"), lc = e.target.closest("[data-labctl]");
       if (e.target.closest("#labNew")) return this.atLabNew();
+      const sw = e.target.closest("#atAutoSw"), rv = e.target.closest("[data-real]");
+      if (sw) {
+        const on = sw.getAttribute("aria-checked") !== "true";
+        try { await run(() => api("POST", "/api/auto/lab/auto", { on }), on ? "모의 자동 테스트를 켰어요" : "모의 자동 테스트를 껐어요"); } catch (err) { return; }
+        return this.auto(box);
+      }
+      if (rv) {      // 모의에서 검증한 플랜으로 실전 만들기 화면을 연다(쓸 돈과 '실전' 확인은 직접 넣는다)
+        const [mkt, style, variant] = rv.dataset.real.split(":");
+        Object.assign(A.form, { mode: "real", mkt, style, variant, budget: "", model: "auto", confirm: "" });
+        A.view = "new"; A.pv = null; box.onclick = null;
+        return this.auto(box);
+      }
       if (lc) {
         const [id, act] = lc.dataset.labctl.split(":");
         if (act === "end" && !confirmTap(lc, "모두 끝내요. 한 번 더 누르기")) return;
@@ -1709,13 +1722,30 @@ pages.invest = {
       if (b) { A.view = Number(b.dataset.run); A.tab = "now"; A.d = null; box.onclick = null; this.auto(box); }
     };
   },
+  // 모의 자동 테스트: 켜고 끄기만 한다. 무엇을 얼마나 시험할지는 앱이 정한다
+  atAutoHtml(LB) {
+    const S = (LB || {}).auto;
+    if (!S) return "";
+    return `<section class="card at-auto ${S.on ? "on" : ""}">
+        <div class="card-head"><div><h2>모의 자동 테스트</h2>
+          <div class="tiny">켜 두면 앱이 국내·미국, 단타·스윙에 플랜 9가지씩을 가상 돈으로 계속 시험해요. 설정할 것은 없어요.</div></div>
+          <button type="button" class="switch" role="switch" id="atAutoSw" aria-checked="${!!S.on}" aria-label="모의 자동 테스트"><span></span></button></div>
+        <div class="sc-kpi"><div><span>AI 비용 상한</span><b>하루 $${S.day_cap_usd}<small> · 한 달 약 ${won(S.month_cap_cur)}원</small></b></div>
+          <div><span>오늘 쓴 비용</span><b>$${S.usd_today.toFixed(2)}</b></div><div><span>지금까지</span><b>$${S.usd_all.toFixed(2)}<small> · ${won(S.cur_all)}원</small></b></div></div>
+        <div class="at-adv">${S.advice.map((a) => `<div class="${a.best ? "ok" : ""}">
+            <div class="at-adv-top"><b>${a.mkt === "kr" ? "국내" : "미국"} ${esc(a.style_label)}</b><span class="tiny">끝난 거래 ${a.trades}건</span></div>
+            <span>${esc(a.text)}</span>
+            ${a.best ? `<button type="button" class="btn sm" data-real="${a.mkt}:${a.style}:${esc(a.best.variant)}">이 플랜으로 실전 만들기</button>` : ""}</div>`).join("")}</div>
+        <div class="tiny">모의도 AI 비용은 실제로 나가요. 장이 나쁜 날은 AI를 부르지 않고, 추천 한 번을 플랜 9개가 함께 써서 비용을 아껴요. 실전 후보는 한 플랜에 30건(10거래일 이상)이 쌓이고 AI 비용을 빼고도 플러스일 때만 알려요. 모의 결과가 실전 수익을 보장하지는 않아요.</div>
+      </section>`;
+  },
   // 모의 실험실: 같은 AI 추천을 플랜 여러 개에 동시에 흘려, AI 비용까지 뺀 수익률로 줄 세운다
   atLabHtml(LB) {
     const labs = (LB || {}).labs || [], act = labs.filter((L) => L.status !== "ended"), old = labs.filter((L) => L.status === "ended").slice(0, 1);
     const one = (L) => {
       const kr = L.mkt === "kr", N = L.now;
       return `<section class="card lab ${L.status}">
-        <div class="card-head"><div><h2>${kr ? "국내" : "미국"} ${esc(L.style_label)} · 플랜 ${L.runs.length}개</h2>
+        <div class="card-head"><div><h2>${kr ? "국내" : "미국"} ${esc(L.style_label)} 실험 · 플랜 ${L.runs.length}개</h2>
           <div class="tiny">${esc(L.start_date.slice(5))}~${esc(L.end_date.slice(5))} · 추천 ${L.cycles}번 · 끝난 거래 ${L.closed}건 · AI 비용 $${L.usd.toFixed(2)}(모두 합쳐)</div></div>
           <span class="tag ${{ running: "y", paused: "g", ended: "" }[L.status]}">${{ running: "가동 중", paused: "멈춤", ended: "끝남" }[L.status]}</span></div>
         ${N ? (N.busy ? this.atScanHtml(N, true) : `<div class="lab-now"><b>${esc(N.next.label)}</b><span>${this.atNextLine(N)}</span></div>`) : ""}
@@ -1734,9 +1764,6 @@ pages.invest = {
       </section>`;
     };
     return `${act.map(one).join("")}
-      ${act.length ? "" : `<section class="card lab-cta"><div><b>플랜 여러 개를 한꺼번에 시험해요</b>
-        <span>느슨한 기준·엄격한 기준·관망 무시·짧게 끊기·분산 같은 플랜 ${((LB || {}).presets || []).length}가지를 같은 AI 추천으로 동시에 돌려요. 추천은 한 번만 받아 비용이 늘지 않아요.</span></div>
-        <button type="button" class="btn dark" id="labNew">실험 시작</button></section>`}
       ${old.length ? `<div class="sec-title">지난 실험</div>${old.map(one).join("")}` : ""}`;
   },
   atLabNew() {
@@ -1837,7 +1864,7 @@ pages.invest = {
   },
   atBody() {
     const F = this.at.form;
-    return { mode: F.mode, mkt: F.mkt, style: F.style, budget: num(F.budget), days: Number(F.days) || 0, model: F.model, daily_loss_pct: F.daily, total_loss_pct: F.total, confirm: F.confirm };
+    return { mode: F.mode, mkt: F.mkt, style: F.style, variant: F.mode === "real" ? F.variant || "" : "", budget: num(F.budget), days: Number(F.days) || 0, model: F.model, daily_loss_pct: F.daily, total_loss_pct: F.total, confirm: F.confirm };
   },
   async atPlan() {
     const A = this.at, F = A.form, el = $("#atPlan");
@@ -1856,6 +1883,7 @@ pages.invest = {
           <label class="field">하루 손실 한도(%)<input id="atDaily" class="r" inputmode="decimal" value="${p.daily_loss_pct}"></label>
           <label class="field">전체 손실 한도(%)<input id="atTotal" class="r" inputmode="decimal" value="${p.total_loss_pct}"></label>
         </div>
+        ${pv.variant ? `<div class="notice">모의 실험에서 검증한 <b>${esc(pv.variant.label)}</b> 플랜의 기준을 그대로 가져왔어요(실전은 관망에 쉬는 것을 지켜요). <button type="button" class="chip" id="atVarOff">기본 플랜으로</button></div>` : ""}
         ${this.atCostHtml(pv)}
         <div class="tiny">AI 추천 비용: 한 번에 약 ${won(c.per_usd * (c.fx || 1400))}원, 하루 최대 약 ${won(c.day_usd * (c.fx || 1400))}원. 이번 달 AI 예산 $${c.budget_usd ?? "-"} 가운데 $${Number(c.month_usd || 0).toFixed(2)} 사용.</div>
       </section>
@@ -1863,6 +1891,7 @@ pages.invest = {
       <button type="button" class="btn ${real ? "red" : "dark"} wide" id="atStart" ${ok ? "" : "disabled"}>${real ? "실전으로 시작" : "모의로 시작"}</button>
       <div class="tiny" style="padding:0 3px">수익을 보장하지 않아요. 투자 판단과 책임은 본인에게 있어요.</div>`;
     const lim = () => { F.daily = $("#atDaily").value; F.total = $("#atTotal").value; };
+    if ($("#atVarOff")) $("#atVarOff").onclick = () => { F.variant = ""; this.atPlan(); };
     $("#atDaily").onchange = () => { lim(); this.atPlan(); };
     $("#atTotal").onchange = () => { lim(); this.atPlan(); };
     if (real) $("#atConfirm").oninput = (e) => { F.confirm = e.target.value.trim(); };

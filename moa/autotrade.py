@@ -200,6 +200,7 @@ class AutoTrade:
         AP._col(db, "at_runs", (("last_review_day", "TEXT"),))
         self._last = 0.0
         self._busy = {}       # run_id → 추천을 받는 중인 스레드
+        self._prog = {}       # run_id → 추천을 받는 동안의 진행 상태(화면에 단계별로 보여 준다)
         self._day_note = {}   # (run_id, 날짜, 사유) → 같은 안내를 하루 한 번만 남기려고
         self._mkt = {}        # run_id → 시장(기록에 그 시장의 날짜를 붙이려고)
 
@@ -711,7 +712,8 @@ class AutoTrade:
         k, now = self._kst(mkt, local_dt), AP.kst_now().replace(tzinfo=None)
         days = (k.date() - now.date()).days
         day = "오늘" if days == 0 else "내일" if days == 1 else f"{k.month}/{k.day}({self.WD[k.weekday()]})"
-        out = {"at": k.isoformat(timespec="minutes"), "text": f"{day} {k:%H:%M}", "in_min": max(0, round((k - now).total_seconds() / 60))}
+        out = {"at": k.isoformat(timespec="minutes"), "text": f"{day} {k:%H:%M}", "in_min": max(0, round((k - now).total_seconds() / 60)),
+               "in_sec": max(0, round((k - now).total_seconds()))}
         if mkt == "us":
             out["local"] = f"뉴욕 {local_dt:%H:%M}"
         return out
@@ -757,7 +759,8 @@ class AutoTrade:
             at = loc + timedelta(minutes=math.ceil(max(0, (run["last_cycle"] or 0) + p["cycle_gap_min"] * 60 - time.time()) / 60))
             if at.strftime("%H:%M") > self._entry(run, today)[1]:
                 return nxt("오늘은 매수 시간이 끝나기 전에 다음 추천 차례가 오지 않아요", self._next_day(mkt, today))
-            return {"kind": "at", "label": f"추천 간격({p['cycle_gap_min']}분)을 기다리는 중이에요", **self._when(mkt, at)}
+            left = max(0, round((run["last_cycle"] or 0) + p["cycle_gap_min"] * 60 - time.time()))
+            return {"kind": "at", "label": f"추천 간격({p['cycle_gap_min']}분)을 기다리는 중이에요", **self._when(mkt, at), "in_sec": left, "span_sec": int(p["cycle_gap_min"] * 60)}
         if code in ("full", "cash"):
             return {"kind": "slot", "label": ("보유 종목 수가 꽉 찼어요" if code == "full" else "남은 현금이 없어요") + ". 들고 있는 종목이 팔려 자리가 나면 다시 추천을 받아요"}
         return {"kind": "blocked", "label": why + (". 설정 → AI에서 확인해 주세요" if code in ("nokey", "budget") else "")}
@@ -827,7 +830,7 @@ class AutoTrade:
             steps.append({"hm": f"{k:%H:%M}", "local": t if mkt == "us" else None, "name": name, "sub": sub, "done": show == today and hm >= t})
         eng = round(time.time() - self._last) if self._last else None
         return {
-            "phase": phase, "busy": busy, "next": self._next(run, loc, busy),
+            "phase": phase, "busy": busy, "scan": self.scan(rid) if busy else None, "next": self._next(run, loc, busy),
             "clock": {"kst": f"{AP.kst_now():%H:%M}", "local": f"{loc:%H:%M}" if mkt == "us" else None, "left_min": ss.get("left_min") or 0},
             "steps": {"day": show.isoformat(), "today": show == today, "label": "오늘" if show == today else f"{show.month}/{show.day}({self.WD[show.weekday()]})", "rows": steps,
                       "note": (AP.kr_note(show).replace("오늘은", "오늘은" if show == today else "이날은") if mkt == "kr" else "")},
@@ -853,22 +856,66 @@ class AutoTrade:
                 self._note_once(run, why)
             return
         self.rt.db.x("UPDATE at_runs SET last_cycle=? WHERE id=?", (time.time(), run["id"]))
+        self._step(run["id"], 0, "실시간 순위·분봉·호가를 모으는 중", new=True)
         th = threading.Thread(target=self._cycle, args=(run["id"],), name=f"moa-auto-{run['id']}", daemon=True)
         self._busy[run["id"]] = th
         th.start()
 
+    SCAN = ("시장 자료 모으기", "AI 분석", "추천 정리", "매수 판단")
+
+    def _step(self, rid, step=None, msg=None, new=False, **add):
+        """추천을 받는 동안의 진행 상태를 적어 둔다. 단계는 뒤로 가지 않는다."""
+        now = time.time()
+        if new or rid not in self._prog:
+            self._prog[rid] = {"start": now, "step": 0, "step_at": now, "msg": "", "search": 0, "sources": 0, "chars": 0, "src": "", "picks": None}
+        P = self._prog[rid]
+        if step is not None and step > P["step"]:
+            P["step"], P["step_at"] = step, now
+        if msg:
+            P["msg"] = msg
+        for k, v in add.items():
+            P[k] = P[k] + v if k in ("search", "sources", "chars") else v
+        P["at"] = now
+        return P
+
+    def scan(self, rid):
+        """화면용 진행 상태. 추천을 받는 중이 아니면 None."""
+        th, P = self._busy.get(rid), self._prog.get(rid)
+        if not (th and th.is_alive()) or not P:
+            return None
+        now = time.time()
+        return {"step": P["step"], "steps": list(self.SCAN), "msg": P["msg"], "elapsed": round(now - P["start"]), "step_sec": round(now - P["step_at"]),
+                "search": P["search"], "sources": P["sources"], "chars": P["chars"], "src": P["src"], "picks": P["picks"]}
+
     def _ask_ai(self, run):
-        """AI 추천을 끝까지 받아 결과만 돌려준다(스트리밍을 서버에서 소비)."""
+        """AI 추천을 끝까지 받아 결과만 돌려준다(스트리밍을 서버에서 소비). 받는 동안 어디까지 왔는지 적어 둔다."""
         res, err, done = None, None, {}
+        rid = run["id"]
         d = {"mkt": run["mkt"], "horizon": run["style"], "model": run["model"], "web_search": bool(run["params"].get("web_search", True))}
         for ev in self.rt.ai.stream("pick", d):
             t = ev.get("t")
             if t == "picks":
                 res = ev
+                self._step(rid, 3, f"추천 {len(ev.get('picks') or [])}종목을 플랜 기준으로 거르는 중", picks=len(ev.get("picks") or []))
             elif t == "error":
                 err = ev.get("msg")
             elif t == "done":
                 done = ev
+            elif t == "status":
+                m = str(ev.get("msg") or "")
+                if "웹에서" in m:
+                    self._step(rid, 1, "뉴스·공시를 찾아보는 중", search=1)
+                elif "보내는 중" in m:
+                    self._step(rid, 1, "AI가 자료를 읽고 있어요")
+                else:
+                    self._step(rid, 1, m[:60])
+            elif t == "source":
+                self._step(rid, 1, "찾은 자료를 읽는 중", sources=1, src=str(ev.get("title") or ev.get("url") or "")[:48])
+            elif t == "text":
+                n = len(ev.get("text") or "")
+                P = self._step(rid, None, None, chars=n)
+                if P["chars"] >= 150:
+                    self._step(rid, 2, "AI가 추천 종목과 근거를 쓰는 중")
         return res, err, done
 
     def _cycle(self, rid):
@@ -886,6 +933,8 @@ class AutoTrade:
                 self.log(rid, "cycle", f"추천 처리 중 오류: {type(e).__name__}: {e}")
             except Exception:
                 pass
+        finally:
+            self._prog.pop(rid, None)
 
     def _enter(self, run, res, done=None):
         """추천 결과를 플랜 조건으로 걸러 매수한다. 판단은 모두 기록한다."""
@@ -1513,7 +1562,7 @@ class AutoTrade:
         for run in self._runs("WHERE status IN ('running','paused','closing')"):
             try:
                 n = self.now(run)
-                out.append(dict(self._summary(run), now={k: n[k] for k in ("phase", "busy", "next", "today", "size", "period", "engine")}))
+                out.append(dict(self._summary(run), now={k: n[k] for k in ("phase", "busy", "scan", "next", "today", "size", "period", "engine")}))
             except Exception as e:
                 self.rt.db.log("system", "error", f"자동매매 요약 오류: {type(e).__name__}: {e}", self._now())
         return {"runs": out, "ended": self.rt.db.one("SELECT COUNT(*) n FROM at_runs WHERE status='ended'")["n"]}
@@ -1526,7 +1575,7 @@ class AutoTrade:
             x = self._summary(r)
             if r["status"] != "ended":
                 n = self.now(r)
-                x["now"] = {k: n[k] for k in ("phase", "busy", "next", "today", "size", "period", "engine")}
+                x["now"] = {k: n[k] for k in ("phase", "busy", "scan", "next", "today", "size", "period", "engine")}
             runs.append(x)
         return {"ready": self.ready(), "runs": runs,
                 "models": [{"id": k, "label": v[0]} for k, v in MODELS.items()], "default_model": c.get("model") or "claude-sonnet-5-5",

@@ -592,7 +592,7 @@ def test_now_us_shows_korean_time(env, monkeypatch):
     env.open = False
     rid = env.run(mkt="us", budget=3000)
     n = at.now(at._run(rid))
-    assert n["phase"] == "pre" and n["next"] == {"kind": "at", "label": n["next"]["label"], "at": "2026-11-18T23:40", "text": "오늘 23:40", "in_min": 100, "local": "뉴욕 09:40"}
+    assert n["phase"] == "pre" and n["next"] == {"kind": "at", "label": n["next"]["label"], "at": "2026-11-18T23:40", "text": "오늘 23:40", "in_min": 100, "in_sec": 6000, "local": "뉴욕 09:40"}
     rows = n["steps"]["rows"]
     assert (rows[0]["hm"], rows[0]["local"], rows[0]["name"]) == ("23:30", "09:30", "장 시작") and (rows[-1]["hm"], rows[-1]["local"]) == ("06:00", "16:00")
     assert n["clock"] == {"kst": "22:00", "local": "08:00", "left_min": 0} and n["today"]["limit"] == 60.0
@@ -867,3 +867,53 @@ def test_late_open_days_shift_the_schedule(env, monkeypatch):
     env.day, env.hm = "2026-11-20", "09:30"
     n = at.now(at._run(rid))
     assert {r["name"]: r["hm"] for r in n["steps"]["rows"]}["매수 시작"] == "09:10" and n["steps"]["note"] == ""
+
+
+def test_scan_progress_while_asking_ai(env, monkeypatch):
+    """AI 추천을 받는 동안 어디까지 왔는지(자료 모으기 → AI 분석 → 추천 정리 → 매수 판단)를 화면에 줄 수 있다."""
+    import threading
+    at, rid = env.at, env.run()
+    gate, reached = [threading.Event() for _ in range(4)], [threading.Event() for _ in range(4)]
+
+    def stream(kind, d):
+        def stop(i):
+            reached[i].set()
+            assert gate[i].wait(5)
+        stop(0)                                                  # 자료를 모으는 동안(아직 아무 이벤트도 없음)
+        yield {"t": "status", "msg": "자료를 정리해서 Claude에게 보내는 중"}
+        yield {"t": "status", "msg": "웹에서 찾는 중"}
+        yield {"t": "source", "url": "https://example.com/a", "title": "반도체 수출 동향"}
+        yield {"t": "text", "text": "확인해 볼게요."}
+        stop(1)
+        yield {"t": "text", "text": "가" * 200}
+        stop(2)
+        yield {"t": "picks", "id": 9, "stance": "보통", "view": "v", "picks": [env.pick(), env.pick("000660", win_prob=40)]}
+        stop(3)
+        yield {"t": "done", "usd": 0.05}
+    monkeypatch.setattr(env.rt.ai, "stream", stream)
+    monkeypatch.setattr(env.rt.ai, "configured", lambda: True)
+    assert at.scan(rid) is None and at.now(at._run(rid))["scan"] is None
+    at.tick(force=True)
+    assert reached[0].wait(5)
+    n = at.now(at._run(rid))
+    assert n["busy"] is True and n["scan"]["step"] == 0 and n["scan"]["steps"] == ["시장 자료 모으기", "AI 분석", "추천 정리", "매수 판단"] and "모으는 중" in n["scan"]["msg"]
+    assert n["scan"]["elapsed"] >= 0 and n["next"]["kind"] == "busy"
+    gate[0].set()
+    assert reached[1].wait(5)
+    s = at.scan(rid)
+    assert (s["step"], s["search"], s["sources"], s["src"]) == (1, 1, 1, "반도체 수출 동향") and s["chars"] == 8 and "읽는 중" in s["msg"]
+    gate[1].set()
+    assert reached[2].wait(5)
+    s = at.scan(rid)
+    assert s["step"] == 2 and s["chars"] == 208 and "쓰는 중" in s["msg"]
+    gate[2].set()
+    assert reached[3].wait(5)
+    s = at.scan(rid)
+    assert s["step"] == 3 and s["picks"] == 2 and "2종목" in s["msg"]
+    assert at.brief()["runs"][0]["now"]["scan"]["step"] == 3            # 홈 카드에도 실린다
+    gate[3].set()
+    at._busy[rid].join(5)
+    assert at.scan(rid) is None and rid not in at._prog and at.now(at._run(rid))["scan"] is None and len(at._open(rid)) == 1
+    # 간격을 기다리는 동안은 남은 초와 전체 간격을 준다(화면의 초 단위 카운트다운·진행 막대)
+    nx = at.now(at._run(rid))["next"]
+    assert nx["kind"] == "at" and nx["span_sec"] == 3600 and 3500 < nx["in_sec"] <= 3600

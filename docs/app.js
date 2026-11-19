@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.0926";
+const UI_VERSION = "261119.0938";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -381,6 +381,22 @@ function usLine(d) {  // 미국 주식·달러가 총자산에 합쳐졌을 때 
   if (!u || u.error || !(u.eval || u.usd_krw)) return "";
   return `<div class="tiny">국내 ${won(d.kr_total)}원 + 미국 주식 ${won(u.eval)}원${u.usd ? ` + 달러 ${usd(u.usd)}(약 ${won(u.usd_krw)}원)` : ""}${u.fx ? ` · 환율 ${won(u.fx)}원` : ""}</div>`;
 }
+// 1초마다 움직이는 숫자: data-el(지난 초), data-cd(남은 초), data-gap(간격 진행 막대). 서버에서 받은 값에 화면에서 흐른 시간을 더한다
+function tickFmt(sec) {
+  const v = Math.max(0, Math.round(sec)), h = Math.floor(v / 3600), m = Math.floor(v % 3600 / 60), ss = String(v % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+function tickHtml(kind, sec) {
+  return `<time class="tick" data-${kind}="${Math.round(sec)}" data-t0="${Date.now()}">${tickFmt(sec)}</time>`;
+}
+setInterval(() => {
+  if (document.hidden) return;
+  const now = Date.now();
+  $$("[data-el]").forEach((e) => { e.textContent = tickFmt(Number(e.dataset.el) + (now - Number(e.dataset.t0)) / 1000); });
+  $$("[data-cd]").forEach((e) => { const v = Number(e.dataset.cd) - (now - Number(e.dataset.t0)) / 1000; e.textContent = v > 0 ? tickFmt(v) : "0:00"; });
+  $$("[data-gap]").forEach((e) => { const left = Number(e.dataset.gap) - (now - Number(e.dataset.t0)) / 1000; e.firstElementChild.style.width = `${Math.max(0, Math.min(100, (1 - left / Number(e.dataset.span)) * 100)).toFixed(1)}%`; });
+}, 1000);
+
 // 키움이 'IP가 등록되지 않았다'고 할 때: 노트북의 지금 공인 IP와 등록하는 곳을 바로 보여 준다(휴대폰에서도 등록할 수 있게)
 const IPH = { ip: null, at: 0, busy: false, err: null };
 function ipHelp(err) {
@@ -718,6 +734,10 @@ let catCache = null;
 async function categories() { if (!catCache) catCache = (await GET(`/api/ledger?month=${thisMonth()}`)).categories; return catCache; }
 
 pages.home = {
+  every: 3000,
+  async refresh() {   // 돌고 있는 자동매매가 있으면 그 카드만 새로(받는 중에는 3초, 평소에는 15초마다)
+    if ($("#hmAuto") && $("#hmAuto").children.length) await pages.invest.atBrief();
+  },
   async mount(h) {
     const ping = await GET("/api/ping").catch(() => ({}));
     setTop("홈", { menu: "home", sub: h.sub, badge: ping.version ? "v" + ping.version : "", right: `<span class="tiny">${korDate(localToday())}</span>` });
@@ -770,7 +790,7 @@ pages.home = {
           ${A.history.length >= 2 ? lineChart([{ values: A.history.map((h) => h.net) }], { h: 72, label: "월별 순자산 추이" }) : ""}`
         : `<div class="small muted">계좌를 등록하면 순자산을 매달 기록해요</div>`}
       </a>
-      ${((d.auto || {}).runs || []).map((r) => pages.invest.atHomeCard(r)).join("")}
+      <div id="hmAuto" class="hm-auto">${((d.auto || {}).runs || []).map((r) => pages.invest.atHomeCard(r)).join("")}</div>
       <a class="card dark dom-night" href="#invest/ai" style="text-decoration:none">
         <div class="card-head"><h2>오늘의 투자</h2><span class="tiny" style="color:#C5CCD6">AI 추천 ›</span></div>
         <div class="grid2">
@@ -1497,11 +1517,13 @@ pages.invest = {
     return B.runs.length ? B.runs.map((r) => this.atHomeCard(r)).join("")
       : `<a class="card at-home-empty" href="#invest/auto"><span><b>AI 자동매매</b><small>${B.ended ? `끝난 자동매매 ${B.ended}개 · 돌고 있는 것은 없어요` : "쓸 돈만 정하면 AI가 플랜을 짜서 사고팔아요. 모의로 먼저 해 볼 수 있어요"}</small></span><em>›</em></a>`;
   },
-  async atBrief() {   // 15초마다만 새로 받는다
-    if (this._atBT && Date.now() - this._atBT < 15000) return;
+  async atBrief() {   // 15초마다만 새로 받는다. AI 추천을 받는 중이거나 곧 받을 때는 3초마다
+    const hot = ((this._atB || {}).runs || []).some((r) => r.now && (r.now.busy || r.now.next.kind === "soon" || (r.now.next.in_sec != null && r.now.next.in_sec < 20)));
+    if (this._atBT && Date.now() - this._atBT < (hot ? 3000 : 15000)) return;
     this._atBT = Date.now();
     try { this._atB = await GET("/api/auto/brief"); } catch (e) { return; }
     if ($("#ihAuto")) $("#ihAuto").innerHTML = this.atBriefHtml();
+    if ($("#hmAuto")) $("#hmAuto").innerHTML = this._atB.runs.map((r) => this.atHomeCard(r)).join("");
   },
   async home(box) {
     if (!box.children.length) { const c = memo.get("ihome"); if (c) this.homeRender(box, c); }
@@ -1584,8 +1606,26 @@ pages.invest = {
   // 다음에 언제 움직이는지 한 줄: "다음 추천 오늘 09:10 · 50분 뒤"
   atNextLine(n) {
     const x = n.next;
-    if (x.kind === "at") return `다음 추천 <b>${esc(x.text)}</b>${x.local ? ` (${esc(x.local)})` : ""} · ${this.atDur(x.in_min)}`;
+    if (x.kind === "at") return `다음 추천 <b>${esc(x.text)}</b>${x.local ? ` (${esc(x.local)})` : ""} · ${x.in_sec != null && x.in_sec > 0 && x.in_sec < 3 * 3600 ? `${tickHtml("cd", x.in_sec)} 뒤` : this.atDur(x.in_min)}`;
     return { soon: "곧 AI 추천을 받아요", busy: "AI 추천을 받는 중", slot: "자리가 나면 다시 추천", hold: "새 매수 없음 · 보유만 정리", paused: "새 매수 멈춤 · 보유만 지켜봄", closing: "보유 종목 정리 중", blocked: "확인이 필요해요" }[x.kind] || "";
+  },
+  // AI 추천을 받는 동안: 네 단계 중 어디인지, 얼마나 지났는지를 움직이는 표시로 보여 준다
+  atScanHtml(n, mini) {
+    const S = n.scan || { step: 1, steps: ["시장 자료 모으기", "AI 분석", "추천 정리", "매수 판단"], msg: "AI 추천을 받는 중이에요", elapsed: 0 };
+    const facts = [];
+    if (S.search) facts.push(`웹 검색 ${S.search}번`);
+    if (S.sources) facts.push(`읽은 자료 ${S.sources}개`);
+    if (S.step === 2 && S.chars) facts.push(`${won(S.chars)}자 작성`);
+    if (S.step === 1 && S.src) facts.push(S.src);
+    if (!facts.length) facts.push("보통 1~2분 걸려요");
+    const segs = `<ol class="at-scan-steps">${S.steps.map((t, i) => `<li class="${i < S.step ? "done" : i === S.step ? "on" : ""}"${i === S.step ? ' aria-current="step"' : ""}><i></i>${mini ? "" : `<span>${esc(t)}</span>`}</li>`).join("")}</ol>`;
+    const sync = `--sync:-${Date.now() % 2400}ms`;
+    if (mini) return `<div class="at-scan mini" style="${sync}" role="status"><div class="at-scan-top"><span class="at-radar" aria-hidden="true"><i></i></span>
+        <div class="at-scan-txt"><b>${esc(S.steps[S.step])} 중 <small>${S.step + 1}/${S.steps.length}</small></b></div>${tickHtml("el", S.elapsed)}</div>${segs}</div>`;
+    return `<div class="at-scan" style="${sync}" role="status">
+      <div class="at-scan-top"><span class="at-radar" aria-hidden="true"><i></i></span>
+        <div class="at-scan-txt"><b>${esc(S.msg || S.steps[S.step])}</b><span>${facts.map(esc).join(" · ")}</span></div>${tickHtml("el", S.elapsed)}</div>
+      ${segs}</div>`;
   },
   atTodayLine(r) {
     const n = r.now, t = n.today;
@@ -1597,8 +1637,8 @@ pages.invest = {
     return `<a class="card dom dom-invest at-home" href="#invest/auto" data-atgo="${r.id}">
       <div class="card-head"><h2>AI 자동매매</h2><span class="tiny live-dot ${live ? "on" : ""}">${r.mode === "real" ? "실전" : "모의"} · ${lbl}${n.engine.ok ? "" : " · 엔진 확인 필요"}</span></div>
       <div class="at-home-eq"><span class="big">${this.atM(r.mkt, m.equity)}</span><b class="${tone(m.ret_pct)}">${pct(m.ret_pct, 2)}</b></div>
-      <div class="at-home-next">${esc(n.next.label)}</div>
-      <div class="small">${this.atNextLine(n)}</div>
+      ${n.busy ? this.atScanHtml(n, true) : `<div class="at-home-next">${esc(n.next.label)}</div>
+      <div class="small">${this.atNextLine(n)}</div>`}
       <div class="tiny">${esc(r.name)} · ${this.atTodayLine(r)}</div></a>`;
   },
   atReadyHtml(R) {
@@ -1612,8 +1652,8 @@ pages.invest = {
     return `<button type="button" class="card at-run" data-run="${r.id}">
       <div class="at-run-top"><b>${esc(r.name)}</b><span class="tag ${cls}">${lbl}</span>${r.pending ? `<span class="tag warn">개선안 ${r.pending}</span>` : ""}</div>
       <div class="at-run-mid"><span class="at-eq">${this.atM(r.mkt, m.equity)}</span><span class="at-ret ${tone(m.ret_pct)}">${pct(m.ret_pct, 2)}</span></div>
-      ${r.now ? `<div class="at-run-next"><span class="at-dot ${r.status === "running" && r.now.engine.ok ? "on" : ""}"></span><span>${esc(r.now.next.label)}</span></div>
-      <div class="small">${this.atNextLine(r.now)}</div>` : ""}
+      ${r.now ? (r.now.busy ? this.atScanHtml(r.now, true) : `<div class="at-run-next"><span class="at-dot ${r.status === "running" && r.now.engine.ok ? "on" : ""}"></span><span>${esc(r.now.next.label)}</span></div>
+      <div class="small">${this.atNextLine(r.now)}</div>`) : ""}
       <div class="tiny">${r.mode === "real" ? "실전" : "모의"} · ${r.mkt === "us" ? "미국" : "국내"} ${esc(r.style_label)} · ${r.start_date.slice(5).replace("-", "/")}~${r.end_date.slice(5).replace("-", "/")} · 거래 ${r.closed}건${r.closed ? ` (승 ${r.wins})` : ""} · 보유 ${r.open}${r.now ? ` · 오늘 추천 ${r.now.today.cycles}/${r.now.today.cycles_max}` : ""}</div>
     </button>`;
   },
@@ -1741,8 +1781,8 @@ pages.invest = {
         <div class="at-hero-eq">${M(m.equity)}</div>
         <div class="at-hero-ret ${tone(m.ret_pct)}">${M(m.equity - m.budget, true)} (${pct(m.ret_pct, 2)})</div>
         <div class="at-hero-kv"><div><span>쓸 돈</span><b>${M(m.budget)}</b></div><div><span>남은 현금</span><b>${M(m.cash)}</b></div><div><span>확정 손익</span><b class="${tone(m.realized)}">${M(m.realized, true)}</b></div></div>
-        ${N ? `<div class="at-nowline ${N.next.kind}"><span class="at-dot ${r.status === "running" && N.engine.ok ? "on" : ""}"></span>
-          <div><b>${esc(next)}</b><span>${this.atNextLine(N)}</span></div></div>
+        ${N ? `${N.busy ? this.atScanHtml(N) : `<div class="at-nowline ${N.next.kind}"><span class="at-dot ${r.status === "running" && N.engine.ok ? "on" : ""}"></span>
+          <div><b>${esc(next)}</b><span>${this.atNextLine(N)}</span>${N.next.span_sec && N.next.in_sec != null ? `<i class="at-gap" data-gap="${N.next.in_sec}" data-span="${N.next.span_sec}" data-t0="${Date.now()}" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, (1 - N.next.in_sec / N.next.span_sec) * 100)).toFixed(1)}%"></i></i>` : ""}</div></div>`}
         <div class="ap-h2">${r.end_date.slice(5).replace("-", "/")}까지(${N.period.day}일째/${N.period.days}일) · 플랜 ${r.ver}판 · 엔진 ${N.engine.ok ? `정상(${N.engine.sec}초 전 확인)` : "확인 필요"}</div>`
           : `<div class="ap-h2">${esc(next || "")}</div>`}
         ${r.status === "ended" ? "" : `<div class="at-ctl">

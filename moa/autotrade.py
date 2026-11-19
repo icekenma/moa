@@ -79,6 +79,10 @@ PLAN_KEYS = {
 }
 
 
+# 예전 판 자동매매에 없던 플랜 값 → 그 판의 동작과 같은 값
+PARAM_OLD = {"exit_mult": 1.0, "watch_mult": 0.5, "idx_floor": 0.0, "chase_pct": 0.5, "loss_streak": 3}
+
+
 def _clamp_key(key, val):
     lo, hi, typ, _ = PLAN_KEYS[key]
     if typ is bool:
@@ -299,17 +303,26 @@ class AutoTrade:
     def _quote(self, mkt, sym):
         return self.rt.aipick.quote(mkt, sym)
 
+    @staticmethod
+    def _params(raw):
+        """저장된 플랜 값. 예전 판에서 만든 자동매매에 없는 값은 그때의 동작과 같은 값으로 채운다(화면에 'undefined'가 나오지 않게).
+        빠른 재추천 간격은 채우지 않는다(없으면 예전 판이라는 표시로 _upgrade가 한 번 맞춘다)."""
+        p = json.loads(raw)
+        for k, v in PARAM_OLD.items():
+            p.setdefault(k, v)
+        return p
+
     def _run(self, rid):
         r = self.rt.db.one("SELECT * FROM at_runs WHERE id=?", (rid,))
         if not r:
             raise ValueError("자동매매를 찾지 못했어요")
-        r["params"] = json.loads(r["params"])
+        r["params"] = self._params(r["params"])
         return r
 
     def _runs(self, where="", args=()):
         rows = self.rt.db.q("SELECT * FROM at_runs " + where + " ORDER BY id DESC", args)
         for r in rows:
-            r["params"] = json.loads(r["params"])
+            r["params"] = self._params(r["params"])
         return rows
 
     def log(self, rid, kind, msg, data=None):
@@ -2650,7 +2663,7 @@ class AutoTrade:
                 "now": self.now(run) if run["status"] != "ended" else None, "ready": self.ready(),
                 "opp": dict({k: v for k, v in O.items() if k != "items"}, notes=self.opp_changes(run, O, self._since_ver(run))[1]),
                 "broker": getattr(b, "label", None), "session": self._session(run["mkt"]),
-                "keys": {k: v[3] for k, v in PLAN_KEYS.items()}}
+                "keys": [[k, v[3]] for k, v in PLAN_KEYS.items()]}      # 순서를 지키려고 목록으로(사전은 JSON에서 이름순으로 바뀐다)
 
     def export_csv(self, rid):
         """매매 기록 전체를 CSV로(엑셀에서 바로 열리게 BOM 포함)."""

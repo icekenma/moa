@@ -2740,3 +2740,9 @@ html.dark-theme .hx-ixg div{background:rgba(255,255,255,.05)}
 .hx-ixg span{font-size:10px;font-weight:700;color:var(--ink3)}
 .hx-ixg b{font-size:14px;font-weight:800;font-variant-numeric:tabular-nums}
 .hx-ixg small{font-size:10px;color:var(--ink3);font-variant-numeric:tabular-nums}
+/* v4.72 홈의 실험 칸을 짧게 */
+.bot-run.slim{gap:6px}
+.bot-now.one{padding:7px 10px}
+.bot-now.one b{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bot-line{font-size:11.5px;color:var(--bot-ink2);font-variant-numeric:tabular-nums}
+.bot-line b{color:var(--bot-ink);font-weight:800}

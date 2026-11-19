@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1627";
+const UI_VERSION = "261119.1700";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1720,6 +1720,8 @@ pages.invest = {
   atNextLine(n) {
     const x = n.next;
     if (x.kind === "at") return `다음 추천 <b>${esc(x.text)}</b>${x.local ? ` (${esc(x.local)})` : ""} · ${x.in_sec != null && x.in_sec > 0 && x.in_sec < 3 * 3600 ? `${tickHtml("cd", x.in_sec)} 뒤` : this.atDur(x.in_min)}`;
+    const T = n.today;
+    if (x.kind === "soon") return T && T.quick_gap ? `오늘 정밀 ${T.full}/${T.cycles_max}번 · 빠른 ${T.quick}번 · ${T.quick_gap}분마다` : "엔진이 다음에 돌 때(몇 초 안) 받아요";
     return { soon: "곧 AI 추천을 받아요", busy: "AI 추천을 받는 중", slot: "자리가 나면 다시 추천", hold: "새 매수 없음 · 보유만 정리", paused: "새 매수 멈춤 · 보유만 지켜봄", closing: "보유 종목 정리 중", blocked: "확인이 필요해요", wait: "AI를 부르지 않고 지켜보는 중 · 비용 없음" }[x.kind] || "";
   },
   // AI 추천을 받는 동안: 네 단계 중 어디인지, 얼마나 지났는지를 움직이는 표시로 보여 준다
@@ -1775,15 +1777,13 @@ pages.invest = {
         const ss = marketSession(mk);
         return `<div class="bot-mk ${mk}"><b>${mk === "kr" ? "국내장" : "미국장"}</b><span class="${ss.phase === "open" ? "on" : ""}">${esc(ss.label)}${ss.sub ? ` · ${esc(ss.sub)}` : ""}</span></div>
       ${rs.map((r) => this.atHomeCard(r)).join("")}
-      ${ls.map((L) => `<a class="bot-run lab ${mk}" href="#invest/auto" data-labgo="${L.id}">
+      ${ls.map((L) => `<a class="bot-run lab slim ${mk}" href="#invest/auto" data-labgo="${L.id}">
         <div class="bot-top"><span class="bot-mode">실험</span><b class="bot-name">${esc(L.style_label)} · 플랜 ${L.n}개</b>
           <span class="bot-st live-dot ${L.status === "running" ? "on" : ""}">${L.status === "running" ? "가동 중" : "멈춤"}</span></div>
-        ${L.now ? (L.now.busy ? this.atScanHtml(L.now, true) : `<div class="bot-now"><b>${esc(L.now.next.label)}</b><span>${this.atNextLine(L.now)}</span></div>`) : ""}
-        <dl class="bot-kpi k4"><div><dt>추천</dt><dd>${L.cycles}번</dd></div><div><dt>지금 보유</dt><dd>${L.stocks ?? L.open}종목<small>${L.holders}/${L.n} 플랜이 보유</small></dd></div>
-          <div><dt>산 횟수</dt><dd>${L.bought}</dd></div><div><dt>끝난 거래</dt><dd>${L.closed}</dd></div></dl>
+        ${L.now ? (L.now.busy ? this.atScanHtml(L.now, true) : `<div class="bot-now one"><b>${esc(L.now.next.kind === "at" ? `다음 추천 ${L.now.next.text}` : L.now.next.label)}</b></div>`) : ""}
+        <div class="bot-line">보유 <b>${L.stocks ?? L.open}종목</b> · 끝난 거래 <b>${L.closed}</b> · 추천 <b>${L.cycles}번</b> · AI <b>$${Number(L.usd).toFixed(2)}</b></div>
         ${(L.hold || []).length ? `<div class="bot-hold">${L.hold.map((h) => `<span>${esc(h.name)} <b class="${tone(h.pct)}">${pct(h.pct, 2)}</b></span>`).join("")}</div>` : ""}
-        ${L.last_line ? `<div class="bot-note strong">${esc(L.last_line)}</div>` : ""}
-        <div class="bot-note">${esc(L.note)} AI 비용 $${Number(L.usd).toFixed(2)} · 눌러서 매수·매도 내역 보기</div></a>`).join("")}`;
+        <div class="bot-note">${esc(L.note)}</div></a>`).join("")}`;
       }).join("")}</section>`;
   },
   atReadyHtml(R) {
@@ -2258,7 +2258,7 @@ pages.invest = {
       el.innerHTML = `<section class="card"><div class="card-head"><h2>지금 플랜 · ${r.ver}판</h2><span class="tiny">${esc((A.o?.models || []).find((x) => x.id === r.model)?.label.split(" · ")[0] || r.model)}</span></div>
           <ol class="at-plan">${d.plan.map((s) => `<li><b>${esc(s.t)}</b><span>${esc(s.d)}</span></li>`).join("")}</ol></section>
         <section class="card tight"><div class="card-head" style="padding-top:8px"><h2>세부 값</h2>${r.status === "ended" ? "" : `<button type="button" class="link" id="atEdit">직접 고치기</button>`}</div>
-          <dl class="dt-rows">${Object.entries(d.keys).map(([k, l]) => `<div><dt>${esc(l)}</dt><dd>${esc(String(val(k)))}</dd></div>`).join("")}</dl></section>
+          <dl class="dt-rows">${(Array.isArray(d.keys) ? d.keys : Object.entries(d.keys)).map(([k, l]) => `<div><dt>${esc(l)}</dt><dd>${esc(String(val(k)))}</dd></div>`).join("")}</dl></section>
         ${r.status === "ended" ? "" : `<section class="card">
           <div class="card-head"><div><h2>개선안 스스로 반영</h2><div class="tiny">${r.mode === "real" ? "실전은 개선안을 직접 승인해야 반영돼요." : "모의에서만 켤 수 있어요. 켜면 스스로 낸 개선안을 바로 반영하고 알림을 보내요. 바뀐 내용은 아래 이력에 남고, 언제든 직접 고칠 수 있어요."}</div></div>
             <button type="button" class="switch" role="switch" id="atAuto" aria-checked="${!!p.auto_apply && r.mode !== "real"}" aria-label="개선안 스스로 반영" ${r.mode === "real" ? "disabled" : ""}><span></span></button></div>
@@ -2502,7 +2502,7 @@ pages.invest = {
   },
   atEdit() {
     const A = this.at, d = A.d, p = d.params;
-    openSheet("플랜 직접 고치기", `<div class="fields">${Object.entries(d.keys).map(([k, l]) => typeof p[k] === "boolean"
+    openSheet("플랜 직접 고치기", `<div class="fields">${(Array.isArray(d.keys) ? d.keys : Object.entries(d.keys)).map(([k, l]) => typeof p[k] === "boolean"
       ? `<label class="field">${esc(l)}<select data-k="${k}"><option value="true" ${p[k] ? "selected" : ""}>예</option><option value="false" ${p[k] ? "" : "selected"}>아니오</option></select></label>`
       : `<label class="field">${esc(l)}<input data-k="${k}" class="r" ${/^entry_/.test(k) ? 'type="time"' : 'inputmode="decimal"'} value="${esc(p[k] != null ? p[k] : "")}"></label>`).join("")}</div>
       <div class="fields" style="margin-top:8px"><label class="field">하루 AI 비용 한도($) · 정밀 추천과 빠른 재추천을 합쳐서 봐요<input data-k="ai_daily_usd" class="r" inputmode="decimal" value="${esc(p.ai_daily_usd != null ? p.ai_daily_usd : 1)}"></label></div>

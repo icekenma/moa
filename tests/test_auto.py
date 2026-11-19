@@ -1132,7 +1132,7 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     lab = L["id"]
     P = lambda k: at._run(ids[k])["params"]
     assert lab == ids["base"] and (P("loose")["min_win_prob"], P("loose")["min_rr"], P("all")["min_win_prob"]) == (48, 1.2, 40) and P("strict")["min_score"] == 70 and P("watch_skip")["skip_watch"] is True
-    assert (P("tight")["exit_mult"], P("wide")["exit_mult"], P("wide")["tp_cap"], P("base").get("exit_mult")) == (0.5, 1.5, 6.0, None) and (P("focus")["max_positions"], P("spread")["per_trade_pct"]) == (1, 20)
+    assert (P("tight")["exit_mult"], P("wide")["exit_mult"], P("wide")["tp_cap"], P("base")["exit_mult"]) == (0.5, 1.5, 6.0, 1.0) and (P("focus")["max_positions"], P("spread")["per_trade_pct"]) == (1, 20)
     at.rt.db.x("UPDATE at_runs SET status='paused' WHERE id=?", (solo,))
     calls = []
 
@@ -1569,3 +1569,13 @@ def test_history_shows_each_days_index(env, monkeypatch):
     monkeypatch.setattr(env.rt.invest, "candles", lambda *a: (_ for _ in ()).throw(RuntimeError("off")))
     at._idx_at.clear()
     assert next(x for x in at.history({"days": 30})["days"] if x["day"] == "2026-11-17")["idx"][0]["pct"] == 1.0   # 받기 실패해도 저장해 둔 값
+
+
+def test_old_runs_show_full_plan_in_order(env):
+    """예전 판 자동매매에 없던 플랜 값은 그때 동작과 같은 값으로 채워 보여 준다. 세부 값은 정해 둔 순서대로."""
+    at, rid = env.at, env.run()
+    env.rt.db.x("UPDATE at_runs SET params=json_remove(params,'$.exit_mult','$.watch_mult','$.idx_floor','$.quick_gap_min') WHERE id=?", (rid,))
+    d = at.detail(rid)
+    assert (d["params"]["exit_mult"], d["params"]["watch_mult"], d["params"]["idx_floor"], d["params"]["quick_gap_min"]) == (1.0, 0.5, 0.0, 0)
+    assert [k for k, _ in d["keys"]] == list(PLAN_KEYS)
+    assert "quick_gap_min" not in json.loads(env.rt.db.one("SELECT params FROM at_runs WHERE id=?", (rid,))["params"])   # 저장 값은 그대로(_upgrade가 알아보게)

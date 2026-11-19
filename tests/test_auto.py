@@ -1747,3 +1747,16 @@ def test_flow_route(rt):
     from moa.app import create_app
     c = create_app(rt).test_client()
     assert c.get("/api/auto/runs/999/flow").status_code == 404
+
+
+def test_review_uses_its_own_engine(env):
+    """복기(자동매매 복기·추천 성적 복기)는 따로 정한 엔진(기본 Opus)으로. 추천 엔진 설정과는 별개."""
+    ai = env.rt.ai
+    assert ai.meter("auto")["model"] == "claude-opus-5-5" and ai.meter("learn")["model"] == "claude-opus-5-5"
+    assert ai.meter("chat")["model"] == "claude-sonnet-5-5"
+    env.rt.settings.update({"ai": {"review_model": "claude-fable-5-2"}})
+    assert ai.meter("learn")["model"] == "claude-fable-5-2" and ai.status()["review_model"] == "claude-fable-5-2"
+    env.rt.settings.update({"ai": {"review_model": "없는 엔진"}})
+    assert ai.review_model() == "claude-opus-5-5"
+    rid = env.run()
+    assert env.at.flow(rid)["learn"]["review"]["model"].startswith("Opus")

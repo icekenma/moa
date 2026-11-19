@@ -26,6 +26,8 @@ MODELS = {  # 화면에 보여 줄 모델과 백만 토큰당 가격(USD, 입력
 }
 SEARCH_USD = 0.01  # 웹 검색 1회
 LITE_MODEL = "claude-haiku-4-5"  # 자동매매의 '빠른 재추천'에 쓰는 가장 싼 엔진(검색 없이, 짧은 답만 받는다)
+REVIEW_MODEL = "claude-opus-5-5"  # 쌓인 기록을 복기하는 엔진(가끔만 돌아서 좋은 엔진을 써도 비용이 작다). 설정 → AI의 '복기 엔진'
+REVIEW_KINDS = ("auto", "learn")  # 자동매매 복기 · 추천 성적 복기
 FX_DEFAULT = 1400.0
 
 SYSTEM = """너는 한국 개인 투자자의 앱(moa) 안에 있는 투자 도우미야.
@@ -189,9 +191,13 @@ class AI:
         except Exception:
             return FX_DEFAULT
 
+    def review_model(self):
+        m = self.conf().get("review_model")
+        return m if m in MODELS else REVIEW_MODEL
+
     def meter(self, kind="chat", model=None, web=None):
         c = self.conf()
-        model = model if model in MODELS else (c.get("model") or "claude-sonnet-5-5")
+        model = model if model in MODELS else self.review_model() if kind in REVIEW_KINDS else (c.get("model") or "claude-sonnet-5-5")
         web = c.get("web_search", True) if web is None else web
         if kind in ("sweep", "test", "learn", "dca", "auto", "pickq"):
             web = False
@@ -212,7 +218,7 @@ class AI:
     def status(self):
         c = self.conf()
         used, n = self.month_usd()
-        return {"configured": self.configured(), "model": c.get("model"), "budget_usd": c.get("budget_usd"),
+        return {"configured": self.configured(), "model": c.get("model"), "review_model": self.review_model(), "budget_usd": c.get("budget_usd"),
                 "web_search": c.get("web_search", True), "month_usd": round(used, 4), "month_calls": n,
                 "models": {k: v[0] for k, v in MODELS.items()}, "credit": self.credit(),
                 "recent": self.rt.db.q("SELECT ts, kind, model, in_tok, out_tok, searches, usd FROM ai_usage "
@@ -355,6 +361,8 @@ class AI:
                     for m in (d.get("history") or [])[-6:] if m.get("role") in ("user", "assistant")]
         messages.append({"role": "user", "content": user})
         model = c.get("model") or "claude-sonnet-5-5"
+        if kind in REVIEW_KINDS:  # 복기는 따로 정한 엔진(기본 Opus)
+            model = self.review_model()
         if d.get("model") in MODELS:  # 화면에서 고른 엔진
             model = d["model"]
         pick = kind == "pick"

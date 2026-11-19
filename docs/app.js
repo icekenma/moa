@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.2034";
+const UI_VERSION = "261120.0401";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2521,7 +2521,7 @@ pages.invest = {
     const s7 = `<div class="fl-ways">${ways.map(([k, d, c]) => { const e = exn[k]; return `<div class="fl-w ${e ? "hit" : ""} ${c}"><b>${k}</b><small>${d}</small>${e ? `<em class="${tone(e.pnl)}">${e.n}건 · ${this.atM(mkt, e.pnl, true)}</em>` : `<em>오늘 0건</em>`}</div>`; }).join("")}</div>`;
     // ⑧ 배우기
     const s8 = `<div class="fl-learn">
-        <div>${ring(Math.min(L.review.n, L.review.every), L.review.every, "분석까지 거래")}<span><b>성적 분석</b><small>${L.review.every}건 또는 ${L.review.every_days}거래일마다(지금 ${L.review.days}일째) · ${L.review.auto ? "모의라 스스로 반영" : "개선안은 승인 후 반영"}</small></span></div>
+        <div>${ring(Math.min(L.review.n, L.review.every), L.review.every, "분석까지 거래")}<span><b>성적 분석${L.review.ai ? ` <span class="tag">AI 복기 ${esc(L.review.model)}</span>` : ""}</b><small>${L.review.every}건 또는 ${L.review.every_days}거래일마다(지금 ${L.review.days}일째) · ${L.review.auto ? "모의라 스스로 반영" : "개선안은 승인 후 반영"}</small></span></div>
         <div>${ring(Math.min(L.engine.n, L.engine.need), L.engine.need, "엔진 판단까지 거래")}<span><b>엔진 점검</b><small>${L.engine.n ? `지금 엔진 평균 ${pct(L.engine.avg, 2)} · 이익 ${L.engine.win}% · ` : ""}${esc(L.engine.rule)}${L.engine.lock ? " · 더 올리지 않기로 함" : ""}</small></span></div>
         ${L.pending ? `<div class="fl-pend">개선안 ${L.pending}건이 승인을 기다려요 → 현황 탭</div>` : ""}</div>
       <div class="fl-loop" aria-hidden="true">↺ 다시 ① 점검으로</div>`;
@@ -6340,6 +6340,8 @@ pages.settings = {
         <label class="field">Claude API 키<input id="aiKey" type="password" value="${esc(c.api_key || "")}" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off"></label>
         <div class="tiny">platform.claude.com/settings/keys에서 만들어요. 키는 노트북에만 저장하고 화면엔 가려서 보여요.</div>
         <label class="field">모델<select id="aiModel">${Object.entries(st.models).map(([k, v]) => `<option value="${k}" ${k === c.model ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
+        <label class="field">복기 엔진<select id="aiReview">${Object.entries(st.models).map(([k, v]) => `<option value="${k}" ${k === (c.review_model || "claude-opus-5-5") ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
+        <div class="tiny">쌓인 매매·추천 기록을 돌아보고 규칙을 고칠 때 쓰는 엔진이에요. 플랜마다 주 1번 안팎이라 좋은 엔진을 써도 한 번 100원 남짓이에요.</div>
         <div class="fields"><label class="field">월 예산(달러)<input id="aiBudget" class="r" inputmode="decimal" value="${esc(c.budget_usd ?? 10)}"></label>
           <label class="field">이번 달 사용<input value="$${st.month_usd} · ${st.month_calls}회" disabled></label></div>
         <label class="check"><input type="checkbox" id="aiWeb" ${c.web_search !== false ? "checked" : ""}> 웹 검색으로 최신 뉴스 찾기(검색 1회 약 14원 추가)</label>
@@ -6352,7 +6354,7 @@ pages.settings = {
         ${st.recent.length ? st.recent.map((r) => `<div class="item"><span class="ico">${esc({ stock: "종목", portfolio: "점검", review: "복기", sweep: "훑기", chat: "질문", test: "확인", pick: "추천", pickw: "중기", learn: "복기", divplan: "배당" }[r.kind] || r.kind)}</span>
           <span class="main"><b>${esc(r.ts.slice(5, 16).replace("T", " "))}</b><span class="sub">${esc(r.model.replace("claude-", ""))} · 입력 ${won(r.in_tok)} · 출력 ${won(r.out_tok)}${r.searches ? ` · 검색 ${r.searches}` : ""}</span></span>
           <span class="end"><b>$${Number(r.usd).toFixed(4)}</b></span></button>`).join("") : `<div class="empty">아직 사용 기록이 없어요</div>`}</div></section>`;
-    const body = () => ({ ai: { api_key: $("#aiKey").value.trim(), admin_key: $("#aiAdmin").value.trim(), model: $("#aiModel").value, budget_usd: Number($("#aiBudget").value) || 0, web_search: $("#aiWeb").checked } });
+    const body = () => ({ ai: { api_key: $("#aiKey").value.trim(), admin_key: $("#aiAdmin").value.trim(), model: $("#aiModel").value, review_model: $("#aiReview").value, budget_usd: Number($("#aiBudget").value) || 0, web_search: $("#aiWeb").checked } });
     bindCredit($("#crCard"), () => this.ai());
     $("#aiSave").onclick = async () => { await run(() => api("PUT", "/api/settings", body()), "저장했어요"); this.ai(); };
     $("#aiTest").onclick = async () => {

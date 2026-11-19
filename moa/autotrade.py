@@ -2889,7 +2889,8 @@ class AutoTrade:
         est = self.engine_stats([run], since)
         rv_days = len({r["day"] for r in self.rt.db.q("SELECT day FROM at_log WHERE run_id=? AND kind='cycle' AND data IS NOT NULL AND day>?", (rid, run.get("last_review_day") or ""))})
         learn = {"review": {"n": n_closed - (run.get("last_review_n") or 0), "every": int(p.get("review_every") or 30), "days": rv_days, "every_days": int(p.get("review_days") or 5),
-                            "auto": bool(p.get("auto_apply")) and run["mode"] == "paper", "ai": bool(p.get("ai_review", True))},
+                            "auto": bool(p.get("auto_apply")) and run["mode"] == "paper", "ai": bool(p.get("ai_review", True)),
+                            "model": _short_model(self.rt.ai.review_model())},
                  "engine": {"n": est["n"], "need": ESC_N, "avg": est["avg"], "win": est["win"], "rule": f"평균 0% 이하 또는 이익 {ESC_WIN}% 미만이면 한 칸 올림", "lock": bool(p.get("engine_lock"))},
                  "pending": self.rt.db.one("SELECT COUNT(*) n FROM at_proposals WHERE run_id=? AND status='pending'", (rid,))["n"]}
         where = ("ai" if busy else "hold" if (not ok and hold and code in ("full",)) else "gate")

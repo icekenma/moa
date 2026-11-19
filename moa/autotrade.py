@@ -152,7 +152,8 @@ COST_PCT = 1.0         # 실전: 한 달 AI 비용이 쓸 돈의 이 비율(%)�
 PAPER_DAY_USD = 0.6    # 모의·실험: 하루 AI 비용 목표(달러)
 # 모의 자동 테스트: 사용자는 켜고 끄기만 한다. 시장·방식별 실험 묶음을 앱이 만들고, 끝나면 다시 만든다.
 # (시장, 방식) → (하루 AI 비용 상한 달러, 플랜마다 쓰는 가상 돈). 모두 합쳐 하루 1달러 안팎
-AUTO_SET = {("kr", "day"): (0.35, 3_000_000), ("us", "day"): (0.35, 3_000), ("kr", "swing"): (0.15, 3_000_000), ("us", "swing"): (0.15, 3_000)}
+# 가상 돈은 넉넉히 준다: 값이 비싼 종목도 플랜대로 살 수 있어야 '플랜'을 시험할 수 있다(돈이 모자라 못 사는 것은 시험이 아니다)
+AUTO_SET = {("kr", "day"): (0.35, 10_000_000), ("us", "day"): (0.35, 10_000), ("kr", "swing"): (0.15, 10_000_000), ("us", "swing"): (0.15, 10_000)}
 AUTO_DAYS = 90
 
 
@@ -1100,8 +1101,11 @@ class AutoTrade:
         """AI 추천을 끝까지 받아 결과만 돌려준다(스트리밍을 서버에서 소비). 받는 동안 어디까지 왔는지 적어 둔다."""
         rid = run["id"]
         d = {"mkt": run["mkt"], "horizon": run["style"], "model": run["model"], "web_search": bool(run["params"].get("web_search", True))}
+        cap = self._price_cap(run)
+        if cap:
+            d["max_price"] = cap
         # 시장·방식·모델이 같은 자동매매(예: 모의와 실전)가 거의 같은 때에 추천을 받으면 한 번만 받아 함께 쓴다(비용은 받은 쪽에만 든다)
-        key = (d["mkt"], d["horizon"], d["model"], d["web_search"])
+        key = (d["mkt"], d["horizon"], d["model"], d["web_search"], d.get("max_price"))
         with self._share_lock:
             lock = self._share.setdefault(key, {"lock": threading.Lock(), "ts": 0.0, "out": None, "used": set()})
         if not lock["lock"].acquire(blocking=False):
@@ -1118,6 +1122,18 @@ class AutoTrade:
             return out
         finally:
             lock["lock"].release()
+
+    def _price_cap(self, run):
+        """이 자동매매가 살 수 있는 1주 값의 상한. AI가 못 살 종목을 고르느라 추천을 버리지 않게, 후보를 고를 때부터 쓴다.
+        실전: 지금 한 번에 쓰는 돈(검증 단계면 그 절반). 모의: 남은 현금(1주는 사 보므로). 실험 묶음: 플랜마다 달라 두지 않는다."""
+        if run.get("lab_id"):
+            return None
+        p, m = run["params"], self.money(run)
+        if run["mode"] == "paper" and p.get("min_one", True):
+            return round(m["cash"] / 1.003, 2) or None
+        n_closed = self.rt.db.one("SELECT COUNT(*) n FROM at_trades WHERE run_id=? AND status='closed'", (run["id"],))["n"]
+        mult = float(p.get("warmup_mult") or 1) if n_closed < int(p.get("warmup_trades") or 0) else 1.0
+        return round(min(m["base"] * p["per_trade_pct"] / 100 * mult, m["cash"]) / 1.003, 2) or None
 
     def _ask_ai_once(self, run, d):
         res, err, done = None, None, {}
@@ -1242,6 +1258,9 @@ class AutoTrade:
             alloc = min(m["base"] * p["per_trade_pct"] / 100 * mult, m["cash"])
             buy_px = C.buy_fill(price, self.rt.settings.get("costs")) if mkt == "kr" else round(price * (1 + US_SLIP), 4)
             qty = int(alloc // (buy_px * 1.002))
+            if qty < 1 and run["mode"] == "paper" and p.get("min_one", True) and m["cash"] >= buy_px * 1.002:
+                qty = 1                                 # 모의: 배정 금액이 모자라도 현금이 되면 1주는 사서 시험한다
+                dec["min1"] = True
             if qty < 1:
                 dec["alloc"], dec["px"] = round(alloc), price
                 skip("qty", f"배정 금액({alloc:,.0f})으로 1주를 못 삼")
@@ -1912,8 +1931,13 @@ class AutoTrade:
             em = VARIANTS.get(r["variant"] or "", ("", "", {}))[2].get("exit_mult")
             if em:                                                     # 짧게·길게는 상한만 바꿔 차이가 없었다 → 폭 자체를 바꾼다
                 p["exit_mult"] = em
+            p["warmup_trades"] = 0                                     # 실험은 처음부터 정해진 크기로
             if json.dumps(p, sort_keys=True) != old:
                 self.rt.db.x("UPDATE at_runs SET params=? WHERE id=?", (json.dumps(p, ensure_ascii=False), r["id"]))
+            want = AUTO_SET.get((r["mkt"], r["style"]), (0, 0))[1]
+            if want and r["budget"] < want:                            # 가상 돈이 모자라 못 사는 일이 없게 늘린다
+                self.rt.db.x("UPDATE at_runs SET budget=? WHERE id=?", (want, r["id"]))
+                self.log(r["id"], "control", f"가상 돈을 {r['budget']:,.0f} → {want:,.0f}로 늘렸어요(돈이 모자라 못 사는 일을 없애려고)", {"budget": {"from": r["budget"], "to": want}})
         for lab in {r["lab_id"] for r in self._runs("WHERE lab_id IS NOT NULL AND status IN ('running','paused')")}:
             have = {r["variant"]: r for r in self._runs("WHERE lab_id=?", (lab,))}
             b = have.get("base")
@@ -2006,6 +2030,7 @@ class AutoTrade:
         for k in keys:
             label, _, patch = VARIANTS[k]
             p = apply_variant(copy.deepcopy(pv["params"]), k)
+            p["warmup_trades"] = 0                      # 실험은 처음부터 정해진 크기로 산다(검증 단계는 실전을 위한 것)
             name = f"실험 · {label}"
             rid = self.rt.db.x(
                 "INSERT INTO at_runs(created_at,name,mode,mkt,style,model,budget,start_date,end_date,status,params,lab_id,variant) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",

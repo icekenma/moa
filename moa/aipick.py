@@ -302,6 +302,7 @@ class AIPick:
         kinds = ("value", "up", "volume") if mkt == "kr" else ("up", "volume")
         cand, seen = [], set()
         rank_dump = {}
+        cap = float(d.get("max_price") or 0)        # 자동매매: 한 번에 쓰는 돈으로 1주도 못 사는 종목은 후보에서 뺀다
         for k in kinds:
             try:
                 r = inv.ranking(mkt, k)
@@ -317,6 +318,8 @@ class AIPick:
                 if mkt == "kr" and (cp >= 25 or it["price"] < 1000):
                     continue
                 if mkt == "us" and it["price"] < 2:
+                    continue
+                if cap and it["price"] > cap:
                     continue
                 seen.add(it["sym"])
                 cand.append(it)
@@ -407,6 +410,7 @@ class AIPick:
         take = {"value": 7, "up": 7, "volume": 4}
         src_name = {"value": "거래대금 상위", "up": "상승률 상위", "volume": "거래량 상위"}
         cand, seen, rank_dump = [], set(), {}
+        cap = float(d.get("max_price") or 0)        # 자동매매: 한 번에 쓰는 돈으로 1주도 못 사는 종목은 후보에서 뺀다
         for k in (("value", "up", "volume") if mkt == "kr" else ("up", "volume")):
             try:
                 r = inv.ranking(mkt, k)
@@ -422,6 +426,8 @@ class AIPick:
                     continue
                 if (mkt == "kr" and (it["price"] < 1000 or (it.get("change_pct") or 0) >= 29.5)) or (mkt == "us" and it["price"] < 2):
                     continue
+                if cap and it["price"] > cap:
+                    continue
                 seen.add(it["sym"])
                 cand.append(dict(it, src=src_name[k]))
                 n += 1
@@ -429,7 +435,7 @@ class AIPick:
             for sym in (rt.market.watch().get(mkt) or [])[:5]:
                 if sym not in seen:
                     q = self.quote(mkt, sym)
-                    if q.get("price"):
+                    if q.get("price") and not (cap and q["price"] > cap):
                         seen.add(sym)
                         cand.append({"sym": sym, "name": q.get("name") or sym, "price": q["price"], "change_pct": q.get("change_pct"), "src": "관심종목"})
         except Exception:

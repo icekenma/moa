@@ -50,8 +50,8 @@ class Env:
         new = kw.pop("new_defaults", False)
         d.update(kw)
         rid = self.at.create(d)["run"]["id"]
-        if not new:      # 예전 테스트는 '관망이면 쉰다 · 하루 3번 · $1'을 전제로 쓰였다
-            self.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.skip_watch',json('true'),'$.cycles_per_day',3,'$.cycle_gap_min',60,'$.ai_daily_usd',1.0,'$.web_search',json('true')) WHERE id=?", (rid,))
+        if not new:      # 예전 테스트는 '관망이면 쉰다 · 하루 3번 · $1 · 배정 금액으로 1주를 못 사면 건너뛴다'를 전제로 쓰였다
+            self.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.skip_watch',json('true'),'$.cycles_per_day',3,'$.cycle_gap_min',60,'$.ai_daily_usd',1.0,'$.web_search',json('true'),'$.min_one',json('false')) WHERE id=?", (rid,))
         return rid
 
     def pick(self, sym="005930", **kw):
@@ -1254,3 +1254,57 @@ def test_running_experiments_pick_up_new_and_fixed_plans(env, monkeypatch):
     at._auto_at = 0
     at.tick(force=True)
     assert len(at._runs("WHERE lab_id=?", (lab["id"],))) == 10                # 두 번 붙이지 않는다
+
+
+def test_paper_never_skips_for_lot_size_and_real_only_sees_affordable_stocks(env, monkeypatch):
+    """모의는 '돈이 모자라 1주를 못 삼'으로 시험을 날리지 않는다. 실전은 살 수 있는 값의 종목만 AI에게 보여 준다."""
+    from moa.autotrade import AUTO_SET
+    at = env.at
+    # 1) 모의: 배정 금액(100만 × 33% × 검증 50% = 16.5만)보다 비싼 20만 원짜리도 현금이 되면 1주는 산다
+    rid = env.run(budget=1_000_000, new_defaults=True)
+    assert env.enter(rid, [env.pick("035420")]) == 1 and at._open(rid)[0]["qty"] == 1
+    d = json.loads(at.rt.db.one("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' AND data IS NOT NULL", (rid,))["data"])["decisions"][0]
+    assert d["act"] == "buy" and d["min1"] is True
+    env.px["000660"] = 900_000.0                                         # 현금(약 80만)으로도 못 사면 그때만 건너뛴다
+    assert env.enter(rid, [env.pick("000660")]) == 0
+    # 2) 추천을 받을 때 값 상한을 함께 보낸다: 모의 = 남은 현금, 실전 = 지금 한 번에 쓰는 돈
+    cash = at.money(at._run(rid))["cash"]
+    assert at._price_cap(at._run(rid)) == round(cash / 1.003, 2)
+    at.rt.db.x("UPDATE at_runs SET mode='real' WHERE id=?", (rid,))
+    assert at._price_cap(at._run(rid)) == round(min((1_000_000) * 0.33 * 0.5, cash) / 1.003, 2)
+    sent = []
+
+    def stream(kind, d):
+        sent.append(d)
+        yield {"t": "picks", "id": 5, "stance": "보통", "view": "v", "picks": []}
+        yield {"t": "done", "usd": 0.1}
+    monkeypatch.setattr(env.rt.ai, "stream", stream)
+    at._ask_ai(at._run(rid))
+    assert sent[0]["max_price"] == at._price_cap(at._run(rid))
+    # 3) AI 추천 후보를 고를 때 그 상한보다 비싼 종목은 뺀다
+    inv = env.rt.invest
+    items = [{"rank": 1, "sym": "000660", "name": "SK하이닉스", "price": 600_000, "change_pct": 2.0, "value": 9e11, "volume": 1e6},
+             {"rank": 2, "sym": "005930", "name": "삼성전자", "price": 70_000, "change_pct": 1.0, "value": 8e11, "volume": 9e6}]
+    monkeypatch.setattr(inv, "kr", lambda: object())
+    monkeypatch.setattr(inv, "ranking", lambda mkt, k: {"items": items})
+    monkeypatch.setattr(inv, "candles", lambda mkt, sym, tf: {"bars": []})
+    ap = env.rt.aipick
+    for h in ("day", "swing"):
+        try:
+            ap.context({"mkt": "kr", "horizon": h, "max_price": 164_000})
+        except Exception:
+            pass
+        names = [c["sym"] for c in ap._cands.get(AP._ck("kr", h), [])]
+        assert names == ["005930"], (h, names)
+    # 4) 실험 묶음: 가상 돈 1,000만 · 검증 단계 없이 처음부터 정해진 크기로. 예전 묶음(300만)은 스스로 늘린다
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (0.1, {"fx": 1400.0}))
+    at.auto_set(True)
+    lab = next(x for x in at.labs()["labs"] if (x["mkt"], x["style"]) == ("kr", "day"))
+    base = at._run(lab["id"])
+    assert base["budget"] == AUTO_SET[("kr", "day")][1] == 10_000_000 and base["params"]["warmup_trades"] == 0 and at._price_cap(base) is None
+    assert at._enter(base, {"id": 9, "stance": "보통", "view": "v", "picks": [env.pick("000660")]}, {"usd": 0}) == 1 and at._open(base["id"])[0]["qty"] == 3   # 330만 ÷ 90만
+    at.rt.db.x("UPDATE at_runs SET budget=3000000, params=json_set(params,'$.warmup_trades',10) WHERE lab_id=?", (lab["id"],))
+    at._auto_at = 0
+    at.tick(force=True)
+    r = at._run(lab["id"])
+    assert r["budget"] == 10_000_000 and r["params"]["warmup_trades"] == 0 and any("가상 돈을" in x["msg"] for x in at.rt.db.q("SELECT msg FROM at_log WHERE run_id=?", (lab["id"],)))

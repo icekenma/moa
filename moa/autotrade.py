@@ -38,6 +38,7 @@ SKIP = {"winprob": "승률 기준 미달", "score": "점수 기준 미달", "rr"
         "auto": "앱이 고른 예비 종목", "watch": "AI가 관망 권함", "quote": "시세 없음", "fail": "매수 실패", "etc": "기타"}
 _SKIP_TEXT = (("승률", "winprob"), ("점수", "score"), ("손익비", "rr"), ("비용", "fee"), ("쫓아가지", "chase"), ("1주를 못", "qty"),
               ("꽉 참", "full"), ("이미 거래", "dup"), ("예비 종목", "auto"), ("시세", "quote"), ("매수 실패", "fail"))
+SHARE_SEC = 600        # 같은 조건의 추천을 함께 쓰는 시간(초)
 OPP_MIN = 8            # 건너뛴 종목의 실제 결과가 이만큼은 쌓여야 기준을 낮춘다
 
 
@@ -201,6 +202,8 @@ class AutoTrade:
         self._last = 0.0
         self._busy = {}       # run_id → 추천을 받는 중인 스레드
         self._prog = {}       # run_id → 추천을 받는 동안의 진행 상태(화면에 단계별로 보여 준다)
+        self._share = {}      # (시장, 방식, 모델, 웹 검색) → 방금 받은 추천(같은 조건의 자동매매끼리 함께 쓴다)
+        self._share_lock = threading.Lock()
         self._day_note = {}   # (run_id, 날짜, 사유) → 같은 안내를 하루 한 번만 남기려고
         self._mkt = {}        # run_id → 시장(기록에 그 시장의 날짜를 붙이려고)
 
@@ -739,8 +742,10 @@ class AutoTrade:
             h, m = map(int, self._entry(run, d)[0].split(":"))
             return datetime(d.year, d.month, d.day, h, m)
 
-        def nxt(label, d):
+        def nxt(label, d, today_why=None):
             if d > end:
+                if today_why:      # 오늘 더 못 사는 진짜 이유를 말한다(기간 탓으로 뭉뚱그리지 않는다)
+                    return {"kind": "hold", "label": f"{today_why}. 오늘이 기간 마지막 날이라 더 사지 않아요", "code": code}
                 return {"kind": "hold", "label": "기간의 마지막 날이라 새로 사지 않아요. 들고 있는 종목만 정리해요" if self._open(run["id"]) else "기간이 끝나 가요. 새로 사지 않아요"}
             return {"kind": "at", "label": label, **self._when(mkt, entry(d))}
         tday = self._trading_day(mkt, today)
@@ -754,7 +759,10 @@ class AutoTrade:
         if code == "over":
             return {"kind": "hold", "label": why}
         if code in ("dayloss", "streak", "cycles", "aicost"):
-            return nxt(why + ". 다음 거래일에 다시 시작해요" if code != "cycles" else "오늘 추천 횟수를 다 썼어요. 다음 거래일에 다시 받아요", self._next_day(mkt, today))
+            if code == "aicost":
+                why = f"오늘 AI 추천 비용 한도(${float(p.get('ai_daily_usd') or 1):g})를 다 썼어요. 플랜에서 한도를 올리면 바로 다시 받아요"
+                return dict(nxt(why.replace("바로 다시 받아요", "오늘도 더 받아요") + ". 그대로 두면 다음 거래일에 다시 시작해요", self._next_day(mkt, today), today_why=why), code=code)
+            return nxt(why + ". 다음 거래일에 다시 시작해요" if code != "cycles" else "오늘 추천 횟수를 다 썼어요. 다음 거래일에 다시 받아요", self._next_day(mkt, today), today_why=why)
         if code == "gap":
             at = loc + timedelta(minutes=math.ceil(max(0, (run["last_cycle"] or 0) + p["cycle_gap_min"] * 60 - time.time()) / 60))
             if at.strftime("%H:%M") > self._entry(run, today)[1]:
@@ -889,9 +897,30 @@ class AutoTrade:
 
     def _ask_ai(self, run):
         """AI 추천을 끝까지 받아 결과만 돌려준다(스트리밍을 서버에서 소비). 받는 동안 어디까지 왔는지 적어 둔다."""
-        res, err, done = None, None, {}
         rid = run["id"]
         d = {"mkt": run["mkt"], "horizon": run["style"], "model": run["model"], "web_search": bool(run["params"].get("web_search", True))}
+        # 시장·방식·모델이 같은 자동매매(예: 모의와 실전)가 거의 같은 때에 추천을 받으면 한 번만 받아 함께 쓴다(비용은 받은 쪽에만 든다)
+        key = (d["mkt"], d["horizon"], d["model"], d["web_search"])
+        with self._share_lock:
+            lock = self._share.setdefault(key, {"lock": threading.Lock(), "ts": 0.0, "out": None, "used": set()})
+        if not lock["lock"].acquire(blocking=False):
+            self._step(rid, 1, "같은 조건의 다른 자동매매가 받는 추천을 함께 기다려요")
+            lock["lock"].acquire()
+        try:
+            if lock["out"] and time.time() - lock["ts"] < SHARE_SEC and lock["out"][0] and rid not in lock["used"]:
+                lock["used"].add(rid)
+                res, _, done = lock["out"]
+                self._step(rid, 3, f"방금 받은 추천 {len(res.get('picks') or [])}종목을 함께 써요", picks=len(res.get("picks") or []))
+                return res, None, dict(done, usd=0.0, shared=True)
+            out = self._ask_ai_once(run, d)
+            lock.update(ts=time.time(), out=out, used={rid})
+            return out
+        finally:
+            lock["lock"].release()
+
+    def _ask_ai_once(self, run, d):
+        res, err, done = None, None, {}
+        rid = run["id"]
         for ev in self.rt.ai.stream("pick", d):
             t = ev.get("t")
             if t == "picks":
@@ -1507,13 +1536,15 @@ class AutoTrade:
             if on and run["mode"] != "paper":
                 raise ValueError("실전은 개선안을 직접 승인해야 반영돼요")
             opts["auto_apply"] = on
+        if (patch or {}).get("ai_daily_usd") not in (None, ""):     # 하루 AI 비용 한도: 사용자만 바꾼다
+            opts["ai_daily_usd"] = round(min(max(float(patch["ai_daily_usd"]), 0.2), 20.0), 2)
         if (patch or {}).get("review_days") not in (None, ""):
             opts["review_days"] = int(min(max(float(patch["review_days"]), 2), 20))
         opts = {k: v for k, v in opts.items() if p.get(k) != v}
         if opts:
             p.update(opts)
             self.rt.db.x("UPDATE at_runs SET params=? WHERE id=?", (json.dumps(p, ensure_ascii=False), rid))
-            self.log(rid, "review", " · ".join(f"개선안 자동 반영 {'켬' if v else '끔'}" if k == "auto_apply" else f"점검 주기 {v}거래일" for k, v in opts.items()))
+            self.log(rid, "review", " · ".join(f"개선안 자동 반영 {'켬' if v else '끔'}" if k == "auto_apply" else f"하루 AI 비용 한도 ${v:g}" if k == "ai_daily_usd" else f"점검 주기 {v}거래일" for k, v in opts.items()))
         for k, v in (patch or {}).items():
             if k not in PLAN_KEYS or v in (None, ""):
                 continue

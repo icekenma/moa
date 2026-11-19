@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1051";
+const UI_VERSION = "261119.1115";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2026,6 +2026,7 @@ pages.invest = {
     openSheet("플랜 직접 고치기", `<div class="fields">${Object.entries(d.keys).map(([k, l]) => typeof p[k] === "boolean"
       ? `<label class="field">${esc(l)}<select data-k="${k}"><option value="true" ${p[k] ? "selected" : ""}>예</option><option value="false" ${p[k] ? "" : "selected"}>아니오</option></select></label>`
       : `<label class="field">${esc(l)}<input data-k="${k}" class="r" ${/^entry_/.test(k) ? 'type="time"' : 'inputmode="decimal"'} value="${esc(p[k])}"></label>`).join("")}</div>
+      <div class="fields" style="margin-top:8px"><label class="field">하루 AI 비용 한도($) · 추천 한 번에 보통 $0.5~0.9<input data-k="ai_daily_usd" class="r" inputmode="decimal" value="${esc(p.ai_daily_usd != null ? p.ai_daily_usd : 1)}"></label></div>
       <div class="tiny" style="margin:8px 0">고치면 플랜 판이 하나 올라가고 이력에 남아요. 범위를 벗어난 값은 가장 가까운 값으로 맞춰요.</div>
       <button type="button" class="btn dark wide" id="atSave">저장</button>`, (box) => {
       $("#atSave", box).onclick = async () => {

@@ -973,3 +973,39 @@ def test_budget_can_be_changed_while_running(env):
     at.rt.db.x("UPDATE at_runs SET status='ended' WHERE id=?", (rid,))
     with pytest.raises(ValueError, match="바꿀 수 없어요"):
         at.budget(rid, {"budget": 2_000_000})
+
+
+def test_same_setup_runs_share_one_recommendation_and_cost_limit_is_clear(env, monkeypatch):
+    """모의와 실전처럼 조건이 같은 자동매매는 추천을 한 번만 받아 함께 쓴다. 비용 한도에 걸리면 그 이유를 말하고, 한도는 직접 올릴 수 있다."""
+    at = env.at
+    a = env.run()
+    at.rt.db.x("UPDATE at_runs SET mode='real' WHERE id=?", (a,))       # 같은 시장에 모의 하나 더 만들 수 있게
+    b = env.run()
+    at.rt.db.x("UPDATE at_runs SET mode='paper' WHERE id=?", (a,))
+    calls = []
+
+    def stream(kind, d):
+        calls.append(d)
+        yield {"t": "picks", "id": 31, "stance": "보통", "view": "v", "picks": [env.pick()]}
+        yield {"t": "done", "usd": 0.8}
+    monkeypatch.setattr(env.rt.ai, "stream", stream)
+    monkeypatch.setattr(env.rt.ai, "configured", lambda: True)
+    at.tick(force=True)
+    for th in list(at._busy.values()):
+        th.join(5)
+    assert len(calls) == 1 and len(at._open(a)) == 1 and len(at._open(b)) == 1
+    usd = sorted(json.loads(r["data"])["usd"] for r in at.rt.db.q("SELECT data FROM at_log WHERE kind='cycle' AND data IS NOT NULL"))
+    assert usd == [0.0, 0.8]                                           # 비용은 받은 쪽에만
+    # 한도($1)를 넘긴 쪽: 이유를 분명히 말한다(오늘이 마지막 날이어도 '기간' 탓으로 돌리지 않는다)
+    paid = a if json.loads(at.rt.db.one("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' AND data IS NOT NULL", (a,))["data"])["usd"] else b
+    at.rt.db.x("UPDATE at_log SET data=json_set(data,'$.usd',1.4) WHERE run_id=? AND kind='cycle'", (paid,))
+    at.rt.db.x("UPDATE at_runs SET last_cycle=0, end_date=? WHERE id=?", (env.day, paid))
+    at.rt.db.x("UPDATE at_trades SET status='closed', exit_day=?, pnl=0, pnl_pct=0 WHERE run_id=?", (env.day, paid))
+    n = at.now(at._run(paid))["next"]
+    assert n["kind"] == "hold" and n["code"] == "aicost" and "비용 한도($1)" in n["label"] and "마지막 날" in n["label"] and "기간이 끝나 가요" not in n["label"]
+    at.rt.db.x("UPDATE at_runs SET end_date='2026-12-31' WHERE id=?", (paid,))
+    n = at.now(at._run(paid))["next"]
+    assert n["kind"] == "at" and n["code"] == "aicost" and "한도를 올리면" in n["label"]
+    # 한도를 올리면 바로 다시 받는다. AI 개선안으로는 못 바꾸는 값이다
+    assert at.edit(paid, {"ai_daily_usd": "3"})["params"]["ai_daily_usd"] == 3.0 and "ai_daily_usd" not in PLAN_KEYS
+    assert at.gate_code(at._run(paid))[1] != "aicost" and at.edit(paid, {"ai_daily_usd": 999})["params"]["ai_daily_usd"] == 20.0

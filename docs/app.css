@@ -2503,3 +2503,66 @@ html:not(.dark-theme) .bot-hold span{background:rgba(90,80,200,.08)}
 
 /* v4.60 성적표: 보유 수량·비중을 보여 주려고 거래 칸을 넓힌다 */
 .lab-tr{grid-template-columns:minmax(0,1fr) 62px 36px 82px}
+
+/* ---------- v4.61 AI 자동매매: 한눈에 들어오는 목록 + 탭으로 나눈 실험 화면 ---------- */
+.at-top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:2px 3px}
+.at-top>div{display:flex;flex-direction:column;gap:1px;min-width:0}
+.at-top b{font-size:16px;font-weight:800;letter-spacing:-.02em}
+.at-top span{font-size:10.5px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.at-top .btn{flex:0 0 auto}
+/* 모의 자동 테스트: 스위치 줄 + 2×2 */
+.at-auto{gap:9px}
+.at-auto-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.at-auto-top>div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.at-auto-top b{font-size:13.5px;font-weight:800}
+.at-auto-top span{font-size:10.5px;color:var(--ink3);font-variant-numeric:tabular-nums}
+.at-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.at-cell{all:unset;box-sizing:border-box;position:relative;display:flex;flex-direction:column;gap:5px;min-width:0;padding:10px 10px 9px 12px;border-radius:13px;background:var(--bg);overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent}
+html.dark-theme .at-cell{background:rgba(255,255,255,.055)}
+.at-cell::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:3px;border-radius:0 2px 2px 0;background:var(--mk)}
+.at-cell.off{cursor:default;opacity:.7}
+.at-cell.off::before{background:repeating-linear-gradient(180deg,var(--mk) 0 3px,transparent 3px 6px)}
+.at-cell:not(.off):active{background:color-mix(in srgb,var(--mk) 14%,transparent)}
+.at-cell:focus-visible{outline:2px solid var(--mk);outline-offset:1px}
+.at-cell.busy{box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--mk) 70%,transparent);animation:atCellBusy 1.2s ease-in-out infinite}
+@keyframes atCellBusy{50%{box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--mk) 25%,transparent)}}
+.at-cell-h{display:flex;align-items:center;gap:5px;min-width:0}
+.at-cell-h .mk-tag{margin:0;font-style:normal;padding:1px 6px;font-size:9.5px}
+.at-cell-h b{flex:1;font-size:13px;font-weight:800}
+.at-cell-h em{font-style:normal;font-size:9.5px;font-weight:700;color:var(--ink3)}
+.at-cell-s{font-size:10.5px;font-weight:700;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.at-cell-k{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+.at-cell-k span{display:flex;flex-direction:column;gap:0;min-width:0}
+.at-cell-k small{font-size:9px;font-weight:700;color:var(--ink3)}
+.at-cell-k b{font-size:12.5px;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
+.at-cell-f{font-size:10.5px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.at-cell-f b{font-weight:800;color:var(--ink2)}
+.at-cell-f b.up{color:var(--up)}.at-cell-f b.down{color:var(--down)}.at-cell-f b.ok{color:#1FA971}
+.at-cand{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:11px;background:color-mix(in srgb,#1FA971 12%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,#1FA971 55%,transparent)}
+.at-cand>span{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;font-size:12px}
+.at-cand b{font-weight:800}.at-cand small{font-size:10.5px;line-height:1.45;color:var(--ink2)}
+.at-cand .btn{flex:0 0 auto}
+.at-more,.at-old{font-size:11px}
+.at-more summary,.at-old summary{list-style:none;cursor:pointer;color:var(--ink3);font-weight:700;padding:2px 1px}
+.at-more summary::-webkit-details-marker,.at-old summary::-webkit-details-marker{display:none}
+.at-more summary::after,.at-old summary::after{content:" ›"}
+.at-more[open] summary::after,.at-old[open] summary::after{content:" ⌄"}
+.at-more .tiny{margin-top:5px;line-height:1.6}
+.at-old summary{padding:4px 4px 6px;font-size:11.5px}
+/* 한 줄짜리 자동매매 */
+.at-rows{display:flex;flex-direction:column;padding:2px 12px}
+.at-row{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:9px;padding:10px 0;border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.at-row:first-child{border-top:0}
+.at-row .mk-tag{margin:0;flex:0 0 auto}
+.at-row-n{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.at-row-n b{font-size:13px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.at-row-n b .tag{font-style:normal;font-size:9px;vertical-align:1px}
+.at-row-n small,.at-row-v small{font-size:10.5px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.at-row-v{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-variant-numeric:tabular-nums}
+.at-row-v b{font-size:13px;font-weight:800}
+.at-row-v small.up{color:var(--up);font-weight:800}.at-row-v small.down{color:var(--down);font-weight:800}
+/* 실험 자세히 */
+.lab-hero .at-hero-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.lab-hero .at-hero-top b{font-size:15px;font-weight:800;color:#fff}
+.at-hero-kv.k4{grid-template-columns:repeat(4,minmax(0,1fr))}
+#atBody>.card.lab{gap:9px}

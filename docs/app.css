@@ -2566,3 +2566,30 @@ html.dark-theme .at-cell{background:rgba(255,255,255,.055)}
 .lab-hero .at-hero-top b{font-size:15px;font-weight:800;color:#fff}
 .at-hero-kv.k4{grid-template-columns:repeat(4,minmax(0,1fr))}
 #atBody>.card.lab{gap:9px}
+
+/* ---------- v4.63 종목 링크 + 차트의 자동매매 표시 ---------- */
+a.stk{color:inherit;text-decoration:underline;text-decoration-color:color-mix(in srgb,currentColor 35%,transparent);text-underline-offset:3px;text-decoration-thickness:1px}
+a.stk:active{opacity:.6}
+/* 차트 위 표시: 추천 ◆(노랑), 매수 ▲(오름색), 매도 ▼(내림색). 실전 = 채움, 모의 = 테두리 */
+.am.rec{fill:#F2B705;stroke:#fff;stroke-width:.6}
+.am-v{stroke:#F2B705;stroke-width:.8;stroke-dasharray:2 2;opacity:.85}
+.am.buy{stroke:var(--up);stroke-width:1.3;stroke-linejoin:round}.am.sell{stroke:var(--down);stroke-width:1.3;stroke-linejoin:round}
+.am.buy.real{fill:var(--up)}.am.sell.real{fill:var(--down)}
+.am.paper{fill:var(--card,#fff)}
+html.dark-theme .am.paper{fill:#14111F}
+.am-p{stroke-width:1;opacity:.7}.am-p.buy{stroke:var(--up)}.am-p.sell{stroke:var(--down)}
+.am-n{font-size:7.5px;font-weight:800}.am-n.buy{fill:var(--up)}.am-n.sell{fill:var(--down)}
+.at-mk-lg{display:flex;flex-wrap:wrap;gap:3px 10px;font-size:10.5px;color:var(--ink2);margin:2px 0}
+.at-mk-lg span{display:inline-flex;align-items:center;gap:4px}
+.at-mk-none{color:var(--ink3);margin:2px 0}
+.at-mk-i{display:inline-block;width:0;height:0;flex:0 0 auto;margin-right:5px;vertical-align:1px}
+.at-mk-lg .at-mk-i{margin-right:0}
+.at-mk-i.rec{width:8px;height:8px;background:#F2B705;transform:rotate(45deg);border-radius:1px}
+.at-mk-i.buy{border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid var(--up)}
+.at-mk-i.sell{border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid var(--down)}
+.at-mk-i.paper{position:relative}
+.at-mk-i.buy.paper::after{content:"";position:absolute;left:-2.6px;top:3.4px;border-left:2.6px solid transparent;border-right:2.6px solid transparent;border-bottom:4px solid var(--card,#fff)}
+.at-mk-i.sell.paper::after{content:"";position:absolute;left:-2.6px;top:-7.4px;border-left:2.6px solid transparent;border-right:2.6px solid transparent;border-top:4px solid var(--card,#fff)}
+html.dark-theme .at-mk-i.buy.paper::after{border-bottom-color:#14111F}html.dark-theme .at-mk-i.sell.paper::after{border-top-color:#14111F}
+.at-mk{display:flex;flex-direction:column;gap:7px}
+.at-mk .lab-last>div>span:last-child{max-width:52%}

@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1333";
+const UI_VERSION = "261119.1344";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -381,6 +381,7 @@ function usLine(d) {  // 미국 주식·달러가 총자산에 합쳐졌을 때 
   if (!u || u.error || !(u.eval || u.usd_krw)) return "";
   return `<div class="tiny">국내 ${won(d.kr_total)}원 + 미국 주식 ${won(u.eval)}원${u.usd ? ` + 달러 ${usd(u.usd)}(약 ${won(u.usd_krw)}원)` : ""}${u.fx ? ` · 환율 ${won(u.fx)}원` : ""}</div>`;
 }
+document.addEventListener("click", (e) => { if (e.target.closest && e.target.closest("a.stk")) e.stopPropagation(); }, true);
 document.addEventListener("click", (e) => {
   if (!e.target.closest("[data-ailim]") || !pages.invest.at || !pages.invest.at.d) return;
   e.preventDefault(); e.stopPropagation();
@@ -1888,7 +1889,7 @@ pages.invest = {
     const pos = L.positions || [], sold = L.trades || [], last = L.last;
     const hold = pos.length ? `<div class="lab-sell"><b>파는 방법</b> 플랜마다 정한 익절가에 닿으면 이익을 챙기고, 손절가에 닿으면 바로 팔아요. 둘 다 안 닿으면 ${esc(pos[0].hold)}.</div>
       <div class="lab-pos">${pos.map((g, i) => `<details ${pos.length === 1 && i === 0 ? "open" : ""}>
-        <summary><span class="lab-pn"><b>${esc(g.name)}</b><small>${g.plans.length}개 플랜 · 모두 ${g.qty}주 · ${hm(g.first_ts)}</small></span>
+        <summary><span class="lab-pn"><b>${stockA(L.mkt, g.sym, g.name)}</b><small>${g.plans.length}개 플랜 · 모두 ${g.qty}주 · ${hm(g.first_ts)}</small></span>
           <span class="lab-pp"><b class="${tone(g.pct)}">${pct(g.pct, 2)}</b><small>${M(g.avg)} → ${M(g.last)}</small></span></summary>
         <div class="lab-pd">
           ${g.plans.map((p) => `<button type="button" class="lab-pl" data-run="${p.run}">
@@ -1900,7 +1901,7 @@ pages.invest = {
         </div></details>`).join("")}</div>` : `<div class="empty sm">지금 들고 있는 종목이 없어요.<br>${esc(L.last_line || "추천을 받으면 여기에 보여요")}</div>`;
     const lastH = last ? `<div class="card-head"><h2>${hm(last.ts)} 추천${last.stance ? ` · ${esc(last.stance)}` : ""}</h2></div>
         ${last.view ? `<div class="small muted">${esc(last.view)}</div>` : ""}
-        <div class="lab-last">${last.picks.map((x) => `<div><span><b>${esc(x.name)}</b><small>점수 ${x.score ?? "-"} · 승률 ${x.win_prob ?? "-"}%</small></span>
+        <div class="lab-last">${last.picks.map((x) => `<div><span><b>${stockA(L.mkt, x.sym, x.name)}</b><small>점수 ${x.score ?? "-"} · 승률 ${x.win_prob ?? "-"}%</small></span>
           <span><b class="${x.bought ? "up" : ""}">${x.bought}개 플랜 매수</b><small>${x.skips.map((k) => `${esc(k.why)} ${k.n}`).join(" · ") || "모두 매수"}</small></span></div>`).join("") || `<div class="tiny">추천 종목이 없었어요</div>`}</div>`
       : `<div class="empty sm">아직 받은 추천이 없어요</div>`;
     const rank = `<div class="notice">${esc(L.note)}</div>
@@ -1915,7 +1916,7 @@ pages.invest = {
         <details class="at-more"><summary>이 표 읽는 법</summary><div class="tiny">같은 추천을 받아 플랜만 다르게 사고판 결과예요. 수익률은 플랜에 배정된 가상 돈 전체 대비라, 같은 종목이어도 많이 산 플랜일수록 크게 움직여요(보유 칸의 %가 들어간 비중). 순위는 거래가 10건 넘은 플랜끼리만 매겨요. 추천 비용은 한 번만 들고 플랜 수로 나눠 적어요. 플랜을 누르면 그 매매 기록이 열려요.</div></details>
         ${L.status === "ended" ? "" : `<div class="grid2"><button type="button" class="btn sm" data-labctl="${L.id}:${L.status === "paused" ? "resume" : "pause"}">${L.status === "paused" ? "다시 시작" : "새 매수 멈춤"}</button>
           <button type="button" class="btn sm" data-labctl="${L.id}:end">실험 끝내기</button></div>`}`;
-    const soldH = sold.length ? `<div class="lab-last">${sold.map((t) => `<div><span><b>${esc(t.name)}</b><small>${esc(t.label)} · ${t.qty}주 · ${hm(t.entry_ts)} ${M(t.entry)} → ${hm(t.exit_ts)} ${M(t.exit)}</small></span>
+    const soldH = sold.length ? `<div class="lab-last">${sold.map((t) => `<div><span><b>${stockA(L.mkt, t.sym, t.name)}</b><small>${esc(t.label)} · ${t.qty}주 · ${hm(t.entry_ts)} ${M(t.entry)} → ${hm(t.exit_ts)} ${M(t.exit)}</small></span>
           <span><b class="${tone(t.pct)}">${pct(t.pct, 2)}</b><small>${esc(t.reason || "")} · ${M(t.pnl, true)}</small></span></div>`).join("")}</div>` : `<div class="empty sm">아직 판 기록이 없어요.<br>단타는 장 마감 전에, 스윙은 며칠 안에 채워져요.</div>`;
     return { hold, last: lastH, rank, sold: soldH };
   },
@@ -2188,7 +2189,7 @@ pages.invest = {
       el.innerHTML = `${d.now ? this.atNowHtml(d) : ""}${pend.map((p) => this.atPropHtml(p, mkt)).join("")}
         <section class="card tight"><div class="card-head" style="padding-top:8px"><h2>보유 ${d.open.length}</h2><span class="tiny">평가 ${M(r.money.open_value)} · ${M(r.money.unrealized, true)}</span></div>
           <div class="list">${d.open.length ? d.open.map((t) => `<div class="item" ${this.atTradeDt(t, mkt)} role="button" tabindex="0">
-            <span class="main"><b>${esc(t.name)}</b><span class="sub">${won(t.qty)}주 · ${M(t.entry_price)} → ${M(t.last)}${t.fill_ok ? "" : " · 체결 확인 중"}</span>
+            <span class="main"><b>${stockA(mkt, t.sym, t.name)}</b><span class="sub">${won(t.qty)}주 · ${M(t.entry_price)} → ${M(t.last)}${t.fill_ok ? "" : " · 체결 확인 중"}</span>
               <span class="at-bar" aria-hidden="true"><i style="left:${Math.max(0, Math.min(100, (t.pnl_pct + t.stop_pct) / (t.target_pct + t.stop_pct) * 100)).toFixed(1)}%"></i><u style="left:${(t.stop_pct / (t.target_pct + t.stop_pct) * 100).toFixed(1)}%"></u></span></span>
             <span class="end"><b class="${tone(t.pnl)}">${pct(t.pnl_pct, 2)}</b><span class="small ${tone(t.pnl)}">${M(t.pnl, true)}</span></span></div>`).join("")
             : `<div class="empty">들고 있는 종목이 없어요</div>`}</div></section>
@@ -2198,7 +2199,7 @@ pages.invest = {
     } else if (A.tab === "log") {
       el.innerHTML = `<section class="card tight"><div class="card-head" style="padding-top:8px"><h2>끝난 거래 ${S.n}</h2><button type="button" class="link" id="atCsv">CSV 내려받기</button></div>
           <div class="list">${d.closed.length ? d.closed.map((t) => `<div class="item" ${this.atTradeDt(t, mkt)} role="button" tabindex="0">
-            <span class="main"><b>${esc(t.name)}</b><span class="sub">${esc((t.exit_ts || "").replace("T", " ").slice(5, 16))} · ${esc(t.reason || "")} · ${won(t.qty)}주</span></span>
+            <span class="main"><b>${stockA(mkt, t.sym, t.name)}</b><span class="sub">${esc((t.exit_ts || "").replace("T", " ").slice(5, 16))} · ${esc(t.reason || "")} · ${won(t.qty)}주</span></span>
             <span class="end"><b class="${tone(t.pnl)}">${pct(t.pnl_pct, 2)}</b><span class="small ${tone(t.pnl)}">${M(t.pnl, true)}</span></span></div>`).join("")
             : `<div class="empty">아직 끝난 거래가 없어요</div>`}</div></section>
         <div class="tiny" style="padding:0 3px">살 때의 근거·지표, 보유 중 최고·최저, 판 사유까지 모두 저장해요. CSV에는 전체 기록이 들어 있어요.</div>`;
@@ -4173,9 +4174,10 @@ const mkt = {
   // ---------- 종목 상세 ----------
   async detail(h) {
     const m = h.params.get("m") === "us" ? "us" : "kr", sym = (h.params.get("s") || "").toUpperCase();
-    const pk = h.params.get("pk"), ph = h.params.get("ph");
-    this.d = { m, sym, range: pk ? (ph && ph !== "day" ? "d" : "m5") : this.lastRange || "1d", tab: "chart", q: null, chart: null, cd: null, pk, markFell: !!(ph && ph !== "day") };
+    const pk = h.params.get("pk"), ph = h.params.get("ph"), fromAt = h.params.get("at") === "1";
+    this.d = { m, sym, at: null, range: pk ? (ph && ph !== "day" ? "d" : "m5") : fromAt ? "m5" : this.lastRange || "1d", tab: "chart", q: null, chart: null, cd: null, pk, markFell: !!(ph && ph !== "day") };
     if (pk) this.loadMark(this.d);
+    this.loadAt(this.d);
     setTop("시세", { back: navBack("#invest/home"), menu: "invest", sub: pk ? "aistat" : "stock", right: `<button type="button" class="star on-deep" id="mkBell" aria-label="가격 알림">${BELL}</button><button type="button" class="star on-deep" id="mkStar" aria-pressed="false" aria-label="관심종목">${STAR}</button>` });
     view.innerHTML = `<div class="mk-d" id="mkD"><div class="empty loading">불러오는 중</div></div>`;
     // 목록에서 이미 받은 값이 있으면 먼저 그려 둔다
@@ -4200,6 +4202,38 @@ const mkt = {
     if (ch) { if (line) { D.chart = ch; this.cmemo[D.m + D.sym + "1d"] = ch; } else D.cd = ch; }
     this.drawDetail(full || !$("#mkPrice"));
     if (D.tab !== "chart") this.loadTab();
+  },
+  // 이 종목에서 자동매매가 한 일(추천·매수·매도). 받으면 차트를 다시 그리고 아래 목록을 채운다
+  async loadAt(D) {
+    try {
+      const r = await GET(`/api/auto/marks/${D.m}/${encodeURIComponent(D.sym)}`);
+      if (this.d !== D) return;
+      D.at = r.events || [];
+      if (D.at.length) { this.drawChart(); this.drawAt(); }
+    } catch (e) { /* 예전 서버면 표시 없이 둔다 */ }
+  },
+  drawAt() {
+    const D = this.d, el = $("#mkAt");
+    if (!el || !D || !D.at || !D.at.length) return;
+    const M = (n) => this.money(n, D.q ? D.q.currency : D.m === "us" ? "USD" : "KRW");
+    // 같은 분·같은 종류·같은 구분(실전/모의)은 한 줄로 묶는다
+    const rows = [];
+    for (const e of D.at.slice().reverse()) {
+      const k = `${e.ts.slice(0, 16)}|${e.kind}|${e.mode || ""}`, last = rows[rows.length - 1];
+      if (last && last.k === k) { last.n += 1; last.plans.push(e.plan); last.sum += e.price || 0; if (e.pct != null) last.pcts.push(e.pct); }
+      else rows.push({ k, e, n: 1, plans: [e.plan], sum: e.price || 0, pcts: e.pct != null ? [e.pct] : [] });
+    }
+    const KIND = { rec: "AI 추천", buy: "매수", sell: "매도" };
+    el.innerHTML = `<section class="card at-mk">
+      <div class="card-head"><h2>자동매매 기록</h2><span class="tiny">최근 30일 · 5분·일 차트에 표시돼요</span></div>
+      <div class="at-mk-lg">${atMarkLegend()}</div>
+      <div class="lab-last">${rows.slice(0, 30).map((r) => {
+        const e = r.e, avg = r.n ? r.sum / r.n : 0, p = r.pcts.length ? r.pcts.reduce((a, b) => a + b, 0) / r.pcts.length : null;
+        return `<div><span><b><i class="at-mk-i ${e.kind} ${e.mode || ""}"></i>${e.kind === "rec" ? "AI 추천" : `${e.mode === "real" ? "실전" : "모의"} ${KIND[e.kind]}`}${r.n > 1 ? ` · 플랜 ${r.n}개` : e.plan ? ` · ${esc(e.plan)}` : ""}</b>
+          <small>${esc(e.ts.slice(5, 10))} ${esc(e.ts.slice(11, 16))}${e.kind === "rec" ? ` · ${esc(e.stance || "")} · 점수 ${e.score ?? "-"} · 승률 ${e.win_prob ?? "-"}%` : r.n > 1 ? ` · ${esc(r.plans.slice(0, 3).join(", "))}${r.n > 3 ? " 외" : ""}` : ` · ${e.qty}주`}</small></span>
+          <span><b class="${p == null ? "" : tone(p)}">${e.kind === "sell" && p != null ? pct(p, 2) : avg ? M(avg) : "-"}</b>
+          <small>${e.kind === "buy" ? `익절 ${M(e.target)} · 손절 ${M(e.stop)}` : e.kind === "sell" ? `${esc(e.reason || "")} · ${M(avg)}` : e.target_pct ? `목표 +${e.target_pct}% · 손절 -${e.stop_pct}%` : ""}</small></span></div>`;
+      }).join("")}</div></section>`;
   },
   async loadMark(D) {
     try {
@@ -4320,6 +4354,7 @@ const mkt = {
           ${seg("기간", [["1d", "1일"], ["m5", "5분"], ["d", "일"], ["w", "주"], ["mo", "월"]], D.range, "on-card mk-range")}
         </section>
         <section class="card" id="dtPane" ${D.tab === "chart" ? "hidden" : ""}><div class="empty small loading">불러오는 중</div></section>
+        <div id="mkAt"></div>
         <div id="mkHold"></div>
         ${AI_BTN("stock", "AI로 이 종목 정리(뉴스 포함)", `data-sym="${esc(D.sym)}" data-mkt="${m}"`)}
         ${usd ? "" : `<button type="button" class="btn wide" id="mkDca">매달 적립하기</button>`}
@@ -4379,7 +4414,7 @@ const mkt = {
   drawChart() {
     const D = this.d, el = $("#mkChart");
     if (!el) return;
-    if (D.range !== "1d") { const a0 = !$("svg", el); el.innerHTML = candleChart(D.cd, D.q.currency, (n) => this.money(n, D.q.currency), D.mark); bindCandle(el, D.cd, (n) => this.money(n, D.q.currency), D.mark);
+    if (D.range !== "1d") { const a0 = !$("svg", el); el.innerHTML = candleChart(D.cd, D.q.currency, (n) => this.money(n, D.q.currency), D.mark, D.at); bindCandle(el, D.cd, (n) => this.money(n, D.q.currency), D.mark); this.drawAt();
       if (D.mark && D.range === "m5" && cdWin(D.cd, D.mark).gone && !D.markFell) { D.markFell = true; D.range = "d"; $$('[data-seg="기간"]').forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === "d"))); GET(`/api/invest/candles/${D.m}/${encodeURIComponent(D.sym)}?tf=d`).then((cd) => { if (this.d === D) { D.cd = cd; this.drawChart(); } }).catch(() => {}); } if (a0) $("svg", el)?.classList.add("anim"); return; }
     const c = D.chart || {}, pts = (c.points || []).filter((p) => p.c != null).slice();
     if (pts.length && D.q.price && pts[pts.length - 1].c !== D.q.price) pts.push({ t: "지금", c: D.q.price });
@@ -4467,11 +4502,36 @@ function cdWin(cd, mark) {
   let ei = ek ? bars.findIndex((b) => b.t >= ek) : -1;
   return { bars, ri: ri - from, ei, daily };
 }
-function candleChart(cd, cur, fmt, mark) {
+// 차트 표시의 범례: ◆ 추천, ▲ 매수, ▼ 매도. 채운 것이 실전, 테두리만 있는 것이 모의
+function atMarkLegend() {
+  return `<span><i class="at-mk-i rec"></i>AI 추천</span><span><i class="at-mk-i buy real"></i>실전 매수</span><span><i class="at-mk-i sell real"></i>실전 매도</span><span><i class="at-mk-i buy paper"></i>모의 매수</span><span><i class="at-mk-i sell paper"></i>모의 매도</span>`;
+}
+// 자동매매 기록을 차트의 봉 위치로 옮긴다(같은 봉·같은 종류·같은 구분은 하나로 묶는다)
+function atMarkPoints(bars, evs) {
+  if (!evs || !evs.length || bars.length < 2) return [];
+  const daily = /^\d{4}-/.test(bars[0].t), weekly = daily && bars.length > 1 && (new Date(bars[1].t) - new Date(bars[0].t)) / 864e5 > 2;
+  const key = (iso) => (daily ? iso.slice(0, 10) : `${iso.slice(5, 7)}/${iso.slice(8, 10)} ${iso.slice(11, 16)}`);
+  const out = new Map();
+  for (const e of evs) {
+    const k = key(e.ts);
+    if (k < bars[0].t) continue;
+    let i = bars.findIndex((b) => b.t > k);
+    i = i < 0 ? bars.length - 1 : i - 1;
+    if (i < 0) continue;
+    if (!daily && bars[i].t.slice(0, 5) !== k.slice(0, 5)) continue;        // 다른 날의 봉에 붙이지 않는다
+    if (daily && !weekly && bars[i].t !== k && i === bars.length - 1 && k > bars[i].t) { /* 오늘 봉이 아직 없으면 마지막 봉에 */ }
+    const id = `${i}|${e.kind}|${e.mode || ""}`, g = out.get(id) || { i, kind: e.kind, mode: e.mode, n: 0, sum: 0 };
+    g.n += 1; g.sum += e.price || 0;
+    out.set(id, g);
+  }
+  return [...out.values()].map((g) => ({ ...g, price: g.n ? g.sum / g.n : 0 }));
+}
+function candleChart(cd, cur, fmt, mark, evs) {
   const win = cdWin(cd, mark), bars = win.bars;
   if (bars.length < 2) return `<div class="empty small">${esc((cd && cd.error) || "차트 자료가 아직 없어요")}</div>`;
   const W = 340, PH = 150, VH = 34, G = 6, n = bars.length, bw = W / n;
-  const lv = mark ? [mark.tp, mark.sl, mark.entry].filter(Boolean) : [];
+  const pts = atMarkPoints(bars, evs);
+  const lv = (mark ? [mark.tp, mark.sl, mark.entry].filter(Boolean) : []).concat(pts.filter((p) => p.kind !== "rec" && p.price).map((p) => p.price));
   const hi = Math.max(...bars.map((b) => b.h), ...lv), lo = Math.min(...bars.map((b) => b.l), ...lv), rr = hi - lo || 1;
   const vmax = Math.max(1, ...bars.map((b) => b.v));
   const X = (i) => i * bw + bw / 2, Y = (v) => 6 + (1 - (v - lo) / rr) * (PH - 12);
@@ -4496,12 +4556,25 @@ function candleChart(cd, cur, fmt, mark) {
       <rect x="${(x - w / 2).toFixed(1)}" y="${y1.toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(1, y2 - y1).toFixed(1)}" fill="${col}"/>
       <rect x="${(x - w / 2).toFixed(1)}" y="${(PH + G + VH - vh).toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(0.5, vh).toFixed(1)}" fill="${col}" opacity=".35"/>`;
   }).join("");
+  // 자동매매 표시: 추천 = 세로 점선 + ◆(위), 매수 = ▲(봉 아래), 매도 = ▼(봉 위). 실전은 채우고 모의는 테두리만
+  const tri = (x, y, up, s) => (up ? `M${x.toFixed(1)} ${(y - s).toFixed(1)}L${(x + s).toFixed(1)} ${(y + s * 0.8).toFixed(1)}L${(x - s).toFixed(1)} ${(y + s * 0.8).toFixed(1)}Z` : `M${x.toFixed(1)} ${(y + s).toFixed(1)}L${(x + s).toFixed(1)} ${(y - s * 0.8).toFixed(1)}L${(x - s).toFixed(1)} ${(y - s * 0.8).toFixed(1)}Z`);
+  const am = pts.map((p) => {
+    let x = X(p.i);
+    const b = bars[p.i];
+    if (p.kind === "rec") return `<line class="am-v" x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="9" y2="${PH}"/><path class="am rec" d="M${x.toFixed(1)} 1.5L${(x + 4).toFixed(1)} 6L${x.toFixed(1)} 10.5L${(x - 4).toFixed(1)} 6Z"/>`;
+    const up = p.kind === "buy", both = pts.some((o) => o !== p && o.i === p.i && o.kind === p.kind);
+    const y = Math.max(8, Math.min(PH - 8, up ? Y(b.l) + 10 : Y(b.h) - 10));
+    if (both) x += p.mode === "real" ? -5.5 : 5.5;                          // 같은 봉에 실전과 모의가 함께면 나란히(왼쪽 실전, 오른쪽 모의)
+    const tx = x > W - 26 ? x - 7 : x + 7;
+    return `${p.price ? `<line class="am-p ${p.kind}" x1="${(X(p.i) - bw * 0.9).toFixed(1)}" x2="${(X(p.i) + bw * 0.9).toFixed(1)}" y1="${Y(p.price).toFixed(1)}" y2="${Y(p.price).toFixed(1)}"/>` : ""}
+      <path class="am ${p.kind} ${p.mode}" d="${tri(x, y, up, 4.6)}"/>${p.n > 1 ? `<text class="am-n ${p.kind}" x="${tx.toFixed(1)}" y="${(y + 3).toFixed(1)}" text-anchor="${x > W - 26 ? "end" : "start"}">${p.n}</text>` : ""}`;
+  }).join("");
   const bhi = Math.max(...bars.map((b) => b.h)), blo = Math.min(...bars.map((b) => b.l));
   const hiI = bars.findIndex((b) => b.h === bhi), loI = bars.findIndex((b) => b.l === blo);
   const lab = (i, v, below) => { const x = X(i), a = x < 60 ? "start" : x > W - 60 ? "end" : "middle"; return `<text x="${x.toFixed(1)}" y="${(Y(v) + (below ? 11 : -4)).toFixed(1)}" text-anchor="${a}" class="mk-lab">${fmt(v)}</text>`; };
-  return `<div class="cd-legend tiny"><span><i style="background:#F2A900"></i>5일선</span><span><i style="background:#8E44AD"></i>20일선</span></div><div class="tiny cd-tip" id="cdTip">차트를 누르면 그날 시가·고가·저가·종가가 보여요</div>
+  return `<div class="cd-legend tiny"><span><i style="background:#F2A900"></i>5일선</span><span><i style="background:#8E44AD"></i>20일선</span></div>${pts.length ? `<div class="at-mk-lg tiny">${atMarkLegend()}</div>` : evs && evs.length ? `<div class="tiny at-mk-none">이 기간에는 자동매매 기록이 없어요. 5분·일 차트에서 볼 수 있어요.</div>` : ""}<div class="tiny cd-tip" id="cdTip">차트를 누르면 그날 시가·고가·저가·종가가 보여요</div>
     <svg viewBox="0 0 ${W} ${PH + G + VH}" class="mk-svg cd-svg" role="img" aria-label="캔들 차트">
-    ${body}${mk}
+    ${body}${mk}${am}
     <path d="${maLine(bars, 5, X, Y)}" fill="none" stroke="#F2A900" stroke-width="1.2"/>
     <path d="${maLine(bars, 20, X, Y)}" fill="none" stroke="#8E44AD" stroke-width="1.2"/>
     ${lab(hiI, bhi, false)}${lab(loI, blo, true)}
@@ -4768,6 +4841,8 @@ document.addEventListener("click", (e) => {
   const o = DT[Number(r.dataset.dt)];
   if (o) { e.preventDefault(); detailSheet(o); }
 });
+// 종목 이름을 누르면 그 종목 차트로(자동매매가 추천·매수·매도한 지점이 5분 차트에 찍힌다)
+const stockA = (mkt, sym, name, cls) => `<a class="stk ${cls || ""}" href="#invest/stock?m=${mkt === "us" ? "us" : "kr"}&s=${encodeURIComponent(sym)}&at=1">${esc(name)}</a>`;
 const stockHref = (code, market) => `#invest/stock?m=${market === "us" || isUsCode(code) ? "us" : "kr"}&s=${encodeURIComponent(code)}`;
 const ORDER_ST = { cancel: "취소", cancelled: "취소됨", accepted: "접수(체결 확인 중)", partial: "일부 체결", filled: "체결" };
 function actDetail(x) {

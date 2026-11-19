@@ -2057,6 +2057,32 @@ class AutoTrade:
                 pass
         return self.labs()
 
+    def marks(self, mkt, sym, days=30):
+        """이 종목에서 자동매매가 한 일(차트에 찍을 것): AI가 추천한 때, 플랜별로 산 때·판 때. 실전과 모의를 가른다."""
+        sym = str(sym or "").upper()
+        since = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
+        evs = []
+        try:
+            for r in self.rt.db.q("SELECT id, ts, stance, picks FROM ai_picks WHERE mkt=? AND ts>=? ORDER BY ts", (mkt, since)):
+                for x in json.loads(r["picks"] or "[]"):
+                    if str(x.get("sym") or "").upper() == sym:
+                        evs.append({"kind": "rec", "ts": r["ts"], "price": x.get("entry_price"), "stance": r["stance"], "score": x.get("score"),
+                                    "win_prob": x.get("win_prob"), "target_pct": x.get("target_pct"), "stop_pct": x.get("stop_pct"), "pick_id": r["id"]})
+        except Exception:
+            pass
+        for t in self.rt.db.q("SELECT t.*, r.mode, r.name run_name, r.variant, r.lab_id FROM at_trades t JOIN at_runs r ON r.id=t.run_id "
+                              "WHERE t.mkt=? AND t.sym=? AND t.entry_ts>=? AND t.status!='cancelled' ORDER BY t.entry_ts", (mkt, sym, since)):
+            plan = VARIANTS[t["variant"]][0] if t["variant"] in VARIANTS else t["run_name"]
+            base = {"mode": t["mode"], "plan": plan, "run": t["run_id"], "lab": bool(t["lab_id"]), "qty": t["qty"]}
+            evs.append(dict(base, kind="buy", ts=t["entry_ts"], price=t["entry_price"],
+                            target=round(t["entry_price"] * (1 + t["target_pct"] / 100), 2), stop=round(t["entry_price"] * (1 - t["stop_pct"] / 100), 2),
+                            target_pct=t["target_pct"], stop_pct=t["stop_pct"], open=t["status"] == "open"))
+            if t["status"] == "closed" and t["exit_ts"]:
+                evs.append(dict(base, kind="sell", ts=t["exit_ts"], price=t["exit_price"], reason=t["reason"], pct=t["pnl_pct"], pnl=t["pnl"]))
+        evs.sort(key=lambda e: e["ts"])
+        return {"mkt": mkt, "sym": sym, "events": evs,
+                "has": {"real": any(e.get("mode") == "real" for e in evs), "paper": any(e.get("mode") == "paper" for e in evs), "rec": any(e["kind"] == "rec" for e in evs)}}
+
     def _lab_book(self, L):
         """실험 묶음의 장부: 지금 들고 있는 종목(같은 종목은 한 줄로, 플랜별 내역 포함)과 최근 판 기록."""
         ids = [x["id"] for x in L["runs"]]

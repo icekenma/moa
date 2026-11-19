@@ -1308,3 +1308,26 @@ def test_paper_never_skips_for_lot_size_and_real_only_sees_affordable_stocks(env
     at.tick(force=True)
     r = at._run(lab["id"])
     assert r["budget"] == 10_000_000 and r["params"]["warmup_trades"] == 0 and any("가상 돈을" in x["msg"] for x in at.rt.db.q("SELECT msg FROM at_log WHERE run_id=?", (lab["id"],)))
+
+
+def test_marks_for_chart_split_real_and_paper(env):
+    """종목 차트에 찍을 자동매매 기록: 추천한 때, 플랜별로 산 때·판 때. 실전과 모의를 가른다."""
+    at = env.at
+    a = env.run()
+    at.rt.db.x("UPDATE at_runs SET mode='real' WHERE id=?", (a,))
+    b = env.run()
+    at.rt.db.x("UPDATE at_runs SET mode='paper' WHERE id=?", (a,))       # (가상 장부로 사고판 뒤, 아래에서 실전으로 표시만 바꾼다)
+    at.rt.db.x("INSERT INTO ai_picks(id,ts,mkt,model,usd,stance,view,picks) VALUES(77,?,?,?,?,?,?,?)",
+               (f"{env.day}T10:20:00", "kr", "m", 0.1, "보통", "v", json.dumps([dict(env.pick("005930"), entry_price=70000), env.pick("000660")])))
+    env.enter(a, [env.pick("005930")])
+    env.enter(b, [env.pick("005930")])
+    env.px["005930"] = 73000.0
+    at.tick(force=True)
+    at.rt.db.x("UPDATE at_runs SET mode='real' WHERE id=?", (a,))
+    M = at.marks("kr", "005930")
+    kinds = [(e["kind"], e.get("mode")) for e in M["events"]]
+    assert kinds.count(("rec", None)) == 1 and kinds.count(("buy", "real")) == 1 and kinds.count(("buy", "paper")) == 1 and kinds.count(("sell", "real")) == 1 and kinds.count(("sell", "paper")) == 1
+    buy = next(e for e in M["events"] if e["kind"] == "buy" and e["mode"] == "real")
+    sell = next(e for e in M["events"] if e["kind"] == "sell" and e["mode"] == "real")
+    assert buy["target"] == round(buy["price"] * 1.03, 2) and sell["reason"] == "익절" and sell["pct"] > 0 and M["has"] == {"real": True, "paper": True, "rec": True}
+    assert at.marks("kr", "035420")["events"] == [] and [e["kind"] for e in at.marks("kr", "000660")["events"]] == ["rec"]

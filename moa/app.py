@@ -1281,6 +1281,10 @@ def create_app(rt, updater=None):
         with rt._lock:
             return jsonify(rt.autotrade.edit(rid, body()))
 
+    @app.get("/api/auto/marks/<mkt>/<sym>")
+    def auto_marks(mkt, sym):
+        return jsonify(rt.autotrade.marks("us" if mkt == "us" else "kr", sym))
+
     @app.get("/api/auto/lab")
     def auto_labs():
         return jsonify(rt.autotrade.labs())

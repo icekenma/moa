@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1554";
+const UI_VERSION = "261119.1627";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2405,7 +2405,8 @@ pages.invest = {
       return `<div class="hx-item ${on ? "on" : ""}"><button type="button" class="hx-row" data-hxday="${x.day}" aria-expanded="${on}">
           <span class="hx-date"><b>${esc(x.day.slice(5).replace("-", "/"))}</b><small>${x.dow}</small></span>
           <span class="hx-mid"><b>${S.n ? `매도 ${S.n} · 승률 ${S.win_rate}% · 평균 ${pct(S.avg_pct, 2)}` : `매도 없음`}</b>
-            <small>매수 ${x.buys} · 추천 ${x.cycles}번${x.quick ? `(빠른 ${x.quick})` : ""}${x.best && x.best.pnl > 0 ? ` · 1등 ${esc(x.best.label)}` : ""}</small></span>
+            <small>매수 ${x.buys} · 추천 ${x.cycles}번${x.quick ? `(빠른 ${x.quick})` : ""}${x.best && x.best.pnl > 0 ? ` · 1등 ${esc(x.best.label)}` : ""}</small>
+            ${(x.idx || []).length ? `<span class="hx-idx">${x.idx.map((i) => `<em class="${i.mkt}">${esc(i.name)} <i class="${tone(i.pct)}">${pct(i.pct, 2)}</i></em>`).join("")}</span>` : ""}</span>
           <span class="hx-val"><b class="${tone(x.net)}">${signed(x.net)}</b><small>AI ${won(x.ai_cost)}원 뺌</small></span></button>
         ${on ? `<div class="hx-more">${this.hxDay(x)}</div>` : ""}</div>`;
     }).join("") || `<div class="empty small">기록이 없어요</div>`}</section>`;
@@ -2418,7 +2419,11 @@ pages.invest = {
     cl.forEach((t) => { const g = by[t.strat] || (by[t.strat] = { label: t.strat_label, group: t.strat_group, n: 0, w: 0, sp: 0, pnl: 0 }); g.n++; g.w += t.pnl > 0 ? 1 : 0; g.sp += t.pnl_pct || 0; g.pnl += t.pnl_krw || 0; });
     const rows = Object.values(by).sort((a, b) => b.pnl - a.pnl);
     const recs = (D.day && D.day.recs) || [];
-    return `${rows.length ? `<div class="hx-sub">전략별 그날 성적</div><div class="hx-tbl">${rows.map((g) => `<div><span><b>${esc(g.label)}</b><small>${esc(g.group)}</small></span>
+    const ix = (D.days.find((y) => y.day === x.day) || x).idx || x.idx || [];
+    const iv = (v) => (v == null ? "-" : v >= 1000 ? Number(v).toLocaleString("ko-KR", { maximumFractionDigits: 2 }) : Number(v).toFixed(2));
+    return `${ix.length ? `<div class="hx-sub">그날 지수</div><div class="hx-ixg">${ix.map((i) => `<div class="${i.mkt}"><span>${esc(i.name)}</span>
+        <b class="${tone(i.pct)}">${pct(i.pct, 2)}</b><small>종가 ${iv(i.close)}${i.hi != null && i.lo != null ? ` · 장중 ${pct(i.lo, 1)}~${pct(i.hi, 1)}` : ""}</small></div>`).join("")}</div>` : ""}
+      ${rows.length ? `<div class="hx-sub">전략별 그날 성적</div><div class="hx-tbl">${rows.map((g) => `<div><span><b>${esc(g.label)}</b><small>${esc(g.group)}</small></span>
         <span>${g.n}건 · 승 ${g.w}</span><span class="${tone(g.sp)}">${pct(g.sp / g.n, 2)}</span><b class="${tone(g.pnl)}">${signed(g.pnl)}</b></div>`).join("")}</div>` : ""}
       ${recs.length ? `<details class="hx-det"><summary class="hx-sub">받은 추천 ${recs.length}번 <small>정밀 ${recs.filter((r) => !r.lite).length} · 빠른 ${recs.filter((r) => r.lite).length} · 펼치기</small></summary><ol class="hx-recs">${recs.map((r) => `<li><time>${esc(r.ts.slice(11, 16))}</time>
         <div><b>${r.lite ? `<span class="tag y">빠른</span>` : `<span class="tag">정밀</span>`} ${esc(r.group)}${r.stance ? ` · ${esc(r.stance)}` : ""}</b>

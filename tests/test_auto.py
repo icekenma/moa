@@ -1532,3 +1532,40 @@ def test_history_by_day_strategy_and_angles(env, monkeypatch):
     # API
     c = create_app(env.rt).test_client()
     assert c.get("/api/auto/history?days=30&mkt=us").get_json()["total"]["n"] == 1
+
+
+def test_history_shows_each_days_index(env, monkeypatch):
+    """날짜별 기록에 그날 지수(국내 코스피·코스닥, 미국 S&P 500·나스닥)를 붙이고, 받은 값은 저장해 두고 쓴다."""
+    at = env.at
+    px = {"^KS11": [2500, 2525, 2500], "^KQ11": [800, 792, 800], "^GSPC": [6000, 6060, 5940], "^IXIC": [20000, 20000, 20200]}
+    calls = []
+
+    def candles(mkt, sym, tf):
+        calls.append(sym)
+        days = ["2026-11-14", "2026-11-17", "2026-11-18"]
+        return {"bars": [{"t": d, "o": c, "h": c * 1.01, "l": c * 0.99, "c": c} for d, c in zip(days, px[sym])]}
+    monkeypatch.setattr(env.rt.invest, "candles", candles)
+    rid = env.run()
+    _seed(env, rid, 2)
+    env.rt.db.x("UPDATE at_trades SET entry_day='2026-11-17', exit_day='2026-11-17' WHERE run_id=?", (rid,))
+    H = at.history({"days": 30})
+    d17 = next(x for x in H["days"] if x["day"] == "2026-11-17")
+    assert [(i["name"], i["pct"]) for i in d17["idx"]] == [("코스피", 1.0), ("코스닥", -1.0)]           # 그날 거래한 시장(국내)만
+    assert d17["idx"][0]["hi"] == 2.01 and d17["idx"][0]["close"] == 2525
+    G = {g["label"]: g for g in H["groups"]}
+    assert "그날 지수(코스피·S&P 500)" not in G                                    # 모두 같은 칸(0~+1%)이면 비교할 게 없어 빼 둔다
+    assert all(t["idx_pct"] == 1.0 for t in H["trades"])
+    # 시장을 고르면 그 시장 지수만, 10분 안에는 다시 받지 않고 저장해 둔 값을 쓴다
+    n = len(calls)
+    U = at.history({"days": 30, "mkt": "us"})
+    assert len(calls) == n
+    env.rt.db.x("INSERT INTO at_trades(run_id,ver,mkt,sym,name,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,exit_ts,exit_price,reason,pnl,pnl_pct,exit_day) "
+                "VALUES(?,1,'us','NVDA','엔비디아',1,'closed','x','2026-11-18','10:00',100,3,1.5,'y',101,'익절',1,1.0,'2026-11-18')", (rid,))
+    U = at.history({"days": 30, "mkt": "kr"})
+    assert all(i["mkt"] == "kr" for x in U["days"] for i in x["idx"])
+    A = at.history({"days": 30})
+    d18 = next(x for x in A["days"] if x["day"] == "2026-11-18")
+    assert [(i["name"], i["pct"]) for i in d18["idx"]] == [("S&P 500", -1.98), ("나스닥", 1.0)]
+    monkeypatch.setattr(env.rt.invest, "candles", lambda *a: (_ for _ in ()).throw(RuntimeError("off")))
+    at._idx_at.clear()
+    assert next(x for x in at.history({"days": 30})["days"] if x["day"] == "2026-11-17")["idx"][0]["pct"] == 1.0   # 받기 실패해도 저장해 둔 값

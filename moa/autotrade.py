@@ -40,6 +40,8 @@ _SKIP_TEXT = (("승률", "winprob"), ("점수", "score"), ("손익비", "rr"), (
               ("꽉 참", "full"), ("이미 거래", "dup"), ("예비 종목", "auto"), ("시세", "quote"), ("매수 실패", "fail"))
 SHARE_SEC = 600        # 같은 조건의 추천을 함께 쓰는 시간(초)
 QUICK_MIN = 10         # 빠른 재추천의 가장 짧은 간격(분)
+# 매매 기록에 함께 보여 주는 지수(시장마다 첫째가 대표 지수: '그날 지수' 기준별 성적에 쓴다)
+IDX = {"kr": (("코스피", "^KS11"), ("코스닥", "^KQ11")), "us": (("S&P 500", "^GSPC"), ("나스닥", "^IXIC"))}
 QUICK_GAP = {"day": 20, "swing": 60, "month": 90}   # 모의의 빠른 재추천 간격(분): 단타는 분봉이 바뀌는 속도, 스윙·장기는 하루 몇 번
 OPP_MIN = 8            # 건너뛴 종목의 실제 결과가 이만큼은 쌓여야 기준을 낮춘다
 
@@ -270,6 +272,8 @@ class AutoTrade:
             changes TEXT NOT NULL, stats TEXT)""")
         AP._col(db, "at_runs", (("last_review_day", "TEXT"), ("lab_id", "INTEGER"), ("variant", "TEXT"), ("last_full", "REAL NOT NULL DEFAULT 0")))
         self._idx = {}        # 시장 → (받은 시각, 지수 등락률)
+        self._idx_at = {}     # 지수 기호 → 날짜별 등락을 마지막으로 받은 시각
+        db.x("CREATE TABLE IF NOT EXISTS idx_daily(sym TEXT NOT NULL, day TEXT NOT NULL, close REAL, pct REAL, hi REAL, lo REAL, PRIMARY KEY(sym, day))")
         self._last = 0.0
         self._busy = {}       # run_id → 추천을 받는 중인 스레드
         self._prog = {}       # run_id → 추천을 받는 동안의 진행 상태(화면에 단계별로 보여 준다)
@@ -2213,6 +2217,37 @@ class AutoTrade:
         return f"run:{r['id']}", {"label": r["name"], "group": f"{mk} {STYLES[r['style']]['label']} {'실전' if r['mode'] == 'real' else '모의'}",
                                   "mode": r["mode"], "mkt": r["mkt"], "style": r["style"], "run": r["id"], "lab": False}
 
+    def index_days(self, mkts, since):
+        """지수의 날짜별 종가·등락(그 거래소의 날짜). 받은 값은 저장해 두고 함께 쓴다(6개월이 넘은 날, 받기에 실패한 때를 위해).
+        반환: {날짜: [{mkt, name, sym, close, pct, range}]}"""
+        now, syms = time.time(), []
+        for m in mkts:
+            for name, ysym in IDX[m]:
+                syms.append((m, name, ysym))
+                if now - self._idx_at.get(ysym, 0) < 600:
+                    continue
+                self._idx_at[ysym] = now
+                try:
+                    bars = self.rt.invest.candles("us", ysym, "d").get("bars") or []
+                except Exception:
+                    continue
+                for a, b in zip(bars, bars[1:]):
+                    if a.get("c") and b.get("c"):
+                        self.rt.db.x("INSERT OR REPLACE INTO idx_daily(sym,day,close,pct,hi,lo) VALUES(?,?,?,?,?,?)",
+                                     (ysym, b["t"][:10], b["c"], round((b["c"] / a["c"] - 1) * 100, 2),
+                                      round((b["h"] / a["c"] - 1) * 100, 2) if b.get("h") else None, round((b["l"] / a["c"] - 1) * 100, 2) if b.get("l") else None))
+        if not syms:
+            return {}
+        meta = {y: (m, n) for m, n, y in syms}
+        out = {}
+        for r in self.rt.db.q(f"SELECT * FROM idx_daily WHERE sym IN ({','.join('?' * len(meta))}) AND day>=? ORDER BY day", (*meta, since)):
+            m, n = meta[r["sym"]]
+            out.setdefault(r["day"], []).append({"mkt": m, "name": n, "sym": r["sym"], "close": r["close"], "pct": r["pct"], "hi": r["hi"], "lo": r["lo"]})
+        order = [y for _, _, y in syms]
+        for v in out.values():
+            v.sort(key=lambda x: order.index(x["sym"]))
+        return out
+
     def history(self, q=None):
         """지난 자동매매를 다각도로: 날짜별 · 전략별 · 여러 기준별 성적과 거래 목록.
         q: days(7·30·90·0=전체), mkt(kr·us·''), mode(real·paper·''), strat(전략 키), day(그날 자세히)
@@ -2303,6 +2338,16 @@ class AutoTrade:
                 "by_day": [{"day": d, "n": len(v), "win": sum(1 for t in v if (t["pnl"] or 0) > 0), "pnl": round(sum(t["pnl_krw"] for t in v)),
                             "avg": round(sum(t["pnl_pct"] or 0 for t in v) / len(v), 2)} for d, v in sorted(per_day.items(), reverse=True)][:30]})
         out_s.sort(key=lambda x: (-(x["stats"].get("n", 0) >= 10), -x["net"]))
+        # 지수(그 시장 날짜 기준). 시장을 골랐으면 그 시장만
+        try:
+            ixd = self.index_days([mkt] if mkt else ["kr", "us"], since)
+        except Exception as e:
+            self.rt.db.log("system", "error", f"매매 기록 지수 받기 실패: {type(e).__name__}: {e}", self._now())
+            ixd = {}
+        main = {m: IDX[m][0][1] for m in IDX}
+        for t in trades:
+            ix = next((x for x in ixd.get(t["entry_day"], []) if x["sym"] == main[t["mkt"]]), None)
+            t["idx_pct"] = ix["pct"] if ix else None
         # 날짜별
         dset = {t["entry_day"] for t in trades if t["entry_day"] >= since} | {t["exit_day"] for t in closed if t["exit_day"]} | set(cost_d)
         out_d = []
@@ -2318,7 +2363,9 @@ class AutoTrade:
             best = max(top.items(), key=lambda kv: kv[1]) if top else None
             out_d.append({"day": d, "dow": "월화수목금토일"[datetime.strptime(d, "%Y-%m-%d").weekday()], "buys": len(buys), "sells": len(cl), "stats": a,
                           "ai_cost": cost, "net": round((a.get("pnl_krw") or 0) - cost), "cycles": len(cyc), "quick": sum(1 for v in cyc.values() if v),
-                          "mkts": sorted({t["mkt"] for t in buys + cl}), "best": {"key": best[0], "label": strats[best[0]]["label"], "group": strats[best[0]]["group"], "pnl": round(best[1])} if best else None})
+                          "mkts": sorted({t["mkt"] for t in buys + cl}),
+                          "idx": [x for x in ixd.get(d, []) if mkt or not {t["mkt"] for t in buys + cl} or x["mkt"] in {t["mkt"] for t in buys + cl}],
+                          "best": {"key": best[0], "label": strats[best[0]]["label"], "group": strats[best[0]]["group"], "pnl": round(best[1])} if best else None})
 
         def group(label, fn, order=None):
             g = {}
@@ -2346,6 +2393,8 @@ class AutoTrade:
                   group("산 시각(그 시장 기준)", lambda t: f"{t['hour']}시" if t["hour"] else None, [f"{h:02d}시" for h in range(24)]),
                   group("요일", lambda t: t["dow"], list("월화수목금")),
                   group("보유 시간", lambda t: self._hold_band(t["hold_min"]), ["30분 미만", "30분~2시간", "2시간~하루", "1~3일", "3일 넘게"]),
+                  group("그날 지수(코스피·S&P 500)", lambda t: None if t["idx_pct"] is None else "+1% 넘게 오른 날" if t["idx_pct"] > 1 else "0~+1%" if t["idx_pct"] >= 0
+                        else "−1~0%" if t["idx_pct"] >= -1 else "−1% 넘게 내린 날", ["+1% 넘게 오른 날", "0~+1%", "−1~0%", "−1% 넘게 내린 날"]),
                   group("AI 분위기", lambda t: t["stance"] or None, ["공격", "보통", "관망"]),
                   group("AI 승률", wp, ["55% 미만", "55~65%", "65% 이상"]),
                   group("AI 점수", sc, ["70 미만", "70~80", "80 이상"])]
@@ -2361,7 +2410,7 @@ class AutoTrade:
                    buys=sum(1 for t in trades if t["entry_day"] >= since), days=len(out_d))
         keep = ("id", "strat", "mode", "mkt", "style", "sym", "name", "qty", "status", "entry_ts", "entry_day", "entry_hm", "entry_price", "exit_ts", "exit_day",
                 "exit_price", "last", "reason", "pnl", "pnl_krw", "pnl_pct", "hold_min", "mfe_pct", "mae_pct", "target_pct", "stop_pct", "score", "win_prob", "stance",
-                "lite", "catalyst", "reasons")
+                "lite", "catalyst", "reasons", "idx_pct")
         sel = [t for t in trades if (not one or t["entry_day"] == one or t.get("exit_day") == one)]
         sel.sort(key=lambda t: t.get("exit_ts") or t["entry_ts"], reverse=True)
         out = dict(empty, strategies=out_s, days=out_d, groups=groups, symbols=syms, total=tot,

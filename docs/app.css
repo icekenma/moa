@@ -2729,3 +2729,14 @@ html.dark-theme .hx-tr+.hx-tr{border-top-color:rgba(255,255,255,.07)}
 .hx-det summary small{font-size:10px;font-weight:600;color:var(--ink3)}
 .hx-det[open] summary small{visibility:hidden}
 .hx-det .hx-recs{margin-top:7px}
+/* v4.71 매매 기록의 지수 */
+.hx-idx{display:flex;flex-wrap:wrap;gap:2px 9px;margin-top:1px}
+.hx-idx em{font-style:normal;font-size:10.5px;font-weight:700;color:var(--ink2);white-space:nowrap}
+.hx-idx em::before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:4px;vertical-align:1.5px;background:var(--mk,var(--ink3))}
+.hx-idx i{font-style:normal;font-weight:800;font-variant-numeric:tabular-nums}
+.hx-ixg{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px}
+.hx-ixg div{display:flex;flex-direction:column;gap:1px;padding:7px 9px;border-radius:9px;background:var(--bg);border-left:3px solid var(--mk,var(--line))}
+html.dark-theme .hx-ixg div{background:rgba(255,255,255,.05)}
+.hx-ixg span{font-size:10px;font-weight:700;color:var(--ink3)}
+.hx-ixg b{font-size:14px;font-weight:800;font-variant-numeric:tabular-nums}
+.hx-ixg small{font-size:10px;color:var(--ink3);font-variant-numeric:tabular-nums}

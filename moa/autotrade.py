@@ -241,16 +241,16 @@ def _pctile(xs, q):
     return xs[min(len(xs) - 1, max(0, int(round(q * (len(xs) - 1)))))]
 
 
-def _agg(rows):
-    """거래 묶음의 성적."""
+def _agg(rows, key="pnl"):
+    """거래 묶음의 성적. key: 이익/손실 비를 셀 금액(국내·미국을 섞어 볼 때는 원화로 바꾼 pnl_krw)."""
     n = len(rows)
     if not n:
         return {"n": 0}
     pcts = [r["pnl_pct"] or 0 for r in rows]
     wins = [x for x in pcts if x > 0]
     losses = [x for x in pcts if x <= 0]
-    gain = sum(r["pnl"] for r in rows if (r["pnl"] or 0) > 0)
-    loss = -sum(r["pnl"] for r in rows if (r["pnl"] or 0) < 0)
+    gain = sum(r[key] for r in rows if (r[key] or 0) > 0)
+    loss = -sum(r[key] for r in rows if (r[key] or 0) < 0)
     return {"n": n, "win": len(wins), "win_rate": round(len(wins) / n * 100, 1), "avg_pct": round(sum(pcts) / n, 3),
             "avg_win": round(sum(wins) / len(wins), 2) if wins else 0, "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0,
             "pnl": round(sum(r["pnl"] or 0 for r in rows), 2), "pf": round(gain / loss, 2) if loss > 0 else (None if not gain else 99.0)}
@@ -2489,7 +2489,7 @@ class AutoTrade:
         closed = [t for t in trades if t["status"] == "closed" and (t["exit_day"] or t["entry_day"]) >= since]
 
         def agg(rows):
-            a = _agg(rows)
+            a = _agg(rows, "pnl_krw")      # 원화와 달러를 섞어 이익/손실 비를 세지 않게
             if not a["n"]:
                 return a
             pk = [r["pnl_krw"] for r in rows]
@@ -2562,6 +2562,8 @@ class AutoTrade:
             out_d.append({"day": d, "dow": "월화수목금토일"[datetime.strptime(d, "%Y-%m-%d").weekday()], "buys": len(buys), "sells": len(cl), "stats": a,
                           "ai_cost": cost, "net": round((a.get("pnl_krw") or 0) - cost), "cycles": len(cyc), "quick": sum(1 for v in cyc.values() if v),
                           "mkts": sorted({t["mkt"] for t in buys + cl}),
+                          "by_mkt": [{"mkt": m, "n": sum(1 for t in cl if t["mkt"] == m), "pnl": round(sum(t["pnl_krw"] for t in cl if t["mkt"] == m))}
+                                     for m in ("kr", "us") if any(t["mkt"] == m for t in cl)],
                           "idx": [x for x in ixd.get(d, []) if mkt or not {t["mkt"] for t in buys + cl} or x["mkt"] in {t["mkt"] for t in buys + cl}],
                           "best": {"key": best[0], "label": strats[best[0]]["label"], "group": strats[best[0]]["group"], "pnl": round(best[1])} if best else None})
 

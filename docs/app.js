@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261120.0538";
+const UI_VERSION = "261120.0642";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2851,6 +2851,7 @@ pages.invest = {
           <span class="hx-date"><b>${esc(x.day.slice(5).replace("-", "/"))}</b><small>${x.dow}</small></span>
           <span class="hx-mid"><b>${S.n ? `매도 ${S.n} · 승률 ${S.win_rate}% · 평균 ${pct(S.avg_pct, 2)}` : `매도 없음`}</b>
             <small>매수 ${x.buys} · 추천 ${x.cycles}번${x.quick ? `(빠른 ${x.quick})` : ""}${x.best && x.best.pnl > 0 ? ` · 1등 ${esc(x.best.label)}` : ""}</small>
+            ${(x.by_mkt || []).length > 1 ? `<span class="hx-bm">${x.by_mkt.map((m) => `<em class="${m.mkt}">${m.mkt === "kr" ? "국내" : "미국"} ${m.n}건 <i class="${tone(m.pnl)}">${signed(m.pnl)}</i></em>`).join("")}</span>` : ""}
             ${(x.idx || []).length ? `<span class="hx-idx">${x.idx.map((i) => `<em class="${i.mkt}">${esc(i.name)} <i class="${tone(i.pct)}">${pct(i.pct, 2)}</i></em>`).join("")}</span>` : ""}</span>
           <span class="hx-val"><b class="${tone(x.net)}">${signed(x.net)}</b><small>AI ${won(x.ai_cost)}원 뺌</small></span></button>
         ${on ? `<div class="hx-more">${this.hxDay(x)}</div>` : ""}</div>`;

@@ -3418,3 +3418,6 @@ html.gm-on .ev-hh b,html.gm-on .ev-h2,html.gm-on .ev-k b{font-family:var(--g-fon
 html.gm-on .ev-k,html.gm-on .ev-hz,html.gm-on .ev-steps>li,html.gm-on .ev-nocurve{background:var(--g-slot)}
 html.gm-on .ev-it>div{background:var(--g-panel);border-color:var(--g-edge)}
 html.gm-on .ev-it>i{border-color:var(--g-field)}
+.hx-bm{display:flex;flex-wrap:wrap;gap:2px 10px;margin-top:2px}
+.hx-bm em{font-style:normal;font-size:11px;font-weight:700;color:var(--ink2);white-space:nowrap}
+.hx-bm em i{font-style:normal}

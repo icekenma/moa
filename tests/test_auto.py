@@ -1814,3 +1814,18 @@ def test_engine_notes_overview_timeline_logic_plan(env):
     assert any(s["area"] == "lab" for s in P["steps"]) and P["ideas"] and all("prog" not in s or s["prog"][0] <= s["prog"][1] for s in P["steps"])
     from moa.app import create_app
     assert create_app(env.rt).test_client().get("/api/evo").status_code == 200
+
+
+def test_history_profit_factor_in_krw_and_split_by_market(env, monkeypatch):
+    """국내(원)와 미국(달러) 거래를 함께 볼 때 이익/손실 비는 원화로 바꿔 센다(예전엔 섞어서 100배가 나왔다). 날짜에는 시장별 손익."""
+    at = env.at
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (0.1, {"fx": 1400.0}))
+    kr, us = env.run(), env.run(mkt="us", budget=10000)
+    ins = ("INSERT INTO at_trades(run_id,ver,mkt,sym,name,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,exit_ts,exit_price,reason,pnl,pnl_pct,exit_day) "
+           "VALUES(?,1,?,?,?,1,'closed','2026-11-17T10:00:00','2026-11-17','10:00',100,3,1.5,'2026-11-17T11:00:00',101,'익절',?,?,'2026-11-17')")
+    env.rt.db.x(ins, (kr, "kr", "005930", "삼성", 10000, 1.0))          # 국내 +1만 원
+    env.rt.db.x(ins, (us, "us", "NVDA", "엔비디아", -100, -1.0))        # 미국 -100달러 = -14만 원
+    H = at.history({"days": 30})
+    assert H["total"]["pf"] == round(10000 / 140000, 2)
+    d = next(x for x in H["days"] if x["day"] == "2026-11-17")
+    assert d["by_mkt"] == [{"mkt": "kr", "n": 1, "pnl": 10000}, {"mkt": "us", "n": 1, "pnl": -140000}]

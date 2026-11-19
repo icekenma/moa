@@ -2499,3 +2499,4 @@ html:not(.dark-theme) .bot-hold span{background:rgba(90,80,200,.08)}
 .lab-why b{display:block;font-size:10.5px;color:var(--ink);margin-bottom:2px}
 .lab-why ul{margin:0;padding-left:15px;display:flex;flex-direction:column;gap:2px}
 .lab-why.risk b{color:var(--down)}
+.bot-note.strong{color:var(--bot-ink)}

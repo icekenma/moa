@@ -2089,6 +2089,20 @@ class AutoTrade:
             L["bought"] = sum(x["buys"] for x in L["runs"])
             L["positions"], L["trades"] = self._lab_book(L)
             L["last"] = self._lab_last(L)
+            L["stocks"] = len(L["positions"])                       # 들고 있는 '종목' 수(같은 종목을 여러 플랜이 들어도 하나)
+            la = L["last"]
+            if la and la["picks"]:
+                got = [x for x in la["picks"] if x["bought"]]
+                why = {}
+                for x in la["picks"]:
+                    for k in x["skips"]:
+                        why[k["why"]] = why.get(k["why"], 0) + k["n"]
+                top = max(why, key=why.get) if why else None
+                L["last_line"] = (f"최근 추천({la['ts'][11:16]}{' · ' + la['stance'] if la.get('stance') else ''}): {len(la['picks'])}종목 중 "
+                                  + (f"{', '.join(x['name'] for x in got[:2])}을(를) 플랜 {max(x['bought'] for x in got)}개가 샀어요" if got else "산 플랜이 없어요")
+                                  + (f". 안 산 이유는 주로 '{top}'" if top else ""))
+            else:
+                L["last_line"] = None
             lead = next((x for x in L["runs"] if x["closed"] >= 10), None)
             L["lead"] = lead["label"] if lead else None
             L["note"] = (f"지금은 '{lead['label']}'이 앞서요(AI 비용 빼고 {lead['net_ret_pct']:+.2f}%, {lead['closed']}건)." + ("" if lead["enough"] else f" {READY_N}건이 쌓여야 믿을 만해요.")
@@ -2113,7 +2127,7 @@ class AutoTrade:
                 self.rt.db.log("system", "error", f"자동매매 요약 오류: {type(e).__name__}: {e}", self._now())
         labs = []
         try:
-            labs = [{k: L.get(k) for k in ("id", "mkt", "style_label", "status", "lead", "note", "closed", "usd", "now", "open", "holders", "bought", "cycles")} | {"hold": [{"name": g["name"], "pct": g["pct"]} for g in L.get("positions", [])[:4]]} | {"n": len(L["runs"])}
+            labs = [{k: L.get(k) for k in ("id", "mkt", "style_label", "status", "lead", "note", "closed", "usd", "now", "open", "holders", "bought", "cycles", "stocks", "last_line")} | {"hold": [{"name": g["name"], "pct": g["pct"]} for g in L.get("positions", [])[:4]]} | {"n": len(L["runs"])}
                     for L in self.labs()["labs"] if L["status"] != "ended"]
         except Exception as e:
             self.rt.db.log("system", "error", f"실험 요약 오류: {type(e).__name__}: {e}", self._now())

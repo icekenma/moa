@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1238";
+const UI_VERSION = "261119.1248";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1751,9 +1751,10 @@ pages.invest = {
         <div class="bot-top"><span class="bot-mode">실험</span><b class="bot-name">${esc(L.style_label)} · 플랜 ${L.n}개</b>
           <span class="bot-st live-dot ${L.status === "running" ? "on" : ""}">${L.status === "running" ? "가동 중" : "멈춤"}</span></div>
         ${L.now ? (L.now.busy ? this.atScanHtml(L.now, true) : `<div class="bot-now"><b>${esc(L.now.next.label)}</b><span>${this.atNextLine(L.now)}</span></div>`) : ""}
-        <dl class="bot-kpi k4"><div><dt>추천</dt><dd>${L.cycles}번</dd></div><div><dt>지금 보유</dt><dd>${L.open}종목<small>${L.holders}/${L.n} 플랜</small></dd></div>
+        <dl class="bot-kpi k4"><div><dt>추천</dt><dd>${L.cycles}번</dd></div><div><dt>지금 보유</dt><dd>${L.stocks ?? L.open}종목<small>${L.holders}/${L.n} 플랜이 보유</small></dd></div>
           <div><dt>산 횟수</dt><dd>${L.bought}</dd></div><div><dt>끝난 거래</dt><dd>${L.closed}</dd></div></dl>
         ${(L.hold || []).length ? `<div class="bot-hold">${L.hold.map((h) => `<span>${esc(h.name)} <b class="${tone(h.pct)}">${pct(h.pct, 2)}</b></span>`).join("")}</div>` : ""}
+        ${L.last_line ? `<div class="bot-note strong">${esc(L.last_line)}</div>` : ""}
         <div class="bot-note">${esc(L.note)} AI 비용 $${Number(L.usd).toFixed(2)} · 눌러서 매수·매도 내역 보기</div></a>`).join("")}`;
       }).join("")}</section>`;
   },
@@ -1838,7 +1839,7 @@ pages.invest = {
       const kr = L.mkt === "kr", N = L.now;
       return `<section class="card lab ${L.status} ${L.mkt}">
         <div class="card-head"><div><h2><span class="mk-tag ${L.mkt}">${kr ? "국내장" : "미국장"}</span>${esc(L.style_label)} 실험 · 플랜 ${L.runs.length}개</h2>
-          <div class="tiny">${esc(L.start_date.slice(5))}~${esc(L.end_date.slice(5))} · 추천 ${L.cycles}번 · 지금 보유 ${L.open}종목(${L.holders}개 플랜) · 끝난 거래 ${L.closed}건 · AI 비용 $${L.usd.toFixed(2)}(모두 합쳐)</div></div>
+          <div class="tiny">${esc(L.start_date.slice(5))}~${esc(L.end_date.slice(5))} · 추천 ${L.cycles}번 · 지금 보유 ${L.stocks ?? L.open}종목(${L.holders}개 플랜) · 끝난 거래 ${L.closed}건 · AI 비용 $${L.usd.toFixed(2)}(모두 합쳐)</div></div>
           <span class="tag ${{ running: "y", paused: "g", ended: "" }[L.status]}">${{ running: "가동 중", paused: "멈춤", ended: "끝남" }[L.status]}</span></div>
         ${N ? (N.busy ? this.atScanHtml(N, true) : `<div class="lab-now"><b>${esc(N.next.label)}</b><span>${this.atNextLine(N)}</span></div>`) : ""}
         ${this.atLabBook(L)}

@@ -2623,3 +2623,17 @@ html.dark-theme .cz-x{background:rgba(255,255,255,.1)}
 .cz-chart{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-start}
 .cz-chart .mk-svg{width:100%}
 .cz .cd-svg{touch-action:none}
+
+/* v4.69 투자 묶음 탭(AI 추천·자동매매 / 관심·발견·주문 / 적립·배당)
+   화면 안의 버튼형 선택(국내/미국 등)과 헷갈리지 않게, 머리글 아래 밑줄 탭으로 둔다 */
+.ivg{display:flex;gap:2px;margin:-2px 0 2px;border-bottom:1px solid var(--line)}
+.ivg-t{position:relative;flex:0 0 auto;padding:9px 12px 10px;font-size:15px;font-weight:700;color:var(--ink3);text-decoration:none;white-space:nowrap;transition:color .18s}
+.ivg-t::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:3px;border-radius:3px 3px 0 0;background:var(--ink);transform:scaleX(0);transition:transform .2s ease}
+.ivg-t[aria-current="page"]{color:var(--ink);font-weight:800}
+.ivg-t[aria-current="page"]::after{transform:scaleX(1)}
+.ivg-t:focus-visible{outline:2px solid var(--hl);outline-offset:-2px;border-radius:8px}
+html.dark-theme .ivg{border-bottom-color:rgba(255,255,255,.09)}
+html.dark-theme .ivg-t{color:rgba(255,255,255,.5)}
+html.dark-theme .ivg-t[aria-current="page"]{color:#fff}
+html.dark-theme .ivg-t::after{background:var(--grad);box-shadow:0 0 12px rgba(var(--n-rgb),.6)}
+@media (prefers-reduced-motion:reduce){.ivg-t,.ivg-t::after{transition:none}}

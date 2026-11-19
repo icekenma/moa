@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1458";
+const UI_VERSION = "261119.1519";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -554,23 +554,40 @@ const MENU = {
   home: { title: "홈", subs: [["summary", "요약"], ["activity", "최근 활동"]] },
   ledger: { title: "가계부", subs: [["list", "내역"], ["calendar", "달력"], ["analysis", "분석"], ["budget", "예산"], ["fixed", "고정비"], ["cards", "카드"], ["auto", "자동"]] },
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
-  invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["auto", "자동매매"], ["market", "관심"], ["discover", "발견"], ["trade", "주문"], ["dca", "적립"], ["dividend", "배당"]], extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
+  // 투자는 성격이 같은 화면을 묶는다(AI 추천·자동매매 / 관심·발견·주문 / 적립·배당). 묶음 안은 화면 위 탭으로 오간다
+  invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "종목"], ["dca", "적립·배당"]],
+    groups: { ai: [["ai", "AI 추천"], ["auto", "자동매매"]], market: [["market", "관심"], ["discover", "발견"], ["trade", "주문"]], dca: [["dca", "적립"], ["dividend", "배당"]] }, extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
   // 설정: 자주 바꾸는 것부터. 한 번만 맞추면 되는 서버 연결은 뒤로.
   settings: { title: "설정", subs: [["all", "전체"], ["theme", "화면"], ["ai", "AI"], ["accounts", "계좌"], ["trading", "주문·알림"], ["security", "보안"], ["backup", "백업"], ["connect", "서버"], ["app", "앱 정보"]] },
 };
-const lastSub = {};
+const lastSub = {}, lastIn = {};
+// 묶음 안의 화면 → 묶음 이름(예: auto → ai)
+function groupOf(name, sub) {
+  const g = (MENU[name] || {}).groups || {};
+  return Object.keys(g).find((k) => g[k].some(([id]) => id === sub)) || null;
+}
 function resolveSub(h) {
   const m = MENU[h.name];
   if (!m) return h.sub;
-  const ok = m.subs.some(([id]) => id === h.sub) || (m.extra && m.extra[h.sub]);
+  const ok = m.subs.some(([id]) => id === h.sub) || (m.extra && m.extra[h.sub]) || groupOf(h.name, h.sub);
   return ok ? h.sub : lastSub[h.name] || m.subs[0][0];
 }
 function subnav(name, sub) {
   const m = MENU[name];
   if (!m) return "";
-  const on = (m.extra && m.extra[sub]) || sub;
+  const on = (m.extra && m.extra[sub]) || groupOf(name, sub) || sub;
+  // 묶음 탭은 그 묶음에서 마지막으로 본 화면으로 간다
   return `<nav class="subnav ${m.subs.length > 5 ? "many" : ""}" aria-label="${esc(m.title)} 세부 메뉴">${m.subs.map(([id, label]) =>
-    `<a href="#${name}/${id}" class="subtab" ${id === on ? 'aria-current="page"' : ""}>${esc(label)}</a>`).join("")}</nav>`;
+    `<a href="#${name}/${lastIn[name + ":" + id] || id}" class="subtab" ${id === on ? 'aria-current="page"' : ""}>${esc(label)}</a>`).join("")}</nav>`;
+}
+// 묶음 안의 화면 탭(화면 맨 위). 묶음이 아니면 빈 글
+function groupTabs(name, sub) {
+  const g = groupOf(name, sub);
+  if (!g) return "";
+  lastIn[name + ":" + g] = sub;
+  const items = MENU[name].groups[g];
+  return `<nav class="ivg" aria-label="${esc(MENU[name].subs.find(([id]) => id === g)[1])} 화면">${items.map(([id, label]) =>
+    `<a href="#${name}/${id}" class="ivg-t" ${id === sub ? 'aria-current="page"' : ""}>${esc(label)}</a>`).join("")}</nav>`;
 }
 
 // ---------- 라우터 ----------
@@ -1568,8 +1585,9 @@ pages.invest = {
     if (sub === "stock") return mkt.detail(h);
     if (sub === "aistat") return this.aiStat();
     investState.tab = ["home", "ai", "market", "discover", "account", "trade", "dca", "dividend", "auto"].includes(sub) ? sub : sub === "scalp" ? "ai" : "home";
+    const tabs = groupTabs("invest", investState.tab);
     setTop("투자", { menu: "invest", sub: investState.tab });
-    view.innerHTML = `<div id="iv" style="display:flex;flex-direction:column;gap:8.5px"></div>`;
+    view.innerHTML = `${tabs}<div id="iv" style="display:flex;flex-direction:column;gap:8.5px"></div>`;
     await this.fill();
   },
   async refresh(h) {

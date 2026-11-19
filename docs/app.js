@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1254";
+const UI_VERSION = "261119.1306";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1846,14 +1846,14 @@ pages.invest = {
         <div class="sec-title in">플랜별 성적</div>
         <div class="notice">${esc(L.note)}</div>
         <div class="lab-tbl" role="table" aria-label="플랜별 성적">
-          <div class="lab-tr lab-th" role="row"><span>플랜</span><span>거래</span><span>승률</span><span>비용 뺀 수익률</span></div>
+          <div class="lab-tr lab-th" role="row"><span>플랜</span><span>끝난 거래<small>지금 보유</small></span><span>승률</span><span>비용 뺀 수익률</span></div>
           ${L.runs.map((x, i) => `<button type="button" class="lab-tr" role="row" data-run="${x.id}">
             <span class="lab-nm"><i class="${x.closed >= 10 ? "" : "few"}">${x.closed >= 10 ? i + 1 : "·"}</i><span><b>${esc(x.label)}</b><small>${esc(x.desc)}</small></span></span>
-            <span>${x.closed}${x.open ? `<small>보유 ${x.open}</small>` : ""}</span>
+            <span>${x.closed}${x.open ? `<small>${x.open > 1 ? `${x.open}종목 ` : ""}${x.open_qty}주 · ${x.open_pct}%</small>` : ""}</span>
             <span>${x.win_rate == null ? "-" : `${x.win_rate}%`}</span>
             <span class="${tone(x.net_ret_pct)}">${pct(x.net_ret_pct, 2)}<small>비용 전 ${pct(x.ret_pct, 2)}</small></span></button>`).join("")}
         </div>
-        <div class="tiny">같은 추천을 받아 플랜만 다르게 사고판 결과예요. 순위는 거래가 10건 넘은 플랜끼리만 매겨요. 추천 비용은 한 번만 들고 플랜 수로 나눠 적어요. 플랜을 누르면 그 매매 기록이 열려요. 한 플랜에 30건이 쌓이고 비용을 빼고도 플러스면 실전 후보예요.</div>
+        <div class="tiny">같은 추천을 받아 플랜만 다르게 사고판 결과예요. 수익률은 플랜에 배정된 가상 돈 전체 대비라, 같은 종목이어도 많이 산 플랜일수록 크게 움직여요(보유 칸의 %가 쓸 돈 중 들어간 비중). 순위는 거래가 10건 넘은 플랜끼리만 매겨요. 추천 비용은 한 번만 들고 플랜 수로 나눠 적어요. 플랜을 누르면 그 매매 기록이 열려요. 한 플랜에 30건이 쌓이고 비용을 빼고도 플러스면 실전 후보예요.</div>
         ${L.status === "ended" ? "" : `<div class="grid2"><button type="button" class="btn" data-labctl="${L.id}:${L.status === "paused" ? "resume" : "pause"}">${L.status === "paused" ? "다시 시작" : "새 매수 멈춤"}</button>
           <button type="button" class="btn" data-labctl="${L.id}:end">실험 끝내기</button></div>`}
       </section>`;

@@ -2105,7 +2105,8 @@ class AutoTrade:
             L["runs"].append({"id": r["id"], "variant": r["variant"], "label": label, "desc": desc, "status": r["status"], "equity": sm["money"]["equity"],
                               "ret_pct": sm["money"]["ret_pct"], "net_ret_pct": sm["money"]["net_ret_pct"], "ai_cost": sm["money"]["ai_cost"], "ai_usd": sm["money"]["ai_usd"],
                               "closed": a["n"], "wins": int(a["w"] or 0), "win_rate": round(a["w"] / a["n"] * 100) if a["n"] else None,
-                              "avg_pct": round(a["avg"], 2) if a["n"] else None, "buys": buys, "open": sm["open"], "enough": a["n"] >= READY_N})
+                              "avg_pct": round(a["avg"], 2) if a["n"] else None, "buys": buys, "open": sm["open"], "enough": a["n"] >= READY_N,
+                              "open_qty": sum(t["qty"] for t in self._open(r["id"])), "open_pct": round(sm["money"]["open_cost"] / r["budget"] * 100, 1) if r["budget"] else 0})
         labs = []
         for L in sorted(out.values(), key=lambda x: -x["id"]):
             L["runs"].sort(key=lambda x: (-(x["closed"] >= 10), -(x["closed"] > 0), -x["net_ret_pct"]))   # 10건 넘은 플랜끼리 먼저 겨룬다

@@ -1159,6 +1159,8 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     assert lp["005930"]["bought"] == len(g["plans"]) and any(k["why"] == "AI가 관망 권함" for k in lp["005930"]["skips"])
     usd = [json.loads(r["data"])["usd"] for r in at.rt.db.q("SELECT data FROM at_log WHERE kind='cycle' AND data IS NOT NULL AND run_id!=?", (solo,))]
     assert len(usd) == 10 and all(u == 0.09 for u in usd)                  # 비용은 똑같이 나눠 적는다
+    rows = {x["variant"]: x for x in B["runs"]}
+    assert rows["base"]["open_qty"] == at._open(ids["base"])[0]["qty"] and rows["watch_full"]["open_pct"] > rows["base"]["open_pct"] > 0 and rows["strict"]["open_qty"] == 0
     # 다음 추천도 묶음 전체에서 한 번: 한 종목 집중은 자리가 없어 건너뛰고, 나머지는 각자 판단
     at.rt.db.x("UPDATE at_runs SET last_cycle=? WHERE lab_id=?", (time.time() - 130 * 60, lab))
     at.tick(force=True)

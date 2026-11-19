@@ -2500,3 +2500,6 @@ html:not(.dark-theme) .bot-hold span{background:rgba(90,80,200,.08)}
 .lab-why ul{margin:0;padding-left:15px;display:flex;flex-direction:column;gap:2px}
 .lab-why.risk b{color:var(--down)}
 .bot-note.strong{color:var(--bot-ink)}
+
+/* v4.60 성적표: 보유 수량·비중을 보여 주려고 거래 칸을 넓힌다 */
+.lab-tr{grid-template-columns:minmax(0,1fr) 62px 36px 82px}

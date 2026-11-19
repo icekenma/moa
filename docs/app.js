@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261120.0412";
+const UI_VERSION = "261120.0500";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -3592,6 +3592,37 @@ pages.invest = {
     if (!D.uni || force) D.uni = await GET("/api/div/universe" + (force ? "?refresh=1" : ""));
     return D.uni;
   },
+  // 지금 배당률이 지난 5년 월별 배당률 가운데 어디쯤인지(높을수록 주가가 싼 편)
+  dvBandTag(b) {
+    if (!b) return `<span class="tiny">-</span>`;
+    const c = b.pct >= 80 ? "hi" : b.pct <= 20 ? "lo" : "";
+    return `<span class="dv-bt ${c}">${b.pct >= 80 ? "5년 중 높음" : b.pct <= 20 ? "5년 중 낮음" : `5년 중 ${b.pct}%`}</span>`;
+  },
+  dvBandHtml(b) {
+    if (!b) return "";
+    const X = (v) => (b.hi > b.lo ? ((v - b.lo) / (b.hi - b.lo)) * 100 : 50), S = b.series || [], W = 300, H = 46;
+    const mn = Math.min(...S, b.cur), mx = Math.max(...S, b.cur), Y = (v) => (mx > mn ? H - 4 - ((v - mn) / (mx - mn)) * (H - 8) : H / 2);
+    const path = S.map((v, k) => `${k ? "L" : "M"}${(k / Math.max(1, S.length - 1) * W).toFixed(1)} ${Y(v).toFixed(1)}`).join(" ");
+    const say = b.pct >= 80 ? "지난 5년 중 배당률이 높은 편이에요. 주가가 싸졌다는 뜻일 수 있지만, 실적이 나빠 주가가 내린 것인지도 함께 보세요."
+      : b.pct <= 20 ? "지난 5년 중 배당률이 낮은 편이에요. 주가가 많이 올라 지금 사면 받는 배당이 적어요." : "지난 5년 범위의 가운데쯤이에요.";
+    return `<h3 class="lr-h">배당률 위치(${esc(b.from.replace("-", "/"))}부터 월말 기준)</h3>
+      <div class="dv-band"><div class="dv-bb" role="img" aria-label="5년 최저 ${b.lo}%, 가운데 ${b.med}%, 최고 ${b.hi}%, 지금 ${b.cur}%">
+          <span class="md" style="left:${X(b.med).toFixed(1)}%"></span><span class="me" style="left:${Math.max(0, Math.min(100, X(b.cur))).toFixed(1)}%"><b>지금 ${b.cur}%</b></span></div>
+        <div class="dv-bl"><span>최저 ${b.lo}%</span><span>가운데 ${b.med}%</span><span>최고 ${b.hi}%</span></div>
+        <svg class="dv-bs" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><path d="${path}"/><line x1="0" x2="${W}" y1="${Y(b.cur).toFixed(1)}" y2="${Y(b.cur).toFixed(1)}"/></svg>
+        <div class="tiny">${say}</div></div>`;
+  },
+  // 최근 배당 변화(하루 한 번 모을 때 새 배당이 나오면 직전과 비교해 적는다)
+  dvEvents(EV, n) {
+    if (!EV) return "";
+    const K = { raise: ["인상", "up"], cut: ["삭감", "down"], same: ["그대로", ""], first: ["첫 기록", ""] };
+    const rows = (EV.events || []).slice(0, n);
+    return `<section class="card dv-ev"><div class="card-head"><h2>최근 배당 변화</h2><span class="tiny">${EV.days ? `매일 아침 모아요 · ${EV.days}일째` : "매일 아침 8시 뒤에 모아요"}</span></div>
+      ${rows.length ? `<div class="list">${rows.map((e) => `<button type="button" class="item dv-evr" data-dv="${e.mkt}:${esc(e.sym)}">
+        <span class="main"><b>${esc(e.mkt === "us" ? e.sym : e.name || e.sym)}${e.held ? ` <span class="tag v">보유</span>` : ""}</b><span class="sub">배당락 ${esc(e.ex.slice(5).replace("-", "/"))} · 주당 ${e.mkt === "us" ? "$" + Number(e.amt).toFixed(3) : won(e.amt) + "원"}</span></span>
+        <span class="end"><b class="${(K[e.kind] || ["", ""])[1]}">${(K[e.kind] || [e.kind])[0]}</b><span class="tiny">${e.chg == null ? "" : pct(e.chg, 1)}</span></span></button>`).join("")}</div>`
+        : `<div class="tiny">아직 새로 나온 배당이 없어요. 배당이 나오면 직전보다 늘었는지 줄었는지 여기 적고, 보유 종목이 바뀌면 알려 드려요.</div>`}</section>`;
+  },
   dvFind(mkt, sym) { return ((this.dv.uni || {}).items || []).find((i) => i.mkt === mkt && i.sym === sym); },
   // 12개월 막대(지급 달력). rows: [{label, total, parts:[{c, v}], on}]
   dvStrip(rows, attr = "") {
@@ -3654,8 +3685,13 @@ pages.invest = {
         <span class="dv-sw ${col[r.sym] || ""}"></span>
         <span class="main"><b>${esc(r.name)}</b><span class="sub">${r.net ? `${esc(r.freq_name)} · 배당률 ${r.yield ?? "-"}%${r.yoc != null ? ` · 매수가 대비 ${r.yoc}%` : ""}` : r.error ? "배당 자료를 받지 못했어요" : "최근 1년 배당 없음"}</span>${r.net ? this.dvDots(r.months) : ""}</span>
         <span class="end"><b>${r.net ? won(r.net) + "원" : "-"}</b><span class="tiny">${r.net ? `월 ${won(r.net / 12)}원` : ""}</span></span></button>`).join("")}</div></section>
+      <div id="dvMineEv"></div>
       <div class="tiny" style="padding:0 3px">최근 1년 동안 실제로 지급된 주당 배당금 × 보유 수량으로 계산했어요(국내 15.4%, 미국 15% 세금 차감, 환율 ${won(M.fx)}원). 앞으로의 배당은 달라질 수 있어요.</div>`;
     countUp(el);
+    GET("/api/div/events").then((EV) => {
+      const h = { ...EV, events: (EV.events || []).filter((x) => x.held) };
+      if ($("#dvMineEv") && h.events.length) $("#dvMineEv").innerHTML = this.dvEvents(h, 5);
+    }).catch(() => {});
     el.onclick = (e) => {
       if (e.target.closest("#dvGoal")) return this.dvGoalSheet(M.goal);
       const c = e.target.closest("#dvCal [data-mi]");
@@ -3699,6 +3735,7 @@ pages.invest = {
         <div><span>1년 주당 배당</span><b>${cur(i.ttm)}</b></div>
         <div><span>5년 배당 성장</span><b class="${tone(i.growth5)}">${i.growth5 == null ? (i.growth3 == null ? "-" : pct(i.growth3, 1)) : pct(i.growth5, 1)}</b></div>
         <div><span>안 줄인 햇수</span><b>${i.streak ? i.streak + "년" : "-"}</b></div></div>
+      ${this.dvBandHtml(i.band)}
       <h3 class="lr-h">해마다 받은 주당 배당</h3>
       <div class="dv-years">${ys.map((y) => `<div class="${y.y === thisY ? "now" : ""}"><em>${cur(y.amt)}</em><span><i style="height:${Math.max(4, y.amt / mx * 100)}%"></i></span><b>${String(y.y).slice(2)}년${y.y === thisY ? "<small>진행 중</small>" : ""}</b></div>`).join("") || `<div class="tiny">기록이 없어요</div>`}</div>
       <h3 class="lr-h">지급월(추정)</h3>
@@ -4008,18 +4045,22 @@ pages.invest = {
     const F = [["all", "전체"], ["month", "월배당"], ["us_etf", "미국 ETF"], ["cc", "커버드콜"], ["us_stock", "미국 주식"], ["kr_etf", "국내 ETF"], ["kr_stock", "국내 주식·리츠"]];
     const pass = (i) => D.f === "all" || (D.f === "month" ? i.freq === 12 : D.f === "cc" ? i.cat.endsWith("_cc") : D.f === "us_etf" ? ["us_etf", "us_bond"].includes(i.cat)
       : D.f === "us_stock" ? ["us_stock", "us_month"].includes(i.cat) : D.f === "kr_stock" ? ["kr_stock", "kr_reit"].includes(i.cat) : i.cat === D.f);
-    const key = { yield: (i) => i.yield ?? -1, growth: (i) => (i.growth5 ?? i.growth3 ?? -99), streak: (i) => i.streak || 0 }[D.sort];
+    const key = { yield: (i) => i.yield ?? -1, growth: (i) => (i.growth5 ?? i.growth3 ?? -99), streak: (i) => i.streak || 0, band: (i) => (i.band ? i.band.pct : -1) }[D.sort];
+    let EV = null;
+    try { EV = await GET("/api/div/events"); } catch (e) { EV = null; }
+    if (!$("#dvBody") || D.tab !== "list") return;
     const rows = U.items.filter(pass).sort((a, b) => key(b) - key(a));
     el.innerHTML = `
       <section class="card">
         <div class="dv-sets">${F.map(([k, t]) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${D.f === k}">${t}</button>`).join("")}</div>
-        ${seg("배당정렬", [["yield", "배당률 높은 순"], ["growth", "배당 성장 순"], ["streak", "안 줄인 햇수"]], D.sort, "on-card")}
+        ${seg("배당정렬", [["yield", "배당률"], ["band", "5년 대비 높은"], ["growth", "배당 성장"], ["streak", "안 줄인 햇수"]], D.sort, "on-card")}
         ${U.failed ? `<div class="tiny">${U.failed}개 종목은 배당 자료를 받지 못했어요. <button type="button" class="lnk" id="dvReload">다시 받기</button></div>` : ""}
       </section>
+      ${this.dvEvents(EV, 6)}
       <section class="card tight"><div class="list">${rows.map((i) => `<button type="button" class="item dv-row" data-dv="${i.mkt}:${esc(i.sym)}">
         <span class="main"><b>${esc(this.dvT(i))} ${i.custom ? `<span class="tag y">직접</span>` : ""}</b>
           <span class="sub">${esc(this.dvS(i))}${i.error ? (i.pending ? "자료를 받는 중" : "배당 자료 없음") : `${esc(i.freq_name)} · ${this.dvPays(i.months)}${i.streak >= 3 ? ` · ${i.streak}년째 유지·증가` : ""}`}</span>${i.error ? "" : this.dvDots(i.months)}</span>
-        <span class="end"><b>${i.yield == null ? "-" : i.yield + "%"}</b><span class="tiny ${tone(i.growth5 ?? i.growth3)}">${(i.growth5 ?? i.growth3) == null ? "" : "성장 " + pct(i.growth5 ?? i.growth3, 1)}</span></span></button>`).join("") || `<div class="empty">조건에 맞는 종목이 없어요</div>`}</div></section>
+        <span class="end"><b>${i.yield == null ? "-" : i.yield + "%"}</b>${D.sort === "band" || (i.band && (i.band.pct >= 80 || i.band.pct <= 20)) ? this.dvBandTag(i.band) : `<span class="tiny ${tone(i.growth5 ?? i.growth3)}">${(i.growth5 ?? i.growth3) == null ? "" : "성장 " + pct(i.growth5 ?? i.growth3, 1)}</span>`}</span></button>`).join("") || `<div class="empty">조건에 맞는 종목이 없어요</div>`}</div></section>
       <section class="card">
         <h2>다른 종목 넣기</h2>
         ${seg("배당시장", [["us", "미국"], ["kr", "국내"]], D.addM || "us", "on-card")}

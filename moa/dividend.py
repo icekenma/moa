@@ -184,6 +184,9 @@ def analyze(divs, price, mkt, kind, today=None):
             out["months"][pay_date(mkt, kind, d).month - 1] += a / ttm
         out["months"] = [round(x, 4) for x in out["months"]]
     out["last"] = {"date": divs[-1][0].isoformat(), "amt": divs[-1][1], "pay": pay_date(mkt, kind, divs[-1][0]).isoformat()}
+    if len(divs) >= 2:      # 직전 지급: 월배당은 앞 3번 평균(달마다 출렁여서), 그 밖에는 바로 앞 지급과 비교한다
+        prev = [a for _, a in divs[-4:-1]] if out["freq"] == 12 else [divs[-2][1]]
+        out["prev"] = {"date": divs[-2][0].isoformat(), "amt": round(sum(prev) / len(prev), 6), "n": len(prev)}
     if n and len(divs) >= 2:  # 다음 배당락 예상: 최근 간격만큼 뒤
         gap = max(25, min(370, round(365 / max(1, out["freq"] or n))))
         nx = divs[-1][0] + timedelta(days=gap)
@@ -286,6 +289,38 @@ def _run(assets, amount, monthly_add, years, reinvest, price_growth, growth_scal
                   monthly=round(yr["net"] / 12), yoc=round(yr["net"] / invested * 100, 2) if invested else 0)
         yearly.append(yr)
     return months, yearly
+
+
+def yield_band(divs, bars, price, today=None, months=60):
+    """지난 5년 월말 주가와 그때까지 1년 배당으로 '그 달의 배당률'을 만들고, 지금 배당률이 그 안에서 어디쯤인지.
+    bars: [(date, 종가)] 오름차순. pct = 지금보다 배당률이 낮았던 달의 비율(높을수록 지금 배당률이 높은 편 = 주가가 싼 편)."""
+    today = today or date.today()
+    divs = sorted((d, float(a)) for d, a in divs if a and a > 0)
+    ys = []
+    for d, c in bars[-months:]:
+        if not c:
+            continue
+        t = sum(a for x, a in divs if d - timedelta(days=365) < x <= d)
+        if t:
+            ys.append((d, round(t / c * 100, 2)))
+    if len(ys) < 24:
+        return None
+    t_now = sum(a for x, a in divs if x > today - timedelta(days=365))
+    cur = round(t_now / price * 100, 2) if price and t_now else None
+    if cur is None:
+        return None
+    vs = sorted(v for _, v in ys)
+    return {"cur": cur, "lo": vs[0], "hi": vs[-1], "med": vs[len(vs) // 2], "n": len(vs),
+            "pct": round(sum(1 for v in vs if v < cur) / len(vs) * 100), "series": [v for _, v in ys], "from": ys[0][0].isoformat()[:7]}
+
+
+def change_kind(new, prev, freq):
+    """새 배당이 직전보다 얼마나 바뀌었나. 월배당(커버드콜 등)은 달마다 출렁여 기준을 넓게 본다."""
+    if not prev:
+        return "first", None
+    chg = round((new / prev - 1) * 100, 1)
+    th = 15 if freq == 12 else 3
+    return ("raise" if chg >= th else "cut" if chg <= -th else "same"), chg
 
 
 def health_fee(gross_year, kind):
@@ -553,7 +588,90 @@ class Dividend:
         rt.db.x("CREATE TABLE IF NOT EXISTS div_cache(mkt TEXT NOT NULL, sym TEXT NOT NULL, data TEXT NOT NULL, at REAL NOT NULL, PRIMARY KEY(mkt, sym))")
         rt.db.x("""CREATE TABLE IF NOT EXISTS div_plans(id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, model TEXT, usd REAL,
             params TEXT, plan TEXT, text TEXT)""")
+        rt.db.x("""CREATE TABLE IF NOT EXISTS div_daily(day TEXT NOT NULL, mkt TEXT NOT NULL, sym TEXT NOT NULL, price REAL, ttm REAL, yld REAL,
+            pct INTEGER, PRIMARY KEY(day, mkt, sym))""")
+        rt.db.x("""CREATE TABLE IF NOT EXISTS div_events(id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, mkt TEXT NOT NULL, sym TEXT NOT NULL,
+            name TEXT, ex TEXT NOT NULL, amt REAL, prev REAL, chg REAL, kind TEXT, held INTEGER NOT NULL DEFAULT 0, UNIQUE(mkt, sym, ex))""")
         self._mem = {}
+        self._collecting = False
+
+    # ---------- 매일 모으기 ----------
+    def daily_due(self, now=None):
+        """하루 한 번(아침 8시 뒤: 미국장까지 끝난 뒤) 후보·직접 넣은 종목·보유 종목의 배당 자료를 새로 받아 기록한다. 뒤에서 돈다."""
+        now = now or datetime.now()
+        day = now.strftime("%Y-%m-%d")
+        if now.strftime("%H:%M") < "08:00" or self._collecting or self.rt.db.get_setting("div_daily_day") == day:
+            return False
+        self._collecting = True
+        import threading
+
+        def go():
+            try:
+                self.collect(day)
+            except Exception as e:
+                self.rt.db.log("system", "error", f"배당 자료 매일 모으기 오류: {type(e).__name__}: {e}", datetime.now().isoformat(timespec="seconds"))
+            finally:
+                self._collecting = False
+        threading.Thread(target=go, daemon=True).start()
+        return True
+
+    def _held(self):
+        try:
+            acc = self.rt.account
+            if not acc.configured():
+                return {}
+            snap = acc.snapshot()
+            return {("us" if h.get("market") == "us" else "kr", str(h["code"]).strip().upper() if h.get("market") == "us" else str(h["code"])): h.get("name") or ""
+                    for h in (snap.get("holdings") or []) if h.get("qty")}
+        except Exception:
+            return {}
+
+    def collect(self, day=None):
+        """모든 대상 종목을 새로 받아(배당률·배당률 위치) 그날 기록을 남기고, 새 배당이 나왔으면 직전과 비교해 변화(인상·삭감)를 적는다.
+        보유 종목의 인상·삭감은 알림으로 보낸다."""
+        day = day or date.today().isoformat()
+        held = self._held()
+        pairs = list(dict.fromkeys([(u[0], u[1]) for u in UNIVERSE] + [(c["mkt"], c["sym"]) for c in self.custom()] + list(held)))
+        old = {}
+        for m, sy in pairs:
+            r = self.rt.db.one("SELECT data FROM div_cache WHERE mkt=? AND sym=?", (m, sy))
+            if r:
+                old[(m, sy)] = json.loads(r["data"])
+        items = self.many(pairs, force=True, deadline=180)
+        n, ev = 0, []
+        for i in items:
+            if i.get("error"):
+                continue
+            key, b = (i["mkt"], i["sym"]), i.get("band") or {}
+            self.rt.db.x("INSERT OR REPLACE INTO div_daily(day,mkt,sym,price,ttm,yld,pct) VALUES(?,?,?,?,?,?,?)",
+                         (day, i["mkt"], i["sym"], i.get("price"), i.get("ttm"), i.get("yield"), b.get("pct")))
+            n += 1
+            o, last = old.get(key), i.get("last")
+            if not o or o.get("error") or not last or (o.get("last") or {}).get("date", "") >= last["date"]:
+                continue                                  # 처음 받는 종목은 비교할 게 없다(알림 폭탄 방지)
+            kind, chg = change_kind(last["amt"], (i.get("prev") or {}).get("amt"), i.get("freq"))
+            if self.rt.db.one("SELECT 1 FROM div_events WHERE mkt=? AND sym=? AND ex=?", (i["mkt"], i["sym"], last["date"])):
+                continue
+            self.rt.db.x("INSERT OR IGNORE INTO div_events(ts,mkt,sym,name,ex,amt,prev,chg,kind,held) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                               (datetime.now().isoformat(timespec="seconds"), i["mkt"], i["sym"], i["name"], last["date"], last["amt"],
+                                (i.get("prev") or {}).get("amt"), chg, kind, 1 if key in held else 0))
+            ev.append((i, kind, chg, key in held))
+        self.rt.db.set_setting("div_daily_day", day)
+        for i, kind, chg, h in ev:
+            if h and kind in ("raise", "cut"):
+                self.rt.notify(f"[moa 배당] {i['name']} 배당 {'인상' if kind == 'raise' else '삭감'} {chg:+.1f}% (배당락 {i['last']['date']})")
+        return {"day": day, "saved": n, "events": len(ev), "total": len(pairs)}
+
+    def events(self, days=90):
+        since = (date.today() - timedelta(days=days)).isoformat()
+        rows = self.rt.db.q("SELECT ts, mkt, sym, name, ex, amt, prev, chg, kind, held FROM div_events WHERE ex>=? ORDER BY ex DESC, id DESC LIMIT 80", (since,))
+        last = self.rt.db.get_setting("div_daily_day")
+        nd = self.rt.db.one("SELECT COUNT(DISTINCT day) n FROM div_daily")["n"]
+        return {"events": rows, "last_day": last, "days": nd}
+
+    def history(self, mkt, sym, days=400):
+        since = (date.today() - timedelta(days=days)).isoformat()
+        return self.rt.db.q("SELECT day, price, ttm, yld, pct FROM div_daily WHERE mkt=? AND sym=? AND day>=? ORDER BY day", (mkt, sym, since))
 
     # ---------- 종목 하나 ----------
     def _fetch(self, mkt, sym):
@@ -574,6 +692,9 @@ class Dividend:
             closes = [c for c in (((res.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []) if c]
             price = closes[-1] if closes else None
         out = analyze(divs, price, mkt, kind)
+        q = ((res.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
+        bars = [(datetime.fromtimestamp(int(t) + off, timezone.utc).date(), c) for t, c in zip(res.get("timestamp") or [], q) if c]
+        out["band"] = yield_band(divs, bars, price)
         out.update(price=price, currency=meta.get("currency") or ("USD" if mkt == "us" else "KRW"), kind=kind,
                    yname=meta.get("shortName") or meta.get("longName") or "")
         return out

@@ -3296,3 +3296,19 @@ html.gm-on .fl-t small,html.gm-on .fl-g small,html.gm-on .fl-k,html.gm-on .fl-fa
 html.gm-on .fl-go{background:var(--g-slot);border-color:var(--g-edge);color:var(--g-ink)}
 html.gm-on .fl-go b{font-family:var(--g-font);font-weight:400}
 .fl-meter small{font-size:10px;color:var(--ink3)}
+
+/* ===== v4.80 배당: 배당률 위치(지난 5년) · 최근 배당 변화 ===== */
+.dv-bt{font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:99px;background:var(--sub-bg);color:var(--ink2);white-space:nowrap}
+.dv-bt.hi{background:color-mix(in srgb,var(--in) 18%,transparent);color:var(--in)}
+.dv-bt.lo{background:color-mix(in srgb,var(--up) 14%,transparent);color:var(--up)}
+.dv-band{display:grid;gap:6px;margin-bottom:6px}
+.dv-bb{position:relative;height:12px;margin:22px 6px 0;border-radius:6px;background:linear-gradient(90deg,color-mix(in srgb,var(--up) 30%,var(--sub-bg)),var(--sub-bg) 50%,color-mix(in srgb,var(--in) 35%,var(--sub-bg)))}
+.dv-bb .md{position:absolute;top:-3px;bottom:-3px;width:2px;margin-left:-1px;background:var(--ink3)}
+.dv-bb .me{position:absolute;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;background:var(--ink);border:3px solid var(--card);box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.dv-bb .me b{position:absolute;bottom:17px;left:50%;transform:translateX(-50%);white-space:nowrap;font-size:11.5px}
+.dv-bl{display:flex;justify-content:space-between;font-size:10.5px;color:var(--ink3)}
+.dv-bs{width:100%;height:46px}
+.dv-bs path{fill:none;stroke:var(--ink2);stroke-width:1.6;vector-effect:non-scaling-stroke}
+.dv-bs line{stroke:var(--ink3);stroke-dasharray:3 3;vector-effect:non-scaling-stroke}
+.dv-ev .end b.up{color:var(--up)}
+.dv-ev .end b.down{color:var(--down)}

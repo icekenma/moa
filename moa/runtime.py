@@ -154,6 +154,10 @@ class Runtime:
                             self.backup.auto_due()  # 하루 한 번 자동 백업
                         except Exception as e:
                             self.db.log("system", "error", f"자동 백업 오류: {e}", datetime.now().isoformat(timespec="seconds"))
+                        try:
+                            self.dividend.daily_due()  # 하루 한 번 배당 자료 모으기(뒤에서)
+                        except Exception as e:
+                            self.db.log("system", "error", f"배당 자료 모으기 오류: {e}", datetime.now().isoformat(timespec="seconds"))
                         self.dca.run_due(datetime.now())
                         if datetime.now().strftime("%H:%M") >= "15:40":
                             self.dca.snapshot(date.today())

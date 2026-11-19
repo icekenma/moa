@@ -2682,3 +2682,55 @@ def test_payoff_goal_tracks_pace_from_logged_repayments():
         assert P.set_goal({"clear": True})["goal"] is None
     finally:
         rt.stop()
+
+
+def test_dividend_yield_band_and_change():
+    import moa.dividend as DV
+    from datetime import date, timedelta
+    today = date(2026, 11, 20)
+    divs = [(today - timedelta(days=91 * k + 10), 1.0) for k in range(24)]           # 분기 1달러(1년 4달러)
+    bars = [(today - timedelta(days=30 * k), 100.0 if k % 2 else 80.0) for k in range(60, 0, -1)]   # 배당률 4%·5% 반반
+    b = DV.yield_band(divs, bars, 100.0, today)
+    assert b["lo"] == 4.0 and b["hi"] == 5.0 and b["cur"] == 4.0 and b["pct"] == 0 and b["n"] >= 24
+    assert DV.yield_band(divs, bars, 70.0, today)["pct"] == 100                          # 주가가 내려 배당률이 5년 중 가장 높음
+    assert DV.yield_band(divs, bars[:10], 100.0, today) is None                          # 2년치가 안 되면 내지 않음
+    assert DV.change_kind(1.1, 1.0, 4) == ("raise", 10.0) and DV.change_kind(0.9, 1.0, 4)[0] == "cut"
+    assert DV.change_kind(1.1, 1.0, 12)[0] == "same" and DV.change_kind(0.8, 1.0, 12)[0] == "cut"   # 월배당은 넓게
+    a = DV.analyze([(today - timedelta(days=30 * k), 1.0 + (k == 0) * 0.2) for k in range(14)], 100, "us", "ETF", today)
+    assert a["prev"]["amt"] == 1.0 and a["prev"]["n"] == 3 and a["last"]["amt"] == 1.2
+
+
+def test_dividend_daily_collect_records_and_detects_changes(rt, monkeypatch):
+    """하루 한 번: 대상 종목을 새로 받아 그날 배당률을 남기고, 새 배당이 나오면 직전과 비교해 적는다(보유 종목 인상·삭감은 알림)."""
+    from datetime import date, datetime, timedelta
+    _div_rt(rt, monkeypatch)
+    dv = rt.dividend
+    sent = []
+    monkeypatch.setattr(rt, "notify", lambda m: sent.append(m))
+    monkeypatch.setattr(dv, "_held", lambda: {("us", "SCHD"): "SCHD"})
+    r = dv.collect("2026-11-19")
+    assert r["saved"] >= 4 and r["events"] == 0                                         # 처음엔 비교할 게 없다
+    assert dv.history("us", "SCHD") or True
+    assert rt.db.one("SELECT yld FROM div_daily WHERE day='2026-11-19' AND sym='SCHD'")["yld"] == 3.75
+    # SCHD 새 배당(직전 0.75 → 0.69: 삭감)
+    import tests.test_core as T
+    new = (date.today() + timedelta(days=1)).isoformat()
+    old = rt.market._yh_chart
+    data = T._yh_div(80.0, [(new, 0.69)] + [((date.today() - timedelta(days=10 + 91 * k)).isoformat(), 0.75) for k in range(20)])
+
+    def chart(sym, *a, **k):
+        return data if sym == "SCHD" else old(sym, *a, **k)
+    monkeypatch.setattr(rt.market, "_yh_chart", chart)
+    r = dv.collect("2026-11-20")
+    E = dv.events(days=400)
+    ev = next(e for e in E["events"] if e["sym"] == "SCHD")
+    assert r["events"] == 1 and ev["kind"] == "cut" and ev["chg"] == -8.0 and ev["held"] == 1 and E["days"] == 2
+    assert sent and "삭감" in sent[0]
+    assert dv.collect("2026-11-21")["events"] == 0                                      # 같은 배당은 한 번만
+    # 하루 한 번, 아침 8시 뒤
+    rt.db.set_setting("div_daily_day", "2026-11-22")
+    monkeypatch.setattr(dv, "collect", lambda day=None: None)
+    assert not dv.daily_due(datetime(2026, 11, 23, 7, 30)) and not dv.daily_due(datetime(2026, 11, 22, 9, 0))
+    assert dv.daily_due(datetime(2026, 11, 23, 8, 5))
+    c = create_app(rt).test_client()
+    assert c.get("/api/div/events").status_code == 200 and "rows" in c.get("/api/div/history/us/SCHD").get_json()

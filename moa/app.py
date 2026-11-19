@@ -1153,6 +1153,14 @@ def create_app(rt, updater=None):
         rt.dividend.remove_custom(mkt, sym)
         return jsonify(ok=True)
 
+    @app.get("/api/div/events")
+    def div_events():
+        return jsonify(rt.dividend.events())
+
+    @app.get("/api/div/history/<mkt>/<sym>")
+    def div_history(mkt, sym):
+        return jsonify(rows=rt.dividend.history("us" if mkt == "us" else "kr", sym))
+
     @app.get("/api/div/mine")
     def div_mine():
         return jsonify(rt.dividend.mine())

@@ -2458,3 +2458,40 @@ html:not(.dark-theme) .kr{--mk:#D9661A;--mk2:#E0457A}html:not(.dark-theme) .us{-
 .card.lab.kr .lab-tr:nth-child(2) .lab-nm i:not(.few),.card.lab.us .lab-tr:nth-child(2) .lab-nm i:not(.few){background:var(--mk);color:#1A1024}
 .bot-kpi.k4{grid-template-columns:repeat(4,minmax(0,1fr))}
 .bot-kpi dd small{display:block;font-size:9px;font-weight:600;color:var(--bot-ink3)}
+
+/* ---------- v4.56 실험 장부: 보유 종목·최근 추천·판 기록 ---------- */
+.sec-title.in{padding:4px 0 0}
+.empty.sm{padding:10px 0;font-size:11.5px}
+.lab-pos{display:flex;flex-direction:column;gap:6px}
+.lab-pos details{border-radius:12px;background:var(--bg);overflow:hidden}
+html.dark-theme .lab-pos details{background:rgba(255,255,255,.06)}
+.lab-pos summary{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;cursor:pointer;list-style:none}
+.lab-pos summary::-webkit-details-marker{display:none}
+.lab-pos summary::after{content:"›";flex:0 0 auto;color:var(--ink3);font-size:15px;transition:transform .15s}
+.lab-pos details[open] summary::after{transform:rotate(90deg)}
+.lab-pn,.lab-pp{display:flex;flex-direction:column;gap:2px;min-width:0}
+.lab-pn{flex:1}.lab-pp{align-items:flex-end;flex:0 0 auto}
+.lab-pn b{font-size:13px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lab-pp b{font-size:13.5px;font-weight:800;font-variant-numeric:tabular-nums}
+.lab-pos small,.lab-last small{font-size:10px;font-weight:600;color:var(--ink3);font-variant-numeric:tabular-nums}
+.lab-pd{display:flex;flex-direction:column;gap:6px;padding:0 12px 11px}
+.lab-sell{font-size:11px;line-height:1.55;color:var(--ink2);padding:8px 10px;border-radius:9px;background:color-mix(in srgb,var(--ink) 6%,transparent)}
+.lab-sell b{color:var(--ink);margin-right:4px}
+.lab-pl{all:unset;box-sizing:border-box;display:grid;grid-template-columns:minmax(0,1fr) auto 52px;gap:8px;align-items:center;padding:7px 0;border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent);font-size:11.5px;cursor:pointer}
+.lab-pl>span:first-child{display:flex;flex-direction:column;gap:1px;min-width:0}
+.lab-pl>span:first-child b{font-weight:800}
+.lab-pl>span:last-child{text-align:right;font-weight:800;font-variant-numeric:tabular-nums}
+.lab-ts{display:flex;flex-direction:column;gap:1px;align-items:flex-end}
+.lab-ts em{font-style:normal;font-size:10.5px;font-weight:700;font-variant-numeric:tabular-nums}
+.lab-ts em small{margin-left:3px}
+.lab-last{display:flex;flex-direction:column}
+.lab-last>div{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent);font-size:12px}
+.lab-last>div:first-child{border-top:0}
+.lab-last>div>span{display:flex;flex-direction:column;gap:2px;min-width:0}
+.lab-last>div>span:last-child{align-items:flex-end;text-align:right;flex:0 0 auto;max-width:56%}
+.lab-last b{font-weight:800}
+.lab .up{color:var(--up)}.lab .down{color:var(--down)}
+.bot-hold{display:flex;flex-wrap:wrap;gap:4px 6px}
+.bot-hold span{padding:3px 8px;border-radius:7px;background:rgba(255,255,255,.07);font-size:10.5px;font-weight:700;color:var(--bot-ink2)}
+.bot-hold b{font-variant-numeric:tabular-nums}.bot-hold b.up{color:#FF8A80}.bot-hold b.down{color:#8FB2FF}
+html:not(.dark-theme) .bot-hold span{background:rgba(90,80,200,.08)}

@@ -1986,6 +1986,61 @@ class AutoTrade:
                 pass
         return self.labs()
 
+    def _lab_book(self, L):
+        """실험 묶음의 장부: 지금 들고 있는 종목(같은 종목은 한 줄로, 플랜별 내역 포함)과 최근 판 기록."""
+        ids = [x["id"] for x in L["runs"]]
+        lab = {x["id"]: x["label"] for x in L["runs"]}
+        q = ",".join("?" * len(ids))
+        hold = {"day": "오늘 장 마감 전에 모두 팔아요", "swing": "늦어도 5거래일 안에 팔아요", "month": "늦어도 20거래일 안에 팔아요"}[L["style"]]
+        pos = {}
+        for t in self.rt.db.q(f"SELECT * FROM at_trades WHERE run_id IN ({q}) AND status='open' ORDER BY entry_ts", ids):
+            last = t["last"] or t["entry_price"]
+            g = pos.setdefault(t["sym"], {"sym": t["sym"], "name": t["name"], "last": last, "first_ts": t["entry_ts"], "qty": 0, "cost": 0.0, "value": 0.0, "plans": [], "why": t.get("why") or ""})
+            g["qty"] += t["qty"]; g["cost"] += t["qty"] * t["entry_price"]; g["value"] += t["qty"] * last; g["last"] = last
+            g["plans"].append({"run": t["run_id"], "label": lab.get(t["run_id"], ""), "ts": t["entry_ts"], "qty": t["qty"], "price": t["entry_price"],
+                               "pct": round((last / t["entry_price"] - 1) * 100, 2), "target": round(t["entry_price"] * (1 + t["target_pct"] / 100), 2),
+                               "stop": round(t["entry_price"] * (1 - t["stop_pct"] / 100), 2), "target_pct": t["target_pct"], "stop_pct": t["stop_pct"],
+                               "trail_pct": t["trail_pct"], "exit_by": t["exit_by"], "exit_date": t["exit_date"]})
+        out = []
+        for g in pos.values():
+            g["avg"] = round(g["cost"] / g["qty"], 2)
+            g["pnl"] = round(g["value"] - g["cost"], 2)
+            g["pct"] = round((g["value"] / g["cost"] - 1) * 100, 2) if g["cost"] else 0
+            g["hold"] = hold
+            out.append(g)
+        out.sort(key=lambda g: -g["value"])
+        sold = [{"run": t["run_id"], "label": lab.get(t["run_id"], ""), "sym": t["sym"], "name": t["name"], "qty": t["qty"], "entry_ts": t["entry_ts"], "entry": t["entry_price"],
+                 "exit_ts": t["exit_ts"], "exit": t["exit_price"], "reason": t["reason"], "pnl": t["pnl"], "pct": t["pnl_pct"]}
+                for t in self.rt.db.q(f"SELECT * FROM at_trades WHERE run_id IN ({q}) AND status='closed' ORDER BY exit_ts DESC LIMIT 20", ids)]
+        return out, sold
+
+    def _lab_last(self, L):
+        """가장 최근 추천에서 종목마다 몇 개 플랜이 샀고, 나머지는 왜 건너뛰었는지."""
+        ids = [x["id"] for x in L["runs"]]
+        q = ",".join("?" * len(ids))
+        rows = self.rt.db.q(f"SELECT ts, data FROM at_log WHERE run_id IN ({q}) AND kind='cycle' AND data IS NOT NULL ORDER BY id DESC LIMIT {len(ids) * 2}", ids)
+        if not rows:
+            return None
+        first = json.loads(rows[0]["data"])
+        pid = first.get("pick_id")
+        out = {"ts": rows[0]["ts"], "stance": first.get("stance"), "view": first.get("view"), "picks": {}}
+        for r in rows:
+            d = json.loads(r["data"])
+            if d.get("pick_id") != pid:
+                continue
+            dec = d.get("decisions")
+            if dec is None:
+                dec = [dict(x, act="skip", code="auto" if x.get("auto") else "watch") for x in d.get("picks") or []]
+            for x in dec:
+                g = out["picks"].setdefault(x.get("sym"), {"sym": x.get("sym"), "name": x.get("name") or x.get("sym"), "score": x.get("score"), "win_prob": x.get("win_prob"), "bought": 0, "skips": {}})
+                if x.get("act") == "buy":
+                    g["bought"] += 1
+                else:
+                    k = SKIP.get(skip_code(x), "기타")
+                    g["skips"][k] = g["skips"].get(k, 0) + 1
+        out["picks"] = [dict(g, skips=[{"why": k, "n": v} for k, v in sorted(g["skips"].items(), key=lambda kv: -kv[1])]) for g in out["picks"].values()]
+        return out
+
     def labs(self):
         """실험 묶음별 성적표: 같은 추천을 받은 플랜들을 AI 비용까지 뺀 수익률 순으로."""
         out = {}
@@ -2011,6 +2066,8 @@ class AutoTrade:
             L["open"] = sum(x["open"] for x in L["runs"])
             L["holders"] = sum(1 for x in L["runs"] if x["open"])
             L["bought"] = sum(x["buys"] for x in L["runs"])
+            L["positions"], L["trades"] = self._lab_book(L)
+            L["last"] = self._lab_last(L)
             lead = next((x for x in L["runs"] if x["closed"] >= 10), None)
             L["lead"] = lead["label"] if lead else None
             L["note"] = (f"지금은 '{lead['label']}'이 앞서요(AI 비용 빼고 {lead['net_ret_pct']:+.2f}%, {lead['closed']}건)." + ("" if lead["enough"] else f" {READY_N}건이 쌓여야 믿을 만해요.")
@@ -2035,7 +2092,7 @@ class AutoTrade:
                 self.rt.db.log("system", "error", f"자동매매 요약 오류: {type(e).__name__}: {e}", self._now())
         labs = []
         try:
-            labs = [{k: L.get(k) for k in ("id", "mkt", "style_label", "status", "lead", "note", "closed", "usd", "now", "open", "holders", "bought", "cycles")} | {"n": len(L["runs"])}
+            labs = [{k: L.get(k) for k in ("id", "mkt", "style_label", "status", "lead", "note", "closed", "usd", "now", "open", "holders", "bought", "cycles")} | {"hold": [{"name": g["name"], "pct": g["pct"]} for g in L.get("positions", [])[:4]]} | {"n": len(L["runs"])}
                     for L in self.labs()["labs"] if L["status"] != "ended"]
         except Exception as e:
             self.rt.db.log("system", "error", f"실험 요약 오류: {type(e).__name__}: {e}", self._now())

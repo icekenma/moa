@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1223";
+const UI_VERSION = "261119.1232";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1753,7 +1753,8 @@ pages.invest = {
         ${L.now ? (L.now.busy ? this.atScanHtml(L.now, true) : `<div class="bot-now"><b>${esc(L.now.next.label)}</b><span>${this.atNextLine(L.now)}</span></div>`) : ""}
         <dl class="bot-kpi k4"><div><dt>추천</dt><dd>${L.cycles}번</dd></div><div><dt>지금 보유</dt><dd>${L.open}종목<small>${L.holders}/${L.n} 플랜</small></dd></div>
           <div><dt>산 횟수</dt><dd>${L.bought}</dd></div><div><dt>끝난 거래</dt><dd>${L.closed}</dd></div></dl>
-        <div class="bot-note">${esc(L.note)} AI 비용 $${Number(L.usd).toFixed(2)}</div></a>`).join("")}`;
+        ${(L.hold || []).length ? `<div class="bot-hold">${L.hold.map((h) => `<span>${esc(h.name)} <b class="${tone(h.pct)}">${pct(h.pct, 2)}</b></span>`).join("")}</div>` : ""}
+        <div class="bot-note">${esc(L.note)} AI 비용 $${Number(L.usd).toFixed(2)} · 눌러서 매수·매도 내역 보기</div></a>`).join("")}`;
       }).join("")}</section>`;
   },
   atReadyHtml(R) {
@@ -1840,6 +1841,8 @@ pages.invest = {
           <div class="tiny">${esc(L.start_date.slice(5))}~${esc(L.end_date.slice(5))} · 추천 ${L.cycles}번 · 지금 보유 ${L.open}종목(${L.holders}개 플랜) · 끝난 거래 ${L.closed}건 · AI 비용 $${L.usd.toFixed(2)}(모두 합쳐)</div></div>
           <span class="tag ${{ running: "y", paused: "g", ended: "" }[L.status]}">${{ running: "가동 중", paused: "멈춤", ended: "끝남" }[L.status]}</span></div>
         ${N ? (N.busy ? this.atScanHtml(N, true) : `<div class="lab-now"><b>${esc(N.next.label)}</b><span>${this.atNextLine(N)}</span></div>`) : ""}
+        ${this.atLabBook(L)}
+        <div class="sec-title in">플랜별 성적</div>
         <div class="notice">${esc(L.note)}</div>
         <div class="lab-tbl" role="table" aria-label="플랜별 성적">
           <div class="lab-tr lab-th" role="row"><span>플랜</span><span>거래</span><span>승률</span><span>비용 뺀 수익률</span></div>
@@ -1856,6 +1859,30 @@ pages.invest = {
     };
     return `${act.map(one).join("")}
       ${old.length ? `<div class="sec-title">지난 실험</div>${old.map(one).join("")}` : ""}`;
+  },
+  // 실험 장부: 지금 들고 있는 종목(언제·몇 주·얼마에 샀고, 지금 얼마이고, 언제 파는지), 방금 추천에서의 판단, 최근 판 기록
+  atLabBook(L) {
+    const M = (v, sgn) => this.atM(L.mkt, v, sgn), hm = (ts) => (ts ? `${ts.slice(5, 10)} ${ts.slice(11, 16)}` : "");
+    const pos = L.positions || [], sold = L.trades || [], last = L.last;
+    return `<div class="sec-title in">지금 들고 있는 종목 ${pos.length}</div>
+      ${pos.length ? `<div class="lab-pos">${pos.map((g) => `<details>
+        <summary><span class="lab-pn"><b>${esc(g.name)}</b><small>${g.plans.length}개 플랜 · 모두 ${g.qty}주 · 처음 산 때 ${hm(g.first_ts)}</small></span>
+          <span class="lab-pp"><b class="${tone(g.pct)}">${pct(g.pct, 2)}</b><small>${M(g.avg)} → ${M(g.last)}</small></span></summary>
+        <div class="lab-pd">
+          <div class="lab-sell"><b>파는 방법</b> 플랜마다 정한 익절가에 닿으면 이익을 챙기고, 손절가에 닿으면 바로 팔아요. 둘 다 안 닿으면 ${esc(g.hold)}.</div>
+          ${g.plans.map((p) => `<button type="button" class="lab-pl" data-run="${p.run}">
+            <span><b>${esc(p.label)}</b><small>${hm(p.ts)} · ${p.qty}주 × ${M(p.price)}</small></span>
+            <span class="lab-ts"><em class="up">익절 ${M(p.target)}<small>+${p.target_pct}%</small></em><em class="down">손절 ${M(p.stop)}<small>-${p.stop_pct}%</small></em></span>
+            <span class="${tone(p.pct)}">${pct(p.pct, 2)}</span></button>`).join("")}
+          ${g.why ? `<div class="tiny">AI가 고른 이유: ${esc(g.why)}</div>` : ""}
+        </div></details>`).join("")}</div>` : `<div class="empty sm">아직 들고 있는 종목이 없어요</div>`}
+      ${last ? `<div class="sec-title in">가장 최근 추천 · ${hm(last.ts)}${last.stance ? ` · ${esc(last.stance)}` : ""}</div>
+        ${last.view ? `<div class="tiny">${esc(last.view)}</div>` : ""}
+        <div class="lab-last">${last.picks.map((x) => `<div><span><b>${esc(x.name)}</b><small>점수 ${x.score ?? "-"} · 승률 ${x.win_prob ?? "-"}%</small></span>
+          <span><b class="${x.bought ? "up" : ""}">${x.bought}개 플랜 매수</b><small>${x.skips.map((k) => `${esc(k.why)} ${k.n}`).join(" · ") || "모두 매수"}</small></span></div>`).join("") || `<div class="tiny">추천 종목이 없었어요</div>`}</div>` : ""}
+      ${sold.length ? `<div class="sec-title in">최근 판 기록</div>
+        <div class="lab-last">${sold.slice(0, 8).map((t) => `<div><span><b>${esc(t.name)}</b><small>${esc(t.label)} · ${t.qty}주 · ${hm(t.entry_ts)} ${M(t.entry)} → ${hm(t.exit_ts)} ${M(t.exit)}</small></span>
+          <span><b class="${tone(t.pct)}">${pct(t.pct, 2)}</b><small>${esc(t.reason || "")} · ${M(t.pnl, true)}</small></span></div>`).join("")}</div>` : ""}`;
   },
   atLabNew() {
     const A = this.at, P = (A.lab || {}).presets || [], F = { mkt: "kr", style: "day", budget: "1,000,000", days: 20 };

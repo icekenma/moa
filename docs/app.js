@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261120.0401";
+const UI_VERSION = "261120.0412";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2486,8 +2486,8 @@ pages.invest = {
         <div class="fl-box ${ai.next_kind === "full" ? "on" : ""}"><span class="fl-k">정밀 추천</span><b>${esc(ai.model_label)}${ai.web ? " + 뉴스 검색" : ""}</b><small>오늘 ${ai.full}/${ai.full_max}번</small></div>
         <div class="fl-box ${ai.next_kind === "quick" ? "on" : ""} ${ai.quick_gap ? "" : "off"}"><span class="fl-k">빠른 재추천</span><b>${ai.quick_gap ? `${ai.quick_gap}분마다 · ${ai.quick_model}` : "꺼짐"}</b><small>${ai.quick_gap ? `오늘 ${ai.quick}번 · 뉴스 없이 숫자만` : "플랜에서 켤 수 있어요"}</small></div></div>
       <div class="fl-ladder" aria-label="추천 엔진 단계">${ai.engine.ladder.map((x, i) => `${i ? `<span class="fl-arr" aria-hidden="true">›</span>` : ""}<span class="${x.on ? "on" : ""}">${esc(x.label.replace(/ [\d.]+$/, ""))}</span>`).join("")}</div>
-      <div class="fl-meter"><span>오늘 AI 비용</span><span class="fl-bar"><i style="width:${Math.min(100, ai.usd / (ai.cap || 1) * 100).toFixed(1)}%"></i></span><b>$${ai.usd.toFixed(2)} / $${ai.cap}</b></div>
-      <div class="fl-facts"><span>이미 다룬 ${ai.exclude}종목은 빼고 물어요</span>${ai.price_cap ? `<span>${M(ai.price_cap)} 넘는 종목은 후보에서 빼요(1주를 못 사서)</span>` : ""}</div>`;
+      <div class="fl-meter"><span>오늘 AI 비용${ai.shared ? "<br><small>실험 묶음 합계</small>" : ""}</span><span class="fl-bar"><i style="width:${Math.min(100, ai.usd / (ai.cap || 1) * 100).toFixed(1)}%"></i></span><b>$${ai.usd.toFixed(2)} / $${ai.cap}</b></div>
+      <div class="fl-facts">${ai.shared ? `<span>같은 추천을 플랜들이 함께 써서 이 플랜 몫은 $${ai.mine.toFixed(2)}예요</span>` : ""}<span>정밀 추천이 남은 한도를 넘길 것 같으면 그 차례는 빠른 재추천으로 받아요</span><span>이미 다룬 ${ai.exclude}종목은 빼고 물어요</span>${ai.price_cap ? `<span>${M(ai.price_cap)} 넘는 종목은 후보에서 빼요(1주를 못 사서)</span>` : ""}</div>`;
     // ③ 거르기: 깔때기
     const s3 = fu.picks ? `<div class="fl-fun">
         <div class="fl-f top"><span><b>받은 종목</b><small>오늘 추천 ${ai.full + ai.quick}번</small></span><span class="fl-fb"><i style="width:100%"></i></span><b>${fu.picks}</b></div>

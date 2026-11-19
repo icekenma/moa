@@ -3295,3 +3295,4 @@ html.gm-on .fl-t small,html.gm-on .fl-g small,html.gm-on .fl-k,html.gm-on .fl-fa
 .fl-go:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 html.gm-on .fl-go{background:var(--g-slot);border-color:var(--g-edge);color:var(--g-ink)}
 html.gm-on .fl-go b{font-family:var(--g-font);font-weight:400}
+.fl-meter small{font-size:10px;color:var(--ink3)}

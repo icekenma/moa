@@ -1760,3 +1760,35 @@ def test_review_uses_its_own_engine(env):
     assert ai.review_model() == "claude-opus-5-5"
     rid = env.run()
     assert env.at.flow(rid)["learn"]["review"]["model"].startswith("Opus")
+
+
+def test_lab_cap_not_eaten_by_one_full_pick(env, monkeypatch):
+    """실험(미국 스윙 등): 하루 한도는 정한 몫 아래로 내리지 않고, 정밀 추천이 남은 한도를 넘기면 그 차례는 빠른 재추천으로 받는다.
+    한도와 쓴 돈은 묶음 합계로 본다."""
+    at = env.at
+    at.auto_set(True)
+    lab = next(x for x in at.labs()["labs"] if (x["mkt"], x["style"]) == ("us", "swing"))
+    rs = [at._run(r["id"]) for r in lab["runs"]]
+    for r in rs:
+        assert r["params"]["ai_daily_usd"] >= 0.45
+    # 예전 판 실험(한도 $0.3) → 한 번 올림
+    for r in rs:
+        env.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.ai_daily_usd',0.3,'$.cap_v',2) WHERE id=?", (r["id"],))
+    at._lab_cap_upgrade()
+    assert all(at._run(r["id"])["params"]["ai_daily_usd"] == 0.45 for r in rs)
+    # 정밀 추천 한 번에 $0.3을 묶음이 나눠 씀 → 묶음 합계 0.3
+    b = rs[0]
+    for r in rs:
+        at.log(r["id"], "cycle", "x", {"usd": round(0.3 / len(rs), 4), "pick_id": 1, "decisions": []})
+    assert abs(at._day_usd(at._run(b["id"])) - 0.3) < 0.01
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (0.3, {}))
+    monkeypatch.setattr(at, "_quick_usd", lambda: 0.01)
+    env.rt.db.x("UPDATE at_runs SET last_cycle=0, last_full=0 WHERE lab_id=?", (b["lab_id"],))
+    run = at._run(b["id"])
+    p = run["params"]
+    env.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.cycles_per_day',2) WHERE id=?", (b["id"],))
+    D = at._due(at._run(b["id"]))
+    assert D["kind"] == "quick" and D.get("saver")           # 남은 $0.15로는 정밀($0.3)이 안 되니 빠른 재추천
+    F = at.flow(b["id"])
+    assert F["ai"]["shared"] and abs(F["ai"]["usd"] - 0.3) < 0.01 and F["ai"]["mine"] < 0.1
+    assert p["quick_gap_min"] > 0

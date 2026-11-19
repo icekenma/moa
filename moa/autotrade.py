@@ -517,7 +517,7 @@ class AutoTrade:
         best["auto"] = True
         best["cap_day"] = cap_day
         # 하루 한도: 직접 만든 것은 시드에 비례한 한도 그대로(쓸 수 있는 만큼), 실험은 예상 비용의 1.4배
-        patch = {"cycles_per_day": best["cycles"], "web_search": best["web"], "ai_daily_usd": cap_day if not lab else max(0.3, limit(best))}
+        patch = {"cycles_per_day": best["cycles"], "web_search": best["web"], "ai_daily_usd": cap_day if not lab else max(0.3, cap_day, limit(best))}
         if qg0:
             # 정밀 추천은 매수 시간에 고르게 편다(예: 2번이면 시작할 때와 한가운데)
             patch.update(quick_gap_min=best["quick_gap"], cycle_gap_min=int(min(240, max(60, win // best["cycles"]))))
@@ -651,6 +651,7 @@ class AutoTrade:
         try:
             self._upgrade()
             self._cap_upgrade()
+            self._lab_cap_upgrade()
             self._engine_watch()
             self._autopilot()
         except Exception as e:
@@ -871,6 +872,13 @@ class AutoTrade:
         return self.rt.db.q("SELECT pnl, exit_ts FROM at_trades WHERE run_id=? AND status='closed' AND exit_day=? ORDER BY exit_ts, id",
                             (run["id"], AP.mkt_date(run["mkt"])))
 
+    def _day_usd(self, run, sibs=None):
+        """오늘 AI 추천에 쓴 돈(달러). 실험 묶음이면 묶음 합계(한도도 묶음 전체에 걸린다)."""
+        sibs = self._sibs(run) if sibs is None else sibs
+        ids = [x["id"] for x in sibs] if sibs else [run["id"]]
+        return sum(float((json.loads(c["data"]) if c["data"] else {}).get("usd") or 0) for c in self.rt.db.q(
+            f"SELECT data FROM at_log WHERE run_id IN ({','.join('?' * len(ids))}) AND kind='cycle' AND day=?", (*ids, AP.mkt_date(run["mkt"]))))
+
     def _sibs(self, run):
         """실험 묶음이면 함께 도는 실험들(돌고 있는 것만, 번호순). 아니면 None."""
         if not run.get("lab_id"):
@@ -933,6 +941,13 @@ class AutoTrade:
         if n_full < p["cycles_per_day"]:
             t_full = max(fg * 60 - (now - (run.get("last_full") or 0)) if n_full else 0, min(qg, fg) * 30 - since)
         out["next"] = "full" if t_full <= max(t_quick, 0) else "quick"     # 둘 다 차례면 정밀이 먼저
+        if out["next"] == "full" and t_full <= 0 and n_full:
+            # 그날 첫 정밀 추천은 그대로. 그다음 정밀 추천이 남은 하루 한도를 넘길 것 같으면 그 차례는 빠른 재추천으로(한도는 지키고, 묻기는 멈추지 않게)
+            left_usd = float(p.get("ai_daily_usd") or 1) - self._day_usd(run)
+            per, _ = self._per_usd(run["style"], run["model"], bool(p.get("web_search", True)))
+            if per > left_usd and self._quick_usd() <= left_usd:
+                out["next"], out["saver"] = "quick", True
+                t_full = float("inf")
         out["left"] = max(0, min(t_quick, t_full))
         if out["left"] <= 0:
             out["kind"] = out["next"]
@@ -969,9 +984,7 @@ class AutoTrade:
             if D["code"] == "cycles":
                 return False, "cycles", "오늘 추천 횟수를 다 썼어요"
             return False, "gap", "다음 추천 시간을 기다리는 중이에요"
-        ids = [x["id"] for x in sibs] if sibs else [run["id"]]
-        usd = sum(float((json.loads(c["data"]) if c["data"] else {}).get("usd") or 0) for c in self.rt.db.q(
-            f"SELECT data FROM at_log WHERE run_id IN ({','.join('?' * len(ids))}) AND kind='cycle' AND day=?", (*ids, day)))
+        usd = self._day_usd(run, sibs)
         if usd >= float(p.get("ai_daily_usd") or 1):
             return False, "aicost", "오늘 AI 추천 비용 한도를 다 썼어요"
         # 돈을 내고 AI에게 묻기 전에, 앱이 먼저 장을 본다(무료)
@@ -2142,6 +2155,20 @@ class AutoTrade:
                                          f"정밀 추천 {MODELS[model][0].split(' · ')[0]} 하루 {patch.get('cycles_per_day', p.get('cycles_per_day'))}번"
                                          f"{'' if patch.get('web_search', True) else '(뉴스 검색 없이)'}", {"patch": patch, "model": model})
 
+    def _lab_cap_upgrade(self):
+        """예전 판 실험은 하루 한도가 예상 비용의 1.4배(최소 $0.3)라, 뉴스 검색을 한 정밀 추천 한 번에 한도가 차서
+        빠른 재추천까지 멈췄다. 자동 테스트가 정한 몫(국내·미국 단타 $1.05, 스윙 $0.45) 아래로는 내리지 않는다(묶음마다 한 번)."""
+        for r in self._runs("WHERE lab_id IS NOT NULL AND status IN ('running','paused')"):
+            p = r["params"]
+            want = p.get("lab_day_usd")
+            if p.get("cap_v") == 3 or not want:
+                continue
+            cap = max(float(p.get("ai_daily_usd") or 0), float(want))
+            self.rt.db.x("UPDATE at_runs SET params=? WHERE id=?", (json.dumps(dict(p, ai_daily_usd=cap, cap_v=3), ensure_ascii=False), r["id"]))
+            if cap > float(p.get("ai_daily_usd") or 0) and r["variant"] in ("base", None):
+                self.log(r["id"], "control", f"실험 하루 AI 비용 한도를 ${float(p.get('ai_daily_usd') or 0):g} → ${cap:g}로 맞췄어요(정밀 추천 한 번에 한도가 차서 빠른 재추천이 멈추던 문제)",
+                         {"ai_daily_usd": cap})
+
     def _upgrade(self):
         """예전 판에서 시작한 자동매매에 '빠른 재추천'을 붙인다(자동매매마다 한 번).
         모의·실험은 켠다(실험은 하루 비용 상한 안에서 정밀 추천 횟수까지 다시 맞춘다). 실전은 꺼 둔 채로 두고, 사용자가 플랜에서 켠다."""
@@ -2817,7 +2844,7 @@ class AutoTrade:
                 "streak": f"연속 {p['loss_streak']}번 손절이면 그날 쉼", "cash": "남은 현금이 있어야",
                 "turn": (f"정밀 하루 {p['cycles_per_day']}번 · {p['cycle_gap_min']}분 간격 + 빠른 재추천 {D['quick']}분마다" if D["quick"]
                          else f"하루 {p['cycles_per_day']}번 · {p['cycle_gap_min']}분 간격"),
-                "aicost": f"하루 ${float(p.get('ai_daily_usd') or 1):g}까지", "market": (f"지수 {float(p.get('idx_floor') or 0):g}% 아래면 AI를 안 부름(무료 점검) · 지금 {idx:+.2f}%" if idx is not None else f"지수 {float(p.get('idx_floor') or 0):g}% 아래면 쉼")
+                "aicost": f"{'실험 묶음 합계 ' if run.get('lab_id') else ''}하루 ${float(p.get('ai_daily_usd') or 1):g}까지", "market": (f"지수 {float(p.get('idx_floor') or 0):g}% 아래면 AI를 안 부름(무료 점검) · 지금 {idx:+.2f}%" if idx is not None else f"지수 {float(p.get('idx_floor') or 0):g}% 아래면 쉼")
                 if float(p.get("idx_floor") or 0) < 0 else "모의는 지수와 상관없이 물어요",
                 "watchwait": "관망이면 지수가 회복되거나 간격 두 배가 지날 때까지" if (p.get("skip_watch") or not D["quick"]) else "관망이어도 작게 사 보며 계속 물어요",
                 "nokey": "설정 → AI", "budget": "설정 → AI의 월 예산"}
@@ -2840,7 +2867,8 @@ class AutoTrade:
                 decs.append(dict(x, ts=r["ts"], lite=bool(d.get("lite"))))
         busy = bool(N and N.get("busy"))
         ai = {"model": run["model"], "model_label": _short_model(run["model"]), "web": bool(p.get("web_search", True)), "quick_gap": D["quick"],
-              "quick_model": "Haiku 4.5", "full": n_full, "full_max": p["cycles_per_day"], "quick": n_quick, "usd": round(usd, 3), "cap": float(p.get("ai_daily_usd") or 1),
+              "quick_model": "Haiku 4.5", "full": n_full, "full_max": p["cycles_per_day"], "quick": n_quick, "usd": round(self._day_usd(run), 3),
+              "mine": round(usd, 3), "shared": bool(run.get("lab_id")), "cap": float(p.get("ai_daily_usd") or 1),
               "exclude": len(self._seen([rid], mkt)), "price_cap": self._price_cap(run), "next_kind": D.get("next") or D.get("kind") or "full",
               "busy": busy, "engine": {"lock": bool(p.get("engine_lock")), "ceil": p.get("engine_ceil"),
               "ladder": [{"model": m, "label": _short_model(m), "on": m == run["model"]} for m in ENGINE_LADDER]}}

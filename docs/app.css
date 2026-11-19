@@ -2339,3 +2339,7 @@ html:not(.dark-theme) .bot.live .bot-ico i{background:#5A50C8}
 html:not(.dark-theme) .bot .at-scan{color:var(--bot-ink);--sc:#7C5CFF;--sc2:#5A3DE0;background:rgba(124,92,255,.1);box-shadow:inset 0 0 0 1px rgba(124,92,255,.3)}
 html:not(.dark-theme) .bot .at-scan .at-radar i{background:#5A3DE0}
 html:not(.dark-theme) .bot .at-scan-steps li i{background:rgba(27,23,64,.12)}
+
+/* ---------- v4.50 AI 비용 한도 바꾸기 버튼 ---------- */
+.at-lim{margin-left:8px;padding:3px 9px;font-size:10.5px;vertical-align:1px}
+.at-lim-go{align-self:flex-start;margin-top:7px}

@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1115";
+const UI_VERSION = "261119.1130";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -381,6 +381,12 @@ function usLine(d) {  // 미국 주식·달러가 총자산에 합쳐졌을 때 
   if (!u || u.error || !(u.eval || u.usd_krw)) return "";
   return `<div class="tiny">국내 ${won(d.kr_total)}원 + 미국 주식 ${won(u.eval)}원${u.usd ? ` + 달러 ${usd(u.usd)}(약 ${won(u.usd_krw)}원)` : ""}${u.fx ? ` · 환율 ${won(u.fx)}원` : ""}</div>`;
 }
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("[data-ailim]") || !pages.invest.at || !pages.invest.at.d) return;
+  e.preventDefault(); e.stopPropagation();
+  pages.invest.atAiLimit();
+}, true);
+
 // 1초마다 움직이는 숫자: data-el(지난 초), data-cd(남은 초), data-gap(간격 진행 막대). 서버에서 받은 값에 화면에서 흐른 시간을 더한다
 function tickFmt(sec) {
   const v = Math.max(0, Math.round(sec)), h = Math.floor(v / 3600), m = Math.floor(v % 3600 / 60), ss = String(v % 60).padStart(2, "0");
@@ -1792,7 +1798,7 @@ pages.invest = {
         <div class="at-hero-ret ${tone(m.ret_pct)}">${M(m.equity - m.budget, true)} (${pct(m.ret_pct, 2)})</div>
         <div class="at-hero-kv">${["running", "paused"].includes(r.status) ? `<button type="button" id="atBud" aria-label="쓸 돈 바꾸기"><span>쓸 돈 <em>바꾸기 ›</em></span><b>${M(m.budget)}</b></button>` : `<div><span>쓸 돈</span><b>${M(m.budget)}</b></div>`}<div><span>남은 현금</span><b>${M(m.cash)}</b></div><div><span>확정 손익</span><b class="${tone(m.realized)}">${M(m.realized, true)}</b></div></div>
         ${N ? `${N.busy ? this.atScanHtml(N) : `<div class="at-nowline ${N.next.kind}"><span class="at-dot ${r.status === "running" && N.engine.ok ? "on" : ""}"></span>
-          <div><b>${esc(next)}</b><span>${this.atNextLine(N)}</span>${N.next.span_sec && N.next.in_sec != null ? `<i class="at-gap" data-gap="${N.next.in_sec}" data-span="${N.next.span_sec}" data-t0="${Date.now()}" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, (1 - N.next.in_sec / N.next.span_sec) * 100)).toFixed(1)}%"></i></i>` : ""}</div></div>`}
+          <div><b>${esc(next)}</b><span>${this.atNextLine(N)}</span>${N.next.code === "aicost" ? `<button type="button" class="btn yellow sm at-lim-go" data-ailim>AI 비용 한도 올리기</button>` : ""}${N.next.span_sec && N.next.in_sec != null ? `<i class="at-gap" data-gap="${N.next.in_sec}" data-span="${N.next.span_sec}" data-t0="${Date.now()}" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, (1 - N.next.in_sec / N.next.span_sec) * 100)).toFixed(1)}%"></i></i>` : ""}</div></div>`}
         <div class="ap-h2">${r.end_date.slice(5).replace("-", "/")}까지(${N.period.day}일째/${N.period.days}일) · 플랜 ${r.ver}판 · 엔진 ${N.engine.ok ? `정상(${N.engine.sec}초 전 확인)` : "확인 필요"}</div>`
           : `<div class="ap-h2">${esc(next || "")}</div>`}
         ${r.status === "ended" ? "" : `<div class="at-ctl">
@@ -1847,7 +1853,7 @@ pages.invest = {
           <div><dt>보유 자리</dt><dd>${Z.slots_used} / ${Z.slots}종목<small>${Z.slots_used >= Z.slots ? "꽉 차서 팔릴 때까지 새로 사지 않아요" : `${Z.slots - Z.slots_used}자리 비어 있어요`}</small></dd></div>
           ${Z.warm_need ? `<div><dt>검증 단계</dt><dd>${Z.warm_done} / ${Z.warm_need}건<small>${Z.warm_done >= Z.warm_need ? "끝났어요. 정해진 비중을 다 써요" : "끝나면 정해진 비중을 다 써요"}</small></dd></div>` : ""}
           <div><dt>고르는 기준</dt><dd>승률 ${d.params.min_win_prob}% · 점수 ${d.params.min_score} · 손익비 ${d.params.min_rr} 이상<small>${d.params.skip_watch ? "AI가 관망이면 쉬어요" : ""}</small></dd></div>
-          <div><dt>AI 비용</dt><dd>오늘 $${N.ai.today_usd.toFixed(2)} / 한도 $${N.ai.limit_usd}<small>지금까지 ${N.ai.cycles_all}번 · $${N.ai.total_usd.toFixed(2)}</small></dd></div>
+          <div><dt>AI 비용${r.status === "ended" ? "" : `<button type="button" class="chip at-lim" data-ailim>한도 바꾸기</button>`}</dt><dd class="${N.ai.today_usd >= N.ai.limit_usd ? "down" : ""}">오늘 $${N.ai.today_usd.toFixed(2)} / 한도 $${N.ai.limit_usd}<small>지금까지 ${N.ai.cycles_all}번 · $${N.ai.total_usd.toFixed(2)}</small></dd></div>
         </dl></section>
       <section class="card at-last">
         <div class="card-head"><h2>최근 추천</h2><span class="tiny">${L ? esc(L.ts.replace("T", " ").slice(5, 16)) : ""}</span></div>
@@ -2019,6 +2025,23 @@ pages.invest = {
         closeSheet(); this.auto($("#iv"));
       };
       draw();
+    });
+  },
+  // 하루 AI 비용 한도만 빠르게 바꾼다(현황의 'AI 비용'과, 한도에 걸렸을 때 뜨는 버튼에서 연다)
+  atAiLimit() {
+    const A = this.at, d = A.d, N = d.now, cur = Number(d.params.ai_daily_usd != null ? d.params.ai_daily_usd : 1);
+    const per = N && N.ai.cycles_all ? N.ai.total_usd / N.ai.cycles_all : 0.8, need = Math.ceil(per * d.params.cycles_per_day * 2) / 2;
+    openSheet("하루 AI 비용 한도", `<div class="at-bud">
+        <div class="at-bud-now"><span>지금 한도 · 오늘 쓴 돈</span><b>$${cur} · $${N ? N.ai.today_usd.toFixed(2) : "0.00"}</b></div>
+        <label class="field">새 한도($, 0.2~20)<input id="alV" class="r big" inputmode="decimal" autocomplete="off" value="${Math.max(cur, need)}"></label>
+        <div class="chips">${[1, 2, 3, 5].map((v) => `<button type="button" class="chip" data-v="${v}">$${v}</button>`).join("")}</div>
+        <div class="tiny">추천 한 번에 약 $${per.toFixed(2)}(약 ${won(Math.round(per * 1400 / 10) * 10)}원)가 들어요. 하루 ${d.params.cycles_per_day}번을 다 받으려면 $${need} 정도가 필요해요. 올리면 바로 다음 추천을 받아요. 조건이 같은 자동매매끼리는 추천을 한 번만 받아 함께 써요.</div>
+        <button type="button" class="btn dark wide" id="alGo">한도 바꾸기</button></div>`, (box) => {
+      box.addEventListener("click", (e) => { const c = e.target.closest("[data-v]"); if (c) $("#alV", box).value = c.dataset.v; });
+      $("#alGo", box).onclick = async () => {
+        try { A.d = await run(() => api("PUT", `/api/auto/runs/${d.run.id}/params`, { ai_daily_usd: $("#alV", box).value }), "한도를 바꿨어요"); } catch (e) { return; }
+        closeSheet(); this.auto($("#iv"));
+      };
     });
   },
   atEdit() {

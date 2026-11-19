@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.0942";
+const UI_VERSION = "261119.1051";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -790,7 +790,7 @@ pages.home = {
           ${A.history.length >= 2 ? lineChart([{ values: A.history.map((h) => h.net) }], { h: 72, label: "월별 순자산 추이" }) : ""}`
         : `<div class="small muted">계좌를 등록하면 순자산을 매달 기록해요</div>`}
       </a>
-      <div id="hmAuto" class="hm-auto">${((d.auto || {}).runs || []).map((r) => pages.invest.atHomeCard(r)).join("")}</div>
+      <div id="hmAuto" class="hm-auto">${pages.invest.atHomeGroup((d.auto || {}).runs)}</div>
       <a class="card dark dom-night" href="#invest/ai" style="text-decoration:none">
         <div class="card-head"><h2>오늘의 투자</h2><span class="tiny" style="color:#C5CCD6">AI 추천 ›</span></div>
         <div class="grid2">
@@ -1514,7 +1514,7 @@ pages.invest = {
   atBriefHtml() {
     const B = this._atB;
     if (!B) return "";
-    return B.runs.length ? B.runs.map((r) => this.atHomeCard(r)).join("")
+    return B.runs.length ? this.atHomeGroup(B.runs)
       : `<a class="card at-home-empty" href="#invest/auto"><span><b>AI 자동매매</b><small>${B.ended ? `끝난 자동매매 ${B.ended}개 · 돌고 있는 것은 없어요` : "쓸 돈만 정하면 AI가 플랜을 짜서 사고팔아요. 모의로 먼저 해 볼 수 있어요"}</small></span><em>›</em></a>`;
   },
   async atBrief() {   // 15초마다만 새로 받는다. AI 추천을 받는 중이거나 곧 받을 때는 3초마다
@@ -1523,7 +1523,7 @@ pages.invest = {
     this._atBT = Date.now();
     try { this._atB = await GET("/api/auto/brief"); } catch (e) { return; }
     if ($("#ihAuto")) $("#ihAuto").innerHTML = this.atBriefHtml();
-    if ($("#hmAuto")) $("#hmAuto").innerHTML = this._atB.runs.map((r) => this.atHomeCard(r)).join("");
+    if ($("#hmAuto")) $("#hmAuto").innerHTML = this.atHomeGroup(this._atB.runs);
   },
   async home(box) {
     if (!box.children.length) { const c = memo.get("ihome"); if (c) this.homeRender(box, c); }
@@ -1633,13 +1633,23 @@ pages.invest = {
   },
   // 홈·투자 홈에 놓는 요약 카드(누르면 그 자동매매의 현황으로)
   atHomeCard(r) {
-    const [lbl] = this.AT_ST[r.status] || [r.status], m = r.money, n = r.now, live = r.status === "running" && n.engine.ok;
-    return `<a class="card dom dom-invest at-home" href="#invest/auto" data-atgo="${r.id}">
-      <div class="card-head"><h2>AI 자동매매</h2><span class="tiny live-dot ${live ? "on" : ""}">${r.mode === "real" ? "실전" : "모의"} · ${lbl}${n.engine.ok ? "" : " · 엔진 확인 필요"}</span></div>
-      <div class="at-home-eq"><span class="big">${this.atM(r.mkt, m.equity)}</span><b class="${tone(m.ret_pct)}">${pct(m.ret_pct, 2)}</b></div>
-      ${n.busy ? this.atScanHtml(n, true) : `<div class="at-home-next">${esc(n.next.label)}</div>
-      <div class="small">${this.atNextLine(n)}</div>`}
-      <div class="tiny">${esc(r.name)} · ${this.atTodayLine(r)}</div></a>`;
+    const [lbl] = this.AT_ST[r.status] || [r.status], m = r.money, n = r.now, t = n.today, live = r.status === "running" && n.engine.ok, real = r.mode === "real";
+    const kpi = [["추천", `${t.cycles}/${t.cycles_max}`], ["매수", t.buys], ["매도", t.sells], ["보유", `${n.size.slots_used}/${n.size.slots}`], ["기간", `${n.period.day}/${n.period.days}일`]];
+    return `<a class="bot-run at-home ${real ? "real" : "paper"}" href="#invest/auto" data-atgo="${r.id}">
+      <div class="bot-top"><span class="bot-mode">${real ? "실전" : "모의"}</span><b class="bot-name">${esc(r.name)}</b>
+        <span class="bot-st live-dot ${live ? "on" : ""}">${lbl}${n.engine.ok ? "" : " · 엔진 확인 필요"}</span></div>
+      <div class="bot-eq"><b>${this.atM(r.mkt, m.equity)}</b><em class="${tone(m.ret_pct)}">${pct(m.ret_pct, 2)}</em></div>
+      ${n.busy ? this.atScanHtml(n, true) : `<div class="bot-now"><b>${esc(n.next.label)}</b><span>${this.atNextLine(n)}</span></div>`}
+      <dl class="bot-kpi">${kpi.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl></a>`;
+  },
+  // 홈·투자 홈: 자동매매는 잔고 카드와 성격이 달라(스스로 사고파는 '일') 한 묶음의 판으로 따로 보여 준다
+  atHomeGroup(runs) {
+    if (!runs || !runs.length) return "";
+    const live = runs.filter((r) => r.status === "running" && r.now.engine.ok).length, busy = runs.some((r) => r.now.busy);
+    return `<section class="bot ${live ? "live" : ""}" style="--sync:-${Date.now() % 2400}ms" aria-label="AI 자동매매">
+      <header class="bot-head"><span class="bot-ico" aria-hidden="true"><i></i><i></i><i></i></span><h2>AI 자동매매</h2>
+        <span class="bot-sub">${busy ? "AI 추천 받는 중" : live ? `${live}개 가동 중` : `${runs.length}개 · 쉬는 중`}</span><a href="#invest/auto">전체 ›</a></header>
+      ${runs.map((r) => this.atHomeCard(r)).join("")}</section>`;
   },
   atReadyHtml(R) {
     const rows = [];

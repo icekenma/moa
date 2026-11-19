@@ -2280,3 +2280,62 @@ html:not(.dark-theme) .card .at-scan-steps li.on i::after{background:linear-grad
 .at-bud-fit input{flex:0 0 auto;width:18px;height:18px;margin-top:1px;accent-color:var(--sec)}
 html.dark-theme .at-bud-now,html.dark-theme .at-bud-fit{background:rgba(255,255,255,.06)}
 html.dark-theme .at-bud-pv .dt-rows dd b{color:var(--n-i,#FF8FD0)}
+
+/* ---------- v4.48 홈의 AI 자동매매: 잔고 카드와 다른 '작업 판' ---------- */
+/* 잔고 카드는 위에 색 줄이 있는 유리 카드. 자동매매는 점 격자가 깔린 어두운 판 하나에 묶고, 실전은 실선 레일·모의는 점선 레일로 가른다 */
+.bot{--bot-ink:#F4F1FF;--bot-ink2:rgba(244,241,255,.68);--bot-ink3:rgba(244,241,255,.46);--bot-line:rgba(160,150,255,.26);--bot-real:#FF6FB5;--bot-real2:#FDBA74;--bot-paper:#7FE0C0;
+  position:relative;display:flex;flex-direction:column;border-radius:18px;overflow:hidden;color:var(--bot-ink);
+  background:radial-gradient(rgba(170,160,255,.16) 1px,transparent 1.2px) 0 0/14px 14px,linear-gradient(160deg,#1B1740 0%,#120F2A 55%,#0D0B1E 100%);
+  box-shadow:inset 0 0 0 1px var(--bot-line),0 8px 22px rgba(10,6,30,.28)}
+.bot-head{display:flex;align-items:center;gap:8px;padding:10px 13px 9px;border-bottom:1px solid var(--bot-line)}
+.bot-head h2{margin:0;font-size:12.5px;font-weight:800;letter-spacing:-.01em}
+.bot-sub{flex:1;min-width:0;font-size:10.5px;font-weight:700;color:var(--bot-ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bot-head a{flex:0 0 auto;font-size:10.5px;font-weight:700;color:var(--bot-ink2);text-decoration:none;padding:4px 2px}
+/* 머리의 작은 막대 셋: 가동 중이면 오르내린다 */
+.bot-ico{display:inline-flex;align-items:flex-end;gap:2px;width:14px;height:12px}
+.bot-ico i{flex:1;height:40%;border-radius:1px;background:var(--bot-ink3)}
+.bot-ico i:nth-child(2){height:75%}.bot-ico i:nth-child(3){height:55%}
+.bot.live .bot-ico i{background:#A99BFF;transform-origin:bottom;animation:botEq 1.2s ease-in-out infinite;animation-delay:var(--sync,0s)}
+.bot.live .bot-ico i:nth-child(2){animation-delay:calc(var(--sync,0s) - .4s)}
+.bot.live .bot-ico i:nth-child(3){animation-delay:calc(var(--sync,0s) - .8s)}
+@keyframes botEq{0%,100%{transform:scaleY(.45)}50%{transform:scaleY(1.25)}}
+/* 자동매매 한 건 */
+.bot-run{position:relative;display:flex;flex-direction:column;gap:6px;padding:11px 13px 12px 17px;color:inherit;text-decoration:none;-webkit-tap-highlight-color:transparent}
+.bot-run+.bot-run{border-top:1px solid var(--bot-line)}
+.bot-run:active{background:rgba(255,255,255,.05)}
+.bot-run:focus-visible{outline:2px solid #FDE68A;outline-offset:-2px}
+.bot-run::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:0 2px 2px 0}
+.bot-run.real::before{background:linear-gradient(180deg,var(--bot-real),var(--bot-real2))}
+.bot-run.paper::before{background:repeating-linear-gradient(180deg,var(--bot-paper) 0 5px,transparent 5px 9px)}
+.bot-top{display:flex;align-items:center;gap:7px;min-width:0}
+.bot-mode{flex:0 0 auto;padding:2px 7px;border-radius:6px;font-size:10px;font-weight:800;line-height:1.5}
+.bot-run.real .bot-mode{background:linear-gradient(90deg,var(--bot-real),var(--bot-real2));color:#2A0A1C}
+.bot-run.paper .bot-mode{color:var(--bot-paper);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--bot-paper) 70%,transparent);background:color-mix(in srgb,var(--bot-paper) 10%,transparent)}
+.bot-name{flex:1;min-width:0;font-size:12px;font-weight:700;color:var(--bot-ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bot-st{flex:0 0 auto;font-size:10.5px;font-weight:700;color:var(--bot-ink2)}
+.bot-eq{display:flex;align-items:baseline;gap:7px}
+.bot-eq b{font-size:21px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.2}
+.bot-eq em{font-style:normal;font-size:12px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--bot-ink2)}
+.bot-eq em.up{color:#FF8A80}.bot-eq em.down{color:#8FB2FF}
+.bot-now{display:flex;flex-direction:column;gap:1px;padding:7px 10px;border-radius:10px;background:rgba(255,255,255,.06)}
+.bot-now b{font-size:12px;font-weight:800;line-height:1.45}
+.bot-now span{font-size:11px;line-height:1.45;color:var(--bot-ink2)}
+.bot-now span b{font-size:inherit;color:var(--bot-ink)}
+.bot-now .tick{color:#FDE68A;font-weight:800}
+.bot-kpi{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;margin:1px 0 0}
+.bot-kpi div{display:flex;flex-direction:column;gap:1px;min-width:0;padding-left:8px;border-left:1px solid var(--bot-line)}
+.bot-kpi div:first-child{padding-left:0;border-left:0}
+.bot-kpi dt{font-size:9.5px;font-weight:700;color:var(--bot-ink3)}
+.bot-kpi dd{margin:0;font-size:12px;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
+.bot .at-scan.mini{margin:0}
+/* 밝은 테마: 같은 구조에 옅은 남보라 판 */
+html:not(.dark-theme) .bot{--bot-ink:#1B1740;--bot-ink2:rgba(27,23,64,.7);--bot-ink3:rgba(27,23,64,.5);--bot-line:rgba(90,80,200,.2);--bot-real:#E0338C;--bot-real2:#F08A2C;--bot-paper:#0E9A74;
+  background:radial-gradient(rgba(90,80,200,.14) 1px,transparent 1.2px) 0 0/14px 14px,linear-gradient(160deg,#EEECFF,#F7F5FF);box-shadow:inset 0 0 0 1px var(--bot-line)}
+html:not(.dark-theme) .bot-run.real .bot-mode{color:#fff}
+html:not(.dark-theme) .bot-now{background:rgba(90,80,200,.08)}
+html:not(.dark-theme) .bot-now .tick{color:#B4530A}
+html:not(.dark-theme) .bot-eq em.up{color:var(--up,#D92D20)}html:not(.dark-theme) .bot-eq em.down{color:var(--down,#2563EB)}
+html:not(.dark-theme) .bot.live .bot-ico i{background:#5A50C8}
+html:not(.dark-theme) .bot .at-scan{color:var(--bot-ink);--sc:#7C5CFF;--sc2:#5A3DE0;background:rgba(124,92,255,.1);box-shadow:inset 0 0 0 1px rgba(124,92,255,.3)}
+html:not(.dark-theme) .bot .at-scan .at-radar i{background:#5A3DE0}
+html:not(.dark-theme) .bot .at-scan-steps li i{background:rgba(27,23,64,.12)}

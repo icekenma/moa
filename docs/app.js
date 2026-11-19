@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1206";
+const UI_VERSION = "261119.1211";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -739,6 +739,88 @@ pages.connect = {
 let catCache = null;
 async function categories() { if (!catCache) catCache = (await GET(`/api/ledger?month=${thisMonth()}`)).categories; return catCache; }
 
+// ---------- 갚기 목표: 정한 날까지 얼마를 갚을지, 지금 일정보다 앞섰는지 ----------
+const payoff = {
+  bar(S) {   // 채워진 만큼이 갚은 돈, 세로 눈금이 '일정대로라면 오늘 와 있어야 할 자리'
+    return `<div class="pf-bar" role="img" aria-label="갚은 돈 ${S.pct}%, 지난 기간 ${S.time_pct}%"><i style="width:${Math.min(100, S.pct)}%"></i><em style="left:${Math.min(100, S.time_pct)}%"><span>오늘 일정</span></em></div>`;
+  },
+  homeCard(S) {
+    if (!S || !S.goal) return "";
+    return `<a class="card pf-home" href="#assets/goal">
+      <div class="card-head"><h2>${esc(S.goal.name)}</h2><span class="tiny">${esc(S.goal.deadline.slice(0, 7))}까지</span></div>
+      <div class="pf-eq"><b>${won(S.paid)}원</b><span>/ ${won(S.goal.amount)}원 · ${S.pct}%</span></div>
+      ${this.bar(S)}<div class="small">${esc(S.text)}</div></a>`;
+  },
+  html(S) {
+    if (!S.goal) return `<section class="card pf"><div class="card-head"><h2>갚기 목표</h2></div>
+      <div class="small muted">정한 날까지 빚을 얼마 갚을지 정하면, 갚을 때마다 기록해 일정보다 앞섰는지 뒤처졌는지와 한 달에 필요한 돈을 알려 드려요.</div>
+      <button type="button" class="btn dark wide" data-pf="goal">갚기 목표 정하기</button></section>`;
+    const g = S.goal, mx = Math.max(1, ...S.months.map((m) => m.amount));
+    return `<section class="card pf">
+      <div class="card-head"><h2>${esc(g.name)}</h2><button type="button" class="link" data-pf="goal">목표 바꾸기</button></div>
+      <div class="pf-eq"><b>${won(S.paid)}원</b><span>/ ${won(g.amount)}원 · ${S.pct}%</span></div>
+      ${this.bar(S)}
+      <div class="notice">${esc(S.text)}</div>
+      <dl class="pf-kv"><div><dt>남은 돈</dt><dd>${won(S.left)}원</dd></div><div><dt>한 달에 필요</dt><dd>${won(S.need_month)}원</dd></div>
+        <div><dt>지금 한 달 평균</dt><dd>${S.avg_month == null ? "한 달 뒤부터" : `${won(S.avg_month)}원`}</dd></div>
+        <div><dt>이 속도면 끝나는 때</dt><dd>${S.eta === "done" ? "다 갚음" : S.eta ? esc(S.eta) : "-"}<small>기한 ${esc(g.deadline.slice(0, 7))}</small></dd></div></dl>
+      ${S.months.length ? `<div class="pf-months" role="img" aria-label="달마다 갚은 돈">${S.months.map((m) => `<div><i style="height:${Math.max(4, (m.amount / mx) * 100)}%"></i><span>${Number(m.month.slice(5))}월</span></div>`).join("")}</div>` : ""}
+      ${S.by.length > 1 ? `<div class="legend">${S.by.map((b) => `<span>${esc(b.label)} <b>${won(b.amount)}원</b></span>`).join("")}</div>` : ""}
+      <button type="button" class="btn dark wide" data-pf="add">갚은 돈 기록</button>
+      ${S.hints.length ? `<div class="pf-hints">${S.hints.map((h) => `<div><span><b>${esc(h.label)}</b><small>${esc(h.sub)}</small></span><b class="${tone(h.amount)}">${signed(h.amount)}원</b>
+        ${h.amount > 0 ? `<button type="button" class="chip" data-pf="add" data-amt="${h.amount}" data-src="${h.key}">이만큼 갚았어요</button>` : ""}</div>`).join("")}</div>
+        <div class="tiny">위 금액은 참고용이에요. 실제로 갚았을 때만 기록해 주세요.</div>` : ""}
+      ${S.logs.length ? `<div class="list pf-logs">${S.logs.map((l) => `<div class="item"><span class="main"><b>${won(l.amount)}원</b><span class="sub">${esc(l.date)} · ${esc(l.src_label)}${l.note ? ` · ${esc(l.note)}` : ""}</span></span>
+        <button type="button" class="chip" data-pf="del" data-id="${l.id}">지우기</button></div>`).join("")}</div>` : ""}
+    </section>`;
+  },
+  async mount(box) {
+    let S = await GET("/api/payoff");
+    const draw = () => { box.innerHTML = this.html(S); };
+    draw();
+    box.onclick = async (e) => {
+      const b = e.target.closest("[data-pf]");
+      if (!b) return;
+      const act = b.dataset.pf, today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+      if (act === "del") {
+        if (!confirmTap(b, "한 번 더 누르면 지워요")) return;
+        S = await run(() => api("DELETE", `/api/payoff/log/${b.dataset.id}`), "지웠어요"); return draw();
+      }
+      if (act === "add") return openSheet("갚은 돈 기록", `<input class="amount-in" id="pfA" inputmode="numeric" placeholder="0원" value="${b.dataset.amt ? won(b.dataset.amt) : ""}">
+          <div class="fields"><label class="field">갚은 날<input id="pfD" type="date" value="${today}"></label><label class="field">메모<input id="pfN" maxlength="40" placeholder="선택"></label></div>
+          <div class="field">어디서 난 돈인가요<div class="chips" id="pfS">${Object.entries(S.sources).map(([k, l]) => `<button type="button" class="chip" data-src="${k}" aria-pressed="${k === (b.dataset.src || "save")}">${esc(l)}</button>`).join("")}</div></div>
+          <button type="button" class="btn dark wide" id="pfGo">기록</button>`, (sh) => {
+        moneyInput($("#pfA", sh));
+        let src = b.dataset.src || "save";
+        $("#pfS", sh).onclick = (ev) => { const c = ev.target.closest("[data-src]"); if (!c) return; src = c.dataset.src; $$("[data-src]", sh).forEach((x) => x.setAttribute("aria-pressed", String(x === c))); };
+        $("#pfGo", sh).onclick = async () => {
+          try { S = await run(() => api("POST", "/api/payoff/log", { amount: num($("#pfA", sh).value), date: $("#pfD", sh).value, src, note: $("#pfN", sh).value }), "기록했어요"); } catch (err) { return; }
+          closeSheet(); draw();
+        };
+      });
+      const g = S.goal || {};
+      openSheet("갚기 목표", `<label class="field">이름<input id="pgN" maxlength="20" placeholder="예: 대출 줄이기" value="${esc(g.name || "")}"></label>
+          <label class="field">갚을 금액<input class="amount-in" id="pgA" inputmode="numeric" placeholder="0원" value="${g.amount ? won(g.amount) : ""}"></label>
+          <div class="fields"><label class="field">시작일<input id="pgS" type="date" value="${esc(g.start || today)}"></label><label class="field">끝나는 날<input id="pgE" type="date" value="${esc(g.deadline || "")}"></label></div>
+          <div class="chips">${[1, 3, 5, 10].map((y) => `<button type="button" class="chip" data-y="${y}">${y}년 뒤</button>`).join("")}</div>
+          <div class="tiny">시작일부터 갚은 기록만 셈해요. 전부가 아니라 갚고 싶은 만큼만 넣어도 돼요.</div>
+          <button type="button" class="btn dark wide" id="pgGo">저장</button>
+          ${g.amount ? `<button type="button" class="btn wide" id="pgX">목표 지우기</button>` : ""}`, (sh) => {
+        moneyInput($("#pgA", sh));
+        sh.addEventListener("click", (ev) => { const c = ev.target.closest("[data-y]"); if (!c) return; const d0 = new Date($("#pgS", sh).value || today); d0.setFullYear(d0.getFullYear() + Number(c.dataset.y)); $("#pgE", sh).value = d0.toISOString().slice(0, 10); });
+        $("#pgGo", sh).onclick = async () => {
+          try { S = await run(() => api("PUT", "/api/payoff", { name: $("#pgN", sh).value, amount: num($("#pgA", sh).value), start: $("#pgS", sh).value, deadline: $("#pgE", sh).value }), "목표를 저장했어요"); } catch (err) { return; }
+          closeSheet(); draw();
+        };
+        if ($("#pgX", sh)) $("#pgX", sh).onclick = async (ev) => {
+          if (!confirmTap(ev.currentTarget, "한 번 더 누르면 지워요(기록은 남아요)")) return;
+          S = await run(() => api("PUT", "/api/payoff", { clear: true }), "목표를 지웠어요"); closeSheet(); draw();
+        };
+      });
+    };
+  },
+};
+
 pages.home = {
   every: 3000,
   async refresh() {   // 돌고 있는 자동매매가 있으면 그 카드만 새로(받는 중에는 3초, 평소에는 15초마다)
@@ -796,6 +878,7 @@ pages.home = {
           ${A.history.length >= 2 ? lineChart([{ values: A.history.map((h) => h.net) }], { h: 72, label: "월별 순자산 추이" }) : ""}`
         : `<div class="small muted">계좌를 등록하면 순자산을 매달 기록해요</div>`}
       </a>
+      ${payoff.homeCard(d.payoff)}
       <div id="hmAuto" class="hm-auto">${pages.invest.atHomeGroup((d.auto || {}).runs, (d.auto || {}).labs)}</div>
       <a class="card dark dom-night" href="#invest/ai" style="text-decoration:none">
         <div class="card-head"><h2>오늘의 투자</h2><span class="tiny" style="color:#C5CCD6">AI 추천 ›</span></div>
@@ -1425,11 +1508,12 @@ pages.assets = {
           <span class="end"><b>${g.type === "debt" ? "-" : ""}${won(a.balance)}</b></span></button>`).join("")}</div></section>`).join("")
         || `<section class="card"><div class="empty">통장, 예적금, 연금, 대출을 등록하면<br>순자산을 계산해요</div></section>`}`;
     if (h.sub === "accounts") { view.innerHTML = groupsHtml; fab("계좌", () => this.sheet(d, null)); }
-    else if (h.sub === "goal") view.innerHTML = goalCard + `<section class="card"><h2>지금 순자산</h2><div class="big" style="font-size:21px">${won(d.net)}원</div>
+    else if (h.sub === "goal") view.innerHTML = `<div id="pfBox"></div>` + goalCard + `<section class="card"><h2>지금 순자산</h2><div class="big" style="font-size:21px">${won(d.net)}원</div>
         ${d.history.length >= 2 ? lineChart([{ values: d.history.map((x) => x.net) }], { h: 90, label: "월별 순자산" }) + `<div class="axis"><span>${esc(d.history[0].month)}</span><span>${esc(d.history[d.history.length - 1].month)}</span></div>` : `<div class="tiny">매달 순자산을 기록해 추이를 그려요</div>`}</section>`;
     else view.innerHTML = summaryCard + `<div class="sec-title">종류별</div><section class="card tight"><div class="list">${d.groups.map((g) => `<a class="item" href="#assets/accounts" style="text-decoration:none">
         <span class="ico ${hue(g.label)}">${esc(g.label.slice(0, 2))}</span><span class="main"><b>${esc(g.label)}</b><span class="sub">${g.items.length}개 계좌</span></span>
         <span class="end"><b>${g.type === "debt" ? "-" : ""}${won(g.total)}</b></span></a>`).join("") || `<div class="empty">계좌 탭에서 통장·예적금·대출을 등록해 보세요</div>`}</div></section>` + goalCard;
+    if ($("#pfBox")) payoff.mount($("#pfBox")).catch(() => {});
     view.onclick = (e) => {
       const b = e.target.closest("[data-edit],[data-act]");
       if (!b) return;
@@ -1690,10 +1774,9 @@ pages.invest = {
         <div class="ap-h2">쓸 돈·시장·방식·엔진·기간만 정하면, AI가 플랜을 짜서 사고팔아요. 모든 매매를 기록하고, 쌓인 기록을 분석해 개선안을 내요. 개선안은 승인해야 반영돼요.</div>
       </section>
       ${this.atReadyHtml(O.ready)}
-      ${live.length ? `<div class="sec-title">돌고 있는 자동매매</div>${live.map((r) => this.atCard(r)).join("")}` : `<section class="card"><div class="empty">아직 돌고 있는 자동매매가 없어요.<br>모의로 먼저 돌려 기록을 쌓아 보는 걸 권해요.</div></section>`}
-      <button type="button" class="btn dark wide" id="atNewBtn">새 자동매매 만들기</button>
-      <div class="sec-title">모의 자동 테스트</div>
       ${this.atAutoHtml(LB)}
+      ${live.length ? `<div class="sec-title">돌고 있는 자동매매</div>${live.map((r) => this.atCard(r)).join("")}` : `<section class="card"><div class="empty">직접 만든 자동매매는 없어요.<br>모의는 위의 자동 테스트 스위치만 켜면 돼요.</div></section>`}
+      <button type="button" class="btn dark wide" id="atNewBtn">새 자동매매 만들기</button>
       ${this.atLabHtml(LB)}
       ${done.length ? `<div class="sec-title">끝난 자동매매</div>${done.map((r) => this.atCard(r)).join("")}` : ""}
       <div class="tiny" style="padding:0 3px">자동매매는 수익을 보장하지 않아요. 손실 한도에 닿으면 스스로 멈추지만, 급변할 때는 한도보다 더 잃을 수 있어요.</div>`;
@@ -1917,6 +2000,7 @@ pages.invest = {
         <div class="at-run-top"><b>${esc(r.name)}</b><span class="tag ${cls}">${lbl}</span><span class="tag g">${r.mode === "real" ? esc(d.broker || "실전") : "모의"}</span></div>
         <div class="at-hero-eq">${M(m.equity)}</div>
         <div class="at-hero-ret ${tone(m.ret_pct)}">${M(m.equity - m.budget, true)} (${pct(m.ret_pct, 2)})</div>
+        ${r.mode === "paper" && !r.lab_id && r.status !== "ended" ? `<button type="button" class="at-hero-tip" id="atToAuto">모의는 이제 <b>자동 테스트</b> 스위치 하나로 돌려요 ›</button>` : ""}
         ${m.ai_cost ? `<div class="at-hero-net">AI 비용 ${M(m.ai_cost)}을 빼면 <b class="${tone(m.net_pnl)}">${M(m.net_pnl, true)} (${pct(m.net_ret_pct, 2)})</b></div>` : ""}
         <div class="at-hero-kv">${["running", "paused"].includes(r.status) ? `<button type="button" id="atBud" aria-label="쓸 돈 바꾸기"><span>쓸 돈 <em>바꾸기 ›</em></span><b>${M(m.budget)}</b></button>` : `<div><span>쓸 돈</span><b>${M(m.budget)}</b></div>`}<div><span>남은 현금</span><b>${M(m.cash)}</b></div><div><span>확정 손익</span><b class="${tone(m.realized)}">${M(m.realized, true)}</b></div></div>
         ${N ? `${N.busy ? this.atScanHtml(N) : `<div class="at-nowline ${N.next.kind}"><span class="at-dot ${r.status === "running" && N.engine.ok ? "on" : ""}"></span>
@@ -1931,6 +2015,7 @@ pages.invest = {
     $("#atBack").onclick = () => { A.view = "list"; A.o = null; this.auto(box); };
     bindSeg(box, "자동탭", (v) => { A.tab = v; this.atTab(); });
     if ($("#atBud")) $("#atBud").onclick = () => this.atBudget();
+    if ($("#atToAuto")) $("#atToAuto").onclick = () => { A.view = "list"; A.o = null; this.auto(box); };
     $$("[data-ctl]", box).forEach((b) => (b.onclick = async () => {
       const a = b.dataset.ctl;
       if (a === "end" && !confirmTap(b, d.open.length ? "보유 종목을 모두 팔고 끝내요. 한 번 더 누르기" : "한 번 더 누르면 종료")) return;

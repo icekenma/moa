@@ -39,6 +39,8 @@ class Runtime:
         self.dividend = Dividend(self)
         from .autotrade import AutoTrade
         self.autotrade = AutoTrade(self)
+        from .payoff import Payoff
+        self.payoff = Payoff(self)
         from .trading.sweep import SweepJob
         self.sweep = SweepJob(self, data_dir or ".")
         from .backup import Backup

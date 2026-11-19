@@ -2648,3 +2648,37 @@ def test_public_ip_for_kiwoom_registration(monkeypatch):
     assert netinfo.public_ip(get=lambda *a, **k: 1 / 0)[0] == "203.0.113.7"          # 잠깐은 기억해 둔 값을 쓴다
     netinfo._cache.update(ip=None, at=0.0)
     assert netinfo.public_ip(get=lambda *a, **k: R("999.1.1.1")) == (None, 0)
+
+
+def test_payoff_goal_tracks_pace_from_logged_repayments():
+    """갚기 목표: 금액·기한을 정하고 갚은 돈을 기록하면, 일정 대비 어디쯤인지와 한 달에 얼마가 필요한지를 알려 준다."""
+    from datetime import date
+    from moa.db import DB
+    from moa.runtime import Runtime
+    rt = Runtime(DB(":memory:"), start_thread=False)
+    try:
+        P = rt.payoff
+        assert P.state()["goal"] is None and P.brief() is None
+        with pytest.raises(ValueError):
+            P.add({"amount": 100000})
+        with pytest.raises(ValueError):
+            P.set_goal({"amount": 100_000_000, "start": "2026-12-01", "deadline": "2026-11-01"})
+        P.set_goal({"name": "대출 줄이기", "amount": "120,000,000", "start": "2026-01-01", "deadline": "2031-01-01"})
+        s = P.state(date(2026, 1, 1))
+        assert (s["paid"], s["left"], s["need_month"], s["avg_month"]) == (0, 120_000_000, 2_000_000, None) and "한 달에 2,000,000원" in s["text"]
+        P.add({"date": "2026-02-10", "amount": 3_000_000, "src": "save"})
+        P.add({"date": "2026-05-20", "amount": "1,000,000", "src": "dividend", "note": "배당"})
+        P.add({"date": "2025-12-31", "amount": 9_999_999})                       # 시작일 전 기록은 세지 않는다
+        s = P.state(date(2026, 7, 1))                                           # 6달 지남: 일정대로면 1,200만
+        assert (s["paid"], s["plan_now"], s["pct"], s["time_pct"]) == (4_000_000, 12_000_000, 3.3, 10.0)
+        assert s["avg_month"] == 666_667 and s["need_month"] == round(116_000_000 / 54) and "뒤처졌어요" in s["text"] and s["eta"] == "2041-01"
+        assert s["by"] == [{"key": "save", "label": "저축·월급", "amount": 3_000_000}, {"key": "dividend", "label": "배당", "amount": 1_000_000}]
+        assert [m["month"] for m in s["months"]] == ["2026-02", "2026-05"] and len(s["logs"]) == 2 and s["hints"][0]["key"] == "save"
+        P.add({"date": "2026-06-30", "amount": 10_000_000, "src": "invest"})
+        s = P.state(date(2026, 7, 1))
+        assert "앞서 있어요" in s["text"] and rt.payoff.brief()["goal"]["name"] == "대출 줄이기"
+        P.delete(s["logs"][0]["id"])
+        assert P.state(date(2026, 7, 1))["paid"] == 4_000_000
+        assert P.set_goal({"clear": True})["goal"] is None
+    finally:
+        rt.stop()

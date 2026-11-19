@@ -356,7 +356,7 @@ def create_app(rt, updater=None):
             ledger=rt.ledger.summary(month), recent=rt.ledger.recent(5),
             assets=rt.assets.overview(),
             scalp={k: sc[k] for k in ("state", "mode_label", "today", "error", "data_source")},
-            ai=rt.aipick.today(), auto=rt.autotrade.brief(),
+            ai=rt.aipick.today(), auto=rt.autotrade.brief(), payoff=rt.payoff.brief(),
             dca={"schedule": dc["schedule"], "monthly": dc["monthly"], "value": dc["value"],
                  "gain": dc["gain"], "gain_pct": dc["gain_pct"], "plans": len(dc["plans"])},
             feed_error=rt.errors.get("feed"))
@@ -442,6 +442,23 @@ def create_app(rt, updater=None):
     def acct_del(aid):
         rt.assets.delete(aid)
         return jsonify(ok=True)
+
+    # ---------- 갚기 목표 ----------
+    @app.get("/api/payoff")
+    def payoff_get():
+        return jsonify(rt.payoff.state())
+
+    @app.put("/api/payoff")
+    def payoff_set():
+        return jsonify(rt.payoff.set_goal(body()))
+
+    @app.post("/api/payoff/log")
+    def payoff_add():
+        return jsonify(rt.payoff.add(body()))
+
+    @app.delete("/api/payoff/log/<int:lid>")
+    def payoff_del(lid):
+        return jsonify(rt.payoff.delete(lid))
 
     @app.put("/api/goal")
     def goal():

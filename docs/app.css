@@ -2403,3 +2403,35 @@ html:not(.dark-theme) .bot-run.lab .bot-mode{color:#4A3FC0}
 .at-adv-top b{font-size:12.5px;font-weight:800;color:var(--ink)}
 .at-adv .btn{align-self:flex-start;margin-top:3px}
 html.dark-theme .at-adv>div{background:rgba(255,255,255,.06)}
+
+/* ---------- v4.53 갚기 목표 ---------- */
+.pf{display:flex;flex-direction:column;gap:10px}
+.pf-home{display:flex;flex-direction:column;gap:7px;text-decoration:none;color:inherit}
+.pf-eq{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}
+.pf-eq b{font-size:22px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.pf-eq span{font-size:11.5px;font-weight:700;color:var(--ink3)}
+/* 채워진 만큼이 갚은 돈, 세로 눈금이 오늘의 일정 */
+.pf-bar{position:relative;height:12px;margin:14px 0 2px;border-radius:6px;background:color-mix(in srgb,var(--ink) 9%,transparent)}
+.pf-bar>i{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--teal,#1FA39A),#7FE0C0);min-width:3px}
+.pf-bar>em{position:absolute;top:-5px;bottom:-5px;width:2px;margin-left:-1px;background:var(--ink);border-radius:1px}
+.pf-bar>em span{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);font-style:normal;font-size:9px;font-weight:800;white-space:nowrap;color:var(--ink2);padding-bottom:1px}
+.pf-kv{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:0}
+.pf-kv div{display:flex;flex-direction:column;gap:2px;padding:9px 11px;border-radius:11px;background:var(--bg)}
+.pf-kv dt{font-size:10px;font-weight:700;color:var(--ink3)}
+.pf-kv dd{margin:0;font-size:13.5px;font-weight:800;font-variant-numeric:tabular-nums;display:flex;flex-direction:column}
+.pf-kv dd small{font-size:9.5px;font-weight:600;color:var(--ink3)}
+.pf-months{display:flex;align-items:flex-end;gap:5px;height:64px;padding-top:4px}
+.pf-months div{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:3px}
+.pf-months i{display:block;width:100%;max-width:26px;border-radius:4px 4px 0 0;background:var(--teal,#1FA39A)}
+.pf-months span{font-size:9px;font-weight:700;color:var(--ink3)}
+.pf-hints{display:flex;flex-direction:column;gap:6px}
+.pf-hints>div{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding:9px 11px;border-radius:11px;background:var(--bg);font-size:12px}
+.pf-hints>div>span{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.pf-hints small{font-size:10px;color:var(--ink3)}
+.pf-hints>div>b{font-variant-numeric:tabular-nums}
+.pf-logs .item{cursor:default}
+html.dark-theme .pf-kv div,html.dark-theme .pf-hints>div{background:rgba(255,255,255,.06)}
+html.dark-theme .pf-bar{background:rgba(255,255,255,.1)}
+html.dark-theme .pf-bar>em{background:#fff}
+.at-hero-tip{all:unset;box-sizing:border-box;display:block;padding:7px 10px;border-radius:9px;background:rgba(255,255,255,.1);font-size:11.5px;color:var(--on-deep2);cursor:pointer}
+.at-hero-tip b{color:#FDE68A;font-weight:800}

@@ -25,6 +25,7 @@ MODELS = {  # 화면에 보여 줄 모델과 백만 토큰당 가격(USD, 입력
     "claude-haiku-4-5": ("Haiku 4.5 · 가장 빠르고 저렴", 1.0, 5.0),
 }
 SEARCH_USD = 0.01  # 웹 검색 1회
+LITE_MODEL = "claude-haiku-4-5"  # 자동매매의 '빠른 재추천'에 쓰는 가장 싼 엔진(검색 없이, 짧은 답만 받는다)
 FX_DEFAULT = 1400.0
 
 SYSTEM = """너는 한국 개인 투자자의 앱(moa) 안에 있는 투자 도우미야.
@@ -180,7 +181,7 @@ class AI:
 
     # 화면 공통 비용 표시: 예상 비용 + 현재 잔액
     KIND_TOK = {"stock": (9000, 1500), "portfolio": (7000, 1600), "review": (9000, 1500), "sweep": (7000, 1500),
-                "chat": (6000, 1200), "pick": (16000, 2200), "pickw": (18000, 2600), "learn": (14000, 1500), "divplan": (15000, 2600), "dca": (5000, 1500), "auto": (12000, 1800), "test": (30, 10)}
+                "chat": (6000, 1200), "pick": (16000, 2200), "pickw": (18000, 2600), "pickq": (4500, 650), "learn": (14000, 1500), "divplan": (15000, 2600), "dca": (5000, 1500), "auto": (12000, 1800), "test": (30, 10)}
 
     def fx(self):
         try:
@@ -192,7 +193,7 @@ class AI:
         c = self.conf()
         model = model if model in MODELS else (c.get("model") or "claude-sonnet-5-5")
         web = c.get("web_search", True) if web is None else web
-        if kind in ("sweep", "test", "learn", "dca", "auto"):
+        if kind in ("sweep", "test", "learn", "dca", "auto", "pickq"):
             web = False
         pi, po = _model_price(model)
         tin, tout = self.KIND_TOK.get(kind, (6000, 1200))
@@ -359,19 +360,22 @@ class AI:
         pick = kind == "pick"
         from .aipick import hz, system_prompt
         hzn = hz(d.get("horizon"))
+        lite = pick and bool(d.get("lite"))      # 자동매매의 빠른 재추천: 가장 싼 엔진, 검색 없이, 표(JSON)만 받는다
+        if lite:
+            model = LITE_MODEL
         div = kind == "divplan"
         if div:
             from .dividend import DIV_SYSTEM
-        body = {"model": model, "max_tokens": 9000 if pick else 8000 if div else 4000 if kind == "auto" else 2500,
-                "system": system_prompt(hzn) if pick else DIV_SYSTEM if div else SYSTEM, "messages": messages, "stream": True}
+        body = {"model": model, "max_tokens": 1500 if lite else 9000 if pick else 8000 if div else 4000 if kind == "auto" else 2500,
+                "system": system_prompt(hzn, lite) if pick else DIV_SYSTEM if div else SYSTEM, "messages": messages, "stream": True}
         web = d["web_search"] if isinstance(d.get("web_search"), bool) else c.get("web_search", True)
-        if web and kind not in ("sweep", "learn", "dca", "auto"):    # 적립 점검은 앱 자료만으로 충분해 검색을 쓰지 않는다
+        if web and not lite and kind not in ("sweep", "learn", "dca", "auto"):    # 적립 점검은 앱 자료만으로 충분해 검색을 쓰지 않는다
             body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": (3 if hzn == "day" else 6) if pick else 4,
                               "user_location": {"type": "approximate", "country": "KR", "timezone": "Asia/Seoul"}}]
         usage = {"in": 0, "out": 0, "searches": 0}
         sources, seen = [], set()
         buf = []
-        rk = "pickw" if pick and hzn != "day" else kind  # 중기 추천은 검색이 많아 비용을 따로 센다
+        rk = "pickq" if lite else "pickw" if pick and hzn != "day" else kind  # 중기 추천은 검색이 많아 비용을 따로 센다
         state = {"blocks": []}
 
         def run(b):
@@ -490,7 +494,7 @@ class AI:
         if pick:
             try:
                 res = self.rt.aipick.parse("".join(buf), "us" if d.get("mkt") == "us" else "kr", model, usd,
-                                           cut=usage.get("stop") in ("max_tokens", "pause_turn"), horizon=hzn, theme=d.get("theme") or "")
+                                           cut=usage.get("stop") in ("max_tokens", "pause_turn"), horizon=hzn, theme=d.get("theme") or "", lite=lite)
             except Exception as e:
                 res = None
                 yield {"t": "status", "msg": f"추천 결과 정리 실패: {e}"}

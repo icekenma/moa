@@ -83,11 +83,62 @@ SWING_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 �
 picks는 최소 1개·최대 3개, 기대수익(승률×목표 − (1−승률)×손절)이 큰 순서로."""
 
 
-def system_prompt(h):
+# 자동매매의 '빠른 재추천': 장중에 자주, 싸게 다시 묻는다. 뉴스는 앞선 정밀 추천이 찾은 것을 메모로 이어받고, 답은 표(JSON)만 받는다.
+LITE_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 당일 매매 종목 선정 분석가야. 장중에 20분쯤마다 다시 불려서, 그 사이 달라진 흐름으로 새 매수 후보를 고른다.
+목표: 지금 매수해 '오늘 장 마감 전까지' 비용(국내 왕복 약 0.2%, 미국 약 0.25%)을 빼고도 수익으로 끝날 확률과 기대수익이 가장 높은 종목을 '후보' 표 안에서 고르는 것.
+- 근거는 주어진 숫자만. 없는 숫자·뉴스를 지어내지 마.
+- 좋은 후보: VWAP 위에서 눌림 뒤 재상승, 거래량이 붙는 돌파, 호가 매수 우위, 지수 우호. 피할 것: 고점에서 크게 밀리는 종목, 상한가 근처, 남은 장 시간이 모자라 목표에 닿기 어려운 경우.
+- '앞선 정밀 추천 메모'가 있으면 거기 적힌 시장 판단과 재료(뉴스)를 이어받되, 지금 숫자와 어긋나면 지금 숫자를 따라.
+- target_pct는 보통 stop_pct의 1.5배 이상이고 비용보다 충분히 커야 해. win_prob는 '손절보다 목표에 먼저 닿을 확률'의 솔직한 추정치(%). 근거가 약하면 낮게.
+- 살 만한 종목이 없으면 stance를 '관망'으로 두고 가장 나은 1종목만 weight_pct 5로 넣어. picks는 비우지 마.
+출력: 설명 글 없이 아래 JSON 하나만 ```json 코드 블록으로.
+{"stance":"공격|보통|관망","market_view":"한 줄","picks":[
+ {"sym":"종목코드 또는 기호","name":"이름","score":0~100,"win_prob":0~100,"entry_type":"limit|market","entry_price":숫자(현재가 근처),
+  "target_pct":숫자,"stop_pct":숫자(양수),"trail_pct":숫자 또는 0,"exit_by":"HH:MM(한국 시간)","weight_pct":5~40,
+  "reasons":["근거(짧게)","근거(짧게)"],"risks":["위험(짧게)"]}]}
+picks는 1~3개, 기대수익(승률×목표 − (1−승률)×손절)이 큰 순서로."""
+
+LITE_SWING = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 중기(스윙) 종목 선정 분석가야. 하루에 몇 번 다시 불려서, 아직 고르지 않은 후보 가운데 새 매수 후보를 고른다.
+목표: 지금 매수해 앞으로 약 <DAYS>거래일(<LABEL>) 들고 갔을 때 비용(국내 왕복 약 0.2%, 미국 약 0.25%)을 빼고도 수익으로 끝날 확률과 기대수익이 가장 높은 종목을 '후보' 표 안에서 고르는 것.
+- 근거는 주어진 숫자와 '앞선 정밀 추천 메모'에 적힌 재료만. 없는 숫자·뉴스를 지어내지 마. 재료를 모르는 종목은 catalyst_type을 '기술적'으로 두고 win_prob를 낮게.
+- 좋은 후보: 20·60일선 위, 거래량이 붙기 시작, 60일 고점 근처지만 아직 덜 오른 종목. 피할 것: 며칠 연속 급등해 재료가 다 반영된 종목, 상한가 직후.
+- 목표·손절은 하루 변동폭(ATR%)과 보유 기간에 맞춰. target_pct는 보통 stop_pct의 1.8배 이상. win_prob는 '보유 기간 안에 손절보다 목표에 먼저 닿을 확률'의 솔직한 추정치(%).
+- 살 만한 종목이 없으면 stance를 '관망'으로 두고 가장 나은 1종목만 weight_pct 5로 넣어. picks는 비우지 마.
+출력: 설명 글 없이 아래 JSON 하나만 ```json 코드 블록으로.
+{"stance":"공격|보통|관망","market_view":"한 줄","picks":[
+ {"sym":"종목코드 또는 기호","name":"이름","score":0~100,"win_prob":0~100,"entry_type":"limit|market","entry_price":숫자,
+  "target_pct":숫자,"stop_pct":숫자(양수),"trail_pct":숫자 또는 0,"hold_days":1~<DAYS>,"weight_pct":5~30,
+  "theme":"테마(짧게)","catalyst":"재료 한 줄(모르면 빈 문자열)","catalyst_type":"정책|실적|수급|이벤트|업황|기술적","catalyst_date":"",
+  "reasons":["근거(짧게)","근거(짧게)"],"risks":["위험(짧게)"]}]}
+picks는 1~3개, 기대수익이 큰 순서로."""
+
+
+def system_prompt(h, lite=False):
     h = hz(h)
     if h == "day":
-        return PICK_SYSTEM
-    return SWING_SYSTEM.replace("<DAYS>", str(HORIZONS[h]["days"])).replace("<LABEL>", HORIZONS[h]["label"])
+        return LITE_SYSTEM if lite else PICK_SYSTEM
+    return (LITE_SWING if lite else SWING_SYSTEM).replace("<DAYS>", str(HORIZONS[h]["days"])).replace("<LABEL>", HORIZONS[h]["label"])
+
+
+def _table(rows, cols):
+    """후보를 표 한 덩어리(첫 줄이 열 이름)로. 같은 내용을 JSON보다 훨씬 적은 토큰으로 보낸다."""
+    def cell(v):
+        if v is None:
+            return ""
+        if isinstance(v, float):
+            return f"{v:g}"
+        return str(v).replace("|", "/")
+    return "\n".join(["|".join(c[0] for c in cols)] + ["|".join(cell(c[1](r)) for c in cols) for r in rows])
+
+
+def _lite_learn(lp):
+    """학습 자료에서 빠른 재추천에 꼭 필요한 것만(통계가 말하는 점·자동 조정값·정해 둔 규칙)."""
+    if not lp:
+        return None
+    out = {k: lp[k] for k in ("통계가 말하는 점", "자동 조정값(실제 결과에서 계산)") if lp.get(k)}
+    if lp.get("지난 복기에서 정한 규칙"):
+        out["정해 둔 규칙"] = str(lp["지난 복기에서 정한 규칙"])[:500]
+    return out or None
 
 
 def kst_now():
@@ -282,7 +333,7 @@ class AIPick:
             target_pct REAL NOT NULL, stop_pct REAL NOT NULL, trail_pct REAL NOT NULL DEFAULT 0,
             exit_by TEXT, status TEXT NOT NULL DEFAULT 'watching', base REAL, high REAL, last REAL,
             exit_reason TEXT, exit_price REAL, closed_at TEXT, pick_id INTEGER, msg TEXT)""")
-        _col(rt.db, "ai_picks", (("horizon", "TEXT"), ("theme", "TEXT"), ("lv", "INTEGER")))
+        _col(rt.db, "ai_picks", (("horizon", "TEXT"), ("theme", "TEXT"), ("lv", "INTEGER"), ("lite", "INTEGER NOT NULL DEFAULT 0")))
         _col(rt.db, "ai_guards", (("horizon", "TEXT"), ("exit_date", "TEXT")))
         self._last = 0.0
         self._cands = {}
@@ -303,6 +354,8 @@ class AIPick:
         cand, seen = [], set()
         rank_dump = {}
         cap = float(d.get("max_price") or 0)        # 자동매매: 한 번에 쓰는 돈으로 1주도 못 사는 종목은 후보에서 뺀다
+        lite = bool(d.get("lite"))                  # 자동매매의 빠른 재추천: 같은 자료를 훨씬 짧게 보낸다
+        ex = {str(x).upper() for x in (d.get("exclude") or [])}   # 자동매매: 이미 보유했거나 오늘 거래한 종목은 다시 고르지 않게
         for k in kinds:
             try:
                 r = inv.ranking(mkt, k)
@@ -312,7 +365,7 @@ class AIPick:
             rank_dump[k] = [{x: it.get(x) for x in ("rank", "sym", "name", "price", "change_pct", "value", "volume")}
                             for it in r["items"][:20]]
             for it in r["items"][:20]:
-                if it["sym"] in seen or not it.get("price"):
+                if it["sym"] in seen or not it.get("price") or str(it["sym"]).upper() in ex:
                     continue
                 cp = it.get("change_pct") or 0
                 if mkt == "kr" and (cp >= 25 or it["price"] < 1000):
@@ -350,6 +403,29 @@ class AIPick:
             idx = [{k: i.get(k) for k in ("name", "price", "change_pct")} for i in idx]
         except Exception:
             idx = []
+        try:
+            lp = self.learn_prompt(mkt)
+        except Exception:
+            lp = None
+        if lite:
+            f = lambda k: (lambda r: r["오늘_5분봉"].get(k) if isinstance(r.get("오늘_5분봉"), dict) else None)
+            data = {"시장": "국내(KRX)" if mkt == "kr" else "미국", "기준시각(한국)": ss["kst"], "정규장_남은분": ss["left_min"],
+                    "정규장_마감(한국시간)": ss["close_kst"], "지수": idx,
+                    "후보": _table(deep, (("sym", lambda r: r["sym"]), ("이름", lambda r: r["name"]), ("현재가", lambda r: r["현재가"]), ("등락률%", lambda r: r.get("등락률%")),
+                                         ("시가대비%", f("시가대비%")), ("VWAP대비%", f("VWAP대비%")), ("고점대비%", f("고점대비%")), ("저점대비%", f("저점대비%")),
+                                         ("최근30분%", f("최근30분%")), ("최근30분_거래량배수", f("최근30분_거래량배수")),
+                                         ("호가_매수/매도잔량", lambda r: r.get("호가_매수잔량/매도잔량")), ("과거성적_가산점", lambda r: r.get("과거성적_가산점"))))}
+            memo = self.memo(mkt, "day")
+            if memo:
+                data["앞선 정밀 추천 메모"] = memo
+            if ex:
+                data["이미 다룬 종목(빼고 골라)"] = sorted(ex)[:30]
+            ll = _lite_learn(lp)
+            if ll:
+                data["내 과거 추천 성적(요약)"] = ll
+            ask = (f"지금({ss['kst']} 한국시간) {'국내' if mkt == 'kr' else '미국'} 시장의 '후보' 표(첫 줄이 열 이름)에서, 바로 매수해 오늘 안에 수익으로 끝낼 "
+                   "확률이 가장 높은 종목을 골라 줘." + (" '내 과거 추천 성적'의 피할 조건·권장 목표·손절 폭을 반영해." if ll else ""))
+            return f"AI 종목 추천({'국내' if mkt == 'kr' else '미국'}) · 빠른 재추천", ask, data
         cash, acct = self._cash(mkt)
         data = {"시장": "국내(KRX)" if mkt == "kr" else "미국", "기준시각(한국)": ss["kst"], "현지시각": ss["local"],
                 "정규장_진행중": ss["open"], "정규장_남은분": ss["left_min"], "정규장_마감(한국시간)": ss["close_kst"],
@@ -357,10 +433,9 @@ class AIPick:
                 "후보_상세(오늘 흐름)": deep, "실시간 순위": rank_dump}
         ask = (f"지금({ss['kst']} 한국시간) {'국내' if mkt == 'kr' else '미국'} 시장에서 바로 매수해 오늘 안에 수익으로 끝낼 "
                "확률이 가장 높은 종목을 골라 줘. 후보_상세를 중심으로 판단하고, 필요하면 오늘 뉴스·공시를 확인해.")
-        try:
-            lp = self.learn_prompt(mkt)
-        except Exception:
-            lp = None
+        if ex:
+            data["이미 다룬 종목(빼고 골라)"] = sorted(ex)[:30]
+            ask += " '이미 다룬 종목'은 이미 샀거나 오늘 거래했으니 빼고 골라."
         if lp:
             data["내 과거 추천 성적(자체 추적·학습 자료)"] = lp
             ask += (" 그리고 '내 과거 추천 성적'을 반드시 반영해: 성적이 나빴던 조건의 종목은 피하거나 비중을 줄이고, 잘 통한 조건을 우선하고, "
@@ -368,6 +443,22 @@ class AIPick:
         if not ss["open"]:
             ask += " (지금은 정규장이 아니야. 다음 정규장 시작 직후 기준으로 판단하고, 그 점을 첫 줄에 밝혀.)"
         return f"AI 종목 추천({'국내' if mkt == 'kr' else '미국'})", ask, data
+
+    def memo(self, mkt, h):
+        """가장 최근 정밀 추천(당일은 오늘, 중기는 최근 4일)이 찾은 시장 판단과 재료. 빠른 재추천이 뉴스를 다시 찾지 않고 이어받는다."""
+        since = (datetime.now() - timedelta(days=0 if h == "day" else 4)).strftime("%Y-%m-%d")
+        for r in self.rt.db.q("SELECT ts, stance, view, picks, text, horizon FROM ai_picks WHERE mkt=? AND ts>=? AND COALESCE(lite,0)=0 ORDER BY id DESC LIMIT 12", (mkt, since)):
+            if hz(r.get("horizon")) != h:
+                continue
+            out = {"받은 시각": r["ts"][5:16].replace("T", " "), "stance": r["stance"], "시장 판단": r["view"], "판단 글": str(r["text"] or "")[:700]}
+            picks = []
+            for x in json.loads(r["picks"] or "[]")[:3]:
+                why = x.get("catalyst") or next(iter(x.get("reasons") or []), "")
+                picks.append(f"{x.get('name')}({x.get('sym')}): {str(why)[:90]}")
+            if picks:
+                out["그때 고른 종목"] = picks
+            return out
+        return None
 
     def _cash(self, mkt):
         """주문 가능 금액과, 그 값이 어디서 나왔는지 AI가 오해하지 않게 붙이는 계좌 요약."""
@@ -411,6 +502,8 @@ class AIPick:
         src_name = {"value": "거래대금 상위", "up": "상승률 상위", "volume": "거래량 상위"}
         cand, seen, rank_dump = [], set(), {}
         cap = float(d.get("max_price") or 0)        # 자동매매: 한 번에 쓰는 돈으로 1주도 못 사는 종목은 후보에서 뺀다
+        lite = bool(d.get("lite"))
+        ex = {str(x).upper() for x in (d.get("exclude") or [])}
         for k in (("value", "up", "volume") if mkt == "kr" else ("up", "volume")):
             try:
                 r = inv.ranking(mkt, k)
@@ -422,7 +515,7 @@ class AIPick:
             for it in r["items"][:25]:
                 if n >= take[k]:
                     break
-                if it["sym"] in seen or not it.get("price"):
+                if it["sym"] in seen or not it.get("price") or str(it["sym"]).upper() in ex:
                     continue
                 if (mkt == "kr" and (it["price"] < 1000 or (it.get("change_pct") or 0) >= 29.5)) or (mkt == "us" and it["price"] < 2):
                     continue
@@ -433,7 +526,7 @@ class AIPick:
                 n += 1
         try:  # 내 관심종목도 후보에
             for sym in (rt.market.watch().get(mkt) or [])[:5]:
-                if sym not in seen:
+                if sym not in seen and str(sym).upper() not in ex:
                     q = self.quote(mkt, sym)
                     if q.get("price") and not (cap and q["price"] > cap):
                         seen.add(sym)
@@ -462,8 +555,33 @@ class AIPick:
             idx = [{k: i.get(k) for k in ("name", "price", "change_pct")} for i in idx]
         except Exception:
             idx = []
-        cash, acct = self._cash(mkt)
         where = "국내" if mkt == "kr" else "미국"
+        if lite:
+            f = lambda k: (lambda r: r["일봉"].get(k) if isinstance(r.get("일봉"), dict) else None)
+            keys = []
+            for r in deep:                           # 일봉 특징의 열 이름은 자료에 있는 그대로 쓴다
+                for k, v in (r["일봉"].items() if isinstance(r.get("일봉"), dict) else ()):
+                    if k not in keys and isinstance(v, (int, float)):
+                        keys.append(k)
+            data = {"시장": "국내(KRX)" if mkt == "kr" else "미국", "기준시각(한국)": ss["kst"], "보유 기간": f"약 {H['days']}거래일({H['label']})",
+                    "지수": idx, "지수_추세(일봉)": ix,
+                    "후보": _table(deep, [("sym", lambda r: r["sym"]), ("이름", lambda r: r["name"]), ("현재가", lambda r: r["현재가"]), ("등락률%", lambda r: r.get("등락률%"))]
+                                   + [(k, f(k)) for k in keys[:12]] + [("과거성적_가산점", lambda r: r.get("과거성적_가산점"))])}
+            memo = self.memo(mkt, h)
+            if memo:
+                data["앞선 정밀 추천 메모"] = memo
+            if ex:
+                data["이미 다룬 종목(빼고 골라)"] = sorted(ex)[:30]
+            try:
+                ll = _lite_learn(self.learn_prompt(mkt, h))
+            except Exception:
+                ll = None
+            if ll:
+                data["내 과거 추천 성적(요약)"] = ll
+            ask = (f"지금({ss['kst']} 한국시간) {where} 시장의 '후보' 표(첫 줄이 열 이름)에서, 매수해 앞으로 약 {H['days']}거래일({H['label']}) 들고 갈 종목을 골라 줘."
+                   + (" '내 과거 추천 성적'의 피할 조건·권장 목표·손절 폭을 반영해." if ll else ""))
+            return f"AI {H['label']} 추천({where}) · 빠른 재추천", ask, data
+        cash, acct = self._cash(mkt)
         data = {"시장": "국내(KRX)" if mkt == "kr" else "미국", "기준시각(한국)": ss["kst"], "현지시각": ss["local"],
                 "보유 기간": f"약 {H['days']}거래일({H['label']})", "정규장_진행중": ss["open"], "지수": idx, "지수_추세(일봉)": ix,
                 "주문가능금액": cash, "통화": "원" if mkt == "kr" else "달러", "계좌(참고)": acct,
@@ -472,6 +590,9 @@ class AIPick:
                f"먼저 앞으로 {H['label']} 안에 주가를 움직일 재료(정책·예산·실적·수주·일정이 정해진 이벤트·수급)를 찾고, 그 수혜 종목을 골라. "
                "후보_상세는 지금 돈이 몰리는 종목일 뿐이니, 재료가 더 좋은 종목이 있으면 후보 밖에서 골라도 돼. "
                "이미 며칠 급등해 재료가 가격에 반영된 종목은 감점해.")
+        if ex:
+            data["이미 다룬 종목(빼고 골라)"] = sorted(ex)[:30]
+            ask += " '이미 다룬 종목'은 이미 샀거나 오늘 거래했으니 빼고 골라."
         if theme:
             data["사용자가 궁금해하는 테마"] = theme
             ask += (f" 사용자가 '{theme}' 테마를 궁금해해. 이 테마의 재료가 지금도 유효한지(이미 반영됐는지, 번복·부인 위험은 없는지) 먼저 판단하고, "
@@ -526,7 +647,7 @@ class AIPick:
                 pass
         return sym, q
 
-    def parse(self, text, mkt, model, usd, cut=False, horizon="day", theme=""):
+    def parse(self, text, mkt, model, usd, cut=False, horizon="day", theme="", lite=False):
         h = hz(horizon)
         H = HORIZONS[h]
         swing = h != "day"
@@ -607,11 +728,13 @@ class AIPick:
         body = text.split("```json")[0].strip()
         ls = self.lessons(h) or {}
         lv = int(ls.get("ver") or 0) if ls.get("text") else 0  # 어떤 규칙 판을 읽고 낸 추천인지(판별 성적 비교용)
-        pid = self.rt.db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text,horizon,theme,lv) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        if lite:
+            body = ""                                # 빠른 재추천은 표만 받는다(판단 글 없음)
+        pid = self.rt.db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text,horizon,theme,lv,lite) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                            (datetime.now().isoformat(timespec="seconds"), mkt, model, usd, j.get("stance"),
-                            j.get("market_view"), json.dumps(picks, ensure_ascii=False), body, h, str(theme or "")[:60], lv))
+                            j.get("market_view"), json.dumps(picks, ensure_ascii=False), body, h, str(theme or "")[:60], lv, 1 if lite else 0))
         return {"id": pid, "stance": j.get("stance"), "view": j.get("market_view"), "picks": picks, "mkt": mkt, "note": note,
-                "horizon": h, "label": H["label"], "theme": str(theme or "")[:60]}
+                "horizon": h, "label": H["label"], "theme": str(theme or "")[:60], "lite": bool(lite)}
 
     def fallback(self, mkt, h="day"):
         h = hz(h)
@@ -693,11 +816,11 @@ class AIPick:
         w = self.rt.db.one("SELECT COUNT(*) n FROM ai_guards WHERE status='watching'")["n"]
         done = self.rt.db.q("SELECT base, entry, exit_price FROM ai_guards WHERE status='done' AND closed_at LIKE ?", (d + "%",))
         pl = [(r["exit_price"] / (r["base"] or r["entry"]) - 1) * 100 for r in done if r["exit_price"] and (r["base"] or r["entry"])]
-        n = self.rt.db.one("SELECT COUNT(*) n FROM ai_picks WHERE ts LIKE ?", (d + "%",))["n"]
+        n = self.rt.db.one("SELECT COUNT(*) n FROM ai_picks WHERE ts LIKE ? AND COALESCE(lite,0)=0", (d + "%",))["n"]
         return {"watching": w, "done_today": len(done), "avg_pct": round(sum(pl) / len(pl), 2) if pl else 0, "picks_today": n}
 
     def history(self):
-        rows = self.rt.db.q("SELECT id,ts,mkt,model,usd,stance,view,picks,horizon,theme FROM ai_picks ORDER BY id DESC LIMIT 30")
+        rows = self.rt.db.q("SELECT id,ts,mkt,model,usd,stance,view,picks,horizon,theme FROM ai_picks WHERE COALESCE(lite,0)=0 ORDER BY id DESC LIMIT 30")
         for r in rows:
             r["picks"] = json.loads(r["picks"] or "[]")
             r["horizon"] = hz(r.get("horizon"))

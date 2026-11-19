@@ -2593,3 +2593,6 @@ html.dark-theme .am.paper{fill:#14111F}
 html.dark-theme .at-mk-i.buy.paper::after{border-bottom-color:#14111F}html.dark-theme .at-mk-i.sell.paper::after{border-top-color:#14111F}
 .at-mk{display:flex;flex-direction:column;gap:7px}
 .at-mk .lab-last>div>span:last-child{max-width:52%}
+
+/* v4.64 빠른 재추천 */
+.lab-freq{margin:-2px 0 8px}

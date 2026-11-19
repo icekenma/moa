@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1344";
+const UI_VERSION = "261119.1409";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1711,24 +1711,29 @@ pages.invest = {
     if (S.sources) facts.push(`읽은 자료 ${S.sources}개`);
     if (S.step === 2 && S.chars) facts.push(`${won(S.chars)}자 작성`);
     if (S.step === 1 && S.src) facts.push(S.src);
-    if (!facts.length) facts.push("보통 1~2분 걸려요");
+    if (S.lite) facts.unshift("빠른 재추천");
+    if (facts.length < (S.lite ? 2 : 1)) facts.push(S.lite ? "보통 10~20초 걸려요" : "보통 1~2분 걸려요");
     const segs = `<ol class="at-scan-steps">${S.steps.map((t, i) => `<li class="${i < S.step ? "done" : i === S.step ? "on" : ""}"${i === S.step ? ' aria-current="step"' : ""}><i></i>${mini ? "" : `<span>${esc(t)}</span>`}</li>`).join("")}</ol>`;
     const sync = `--sync:-${Date.now() % 2400}ms`;
     if (mini) return `<div class="at-scan mini" style="${sync}" role="status"><div class="at-scan-top"><span class="at-radar" aria-hidden="true"><i></i></span>
-        <div class="at-scan-txt"><b>${esc(S.steps[S.step])} 중 <small>${S.step + 1}/${S.steps.length}</small></b></div>${tickHtml("el", S.elapsed)}</div>${segs}</div>`;
+        <div class="at-scan-txt"><b>${S.lite ? "빠른 재추천 · " : ""}${esc(S.steps[S.step])} 중 <small>${S.step + 1}/${S.steps.length}</small></b></div>${tickHtml("el", S.elapsed)}</div>${segs}</div>`;
     return `<div class="at-scan" style="${sync}" role="status">
       <div class="at-scan-top"><span class="at-radar" aria-hidden="true"><i></i></span>
         <div class="at-scan-txt"><b>${esc(S.msg || S.steps[S.step])}</b><span>${facts.map(esc).join(" · ")}</span></div>${tickHtml("el", S.elapsed)}</div>
       ${segs}</div>`;
   },
+  // 오늘 받은 추천 횟수: 빠른 재추천을 쓰면 하루 최대가 따로 없어 'n번', 아니면 'n/하루 최대'
+  atCyc(t) {
+    return t.quick_gap ? `${t.cycles}번` : `${t.cycles}/${t.cycles_max}`;
+  },
   atTodayLine(r) {
     const n = r.now, t = n.today;
-    return `오늘 추천 ${t.cycles}/${t.cycles_max} · 매수 ${t.buys} · 매도 ${t.sells} · 보유 ${n.size.slots_used}/${n.size.slots} · ${n.period.day}일째/${n.period.days}일`;
+    return `오늘 추천 ${this.atCyc(t)} · 매수 ${t.buys} · 매도 ${t.sells} · 보유 ${n.size.slots_used}/${n.size.slots} · ${n.period.day}일째/${n.period.days}일`;
   },
   // 홈·투자 홈에 놓는 요약 카드(누르면 그 자동매매의 현황으로)
   atHomeCard(r) {
     const [lbl] = this.AT_ST[r.status] || [r.status], m = r.money, n = r.now, t = n.today, live = r.status === "running" && n.engine.ok, real = r.mode === "real";
-    const kpi = [["추천", `${t.cycles}/${t.cycles_max}`], ["매수", t.buys], ["매도", t.sells], ["보유", `${n.size.slots_used}/${n.size.slots}`], ["기간", `${n.period.day}/${n.period.days}일`]];
+    const kpi = [["추천", this.atCyc(t)], ["매수", t.buys], ["매도", t.sells], ["보유", `${n.size.slots_used}/${n.size.slots}`], ["기간", `${n.period.day}/${n.period.days}일`]];
     return `<a class="bot-run at-home ${real ? "real" : "paper"} ${r.mkt}" href="#invest/auto" data-atgo="${r.id}">
       <div class="bot-top"><span class="bot-mode">${real ? "실전" : "모의"}</span><b class="bot-name">${esc(r.name)}</b>
         <span class="bot-st live-dot ${live ? "on" : ""}">${lbl}${n.engine.ok ? "" : " · 엔진 확인 필요"}</span></div>
@@ -1864,7 +1869,7 @@ pages.invest = {
         <div class="at-hero-top"><b><span class="mk-tag ${L.mkt}">${kr ? "국내장" : "미국장"}</span>${esc(L.style_label)} 실험 · 플랜 ${L.runs.length}개</b>
           <span class="tag ${{ running: "y", paused: "g", ended: "" }[L.status]}">${{ running: "가동 중", paused: "멈춤", ended: "끝남" }[L.status]}</span></div>
         ${N ? (N.busy ? this.atScanHtml(N) : `<div class="at-nowline ${N.next.kind}"><span class="at-dot ${L.status === "running" ? "on" : ""}"></span><div><b>${esc(N.next.label)}</b><span>${this.atNextLine(N)}</span></div></div>`) : ""}
-        <div class="at-hero-kv k4"><div><span>보유</span><b>${L.stocks ?? L.open}종목</b></div><div><span>끝난 거래</span><b>${L.closed}건</b></div><div><span>추천</span><b>${L.cycles}번</b></div><div><span>AI 비용</span><b>$${L.usd.toFixed(2)}</b></div></div>
+        <div class="at-hero-kv k4"><div><span>보유</span><b>${L.stocks ?? L.open}종목</b></div><div><span>끝난 거래</span><b>${L.closed}건</b></div><div><span>추천${L.plan && L.plan.quick_gap_min ? ` · ${L.plan.quick_gap_min}분마다` : ""}</span><b>${L.cycles}번</b></div><div><span>AI 비용</span><b>$${L.usd.toFixed(2)}</b></div></div>
         ${seg("실험탭", [["hold", `보유 ${L.positions.length}`], ["last", "추천"], ["rank", "성적"], ["sold", `판 기록 ${L.trades.length}`]], tab, "ap-mkt")}
       </section>
       <div id="atBody">${adv && adv.best ? `<div class="at-cand"><span><b>실전 후보</b><small>${esc(adv.text)}</small></span><button type="button" class="btn sm" data-real="${L.mkt}:${L.style}:${esc(adv.best.variant)}">실전 만들기</button></div>` : ""}
@@ -1899,7 +1904,7 @@ pages.invest = {
           ${g.why && g.why.reasons.length ? `<div class="lab-why"><b>AI가 고른 이유</b><ul>${g.why.reasons.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
           ${g.why && g.why.risks.length ? `<div class="lab-why risk"><b>AI가 본 위험</b><ul>${g.why.risks.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
         </div></details>`).join("")}</div>` : `<div class="empty sm">지금 들고 있는 종목이 없어요.<br>${esc(L.last_line || "추천을 받으면 여기에 보여요")}</div>`;
-    const lastH = last ? `<div class="card-head"><h2>${hm(last.ts)} 추천${last.stance ? ` · ${esc(last.stance)}` : ""}</h2></div>
+    const lastH = last ? `<div class="card-head"><h2>${hm(last.ts)} ${last.lite ? "빠른 재추천" : "정밀 추천"}${last.stance ? ` · ${esc(last.stance)}` : ""}</h2></div>${L.plan && L.plan.quick_gap_min ? `<div class="tiny lab-freq">정밀 추천 하루 ${L.plan.cycles_per_day}번 + ${L.plan.quick_gap_min}분마다 빠른 재추천 · 지금까지 ${L.cycles}번(빠른 ${L.quick || 0})</div>` : ""}
         ${last.view ? `<div class="small muted">${esc(last.view)}</div>` : ""}
         <div class="lab-last">${last.picks.map((x) => `<div><span><b>${stockA(L.mkt, x.sym, x.name)}</b><small>점수 ${x.score ?? "-"} · 승률 ${x.win_prob ?? "-"}%</small></span>
           <span><b class="${x.bought ? "up" : ""}">${x.bought}개 플랜 매수</b><small>${x.skips.map((k) => `${esc(k.why)} ${k.n}`).join(" · ") || "모두 매수"}</small></span></div>`).join("") || `<div class="tiny">추천 종목이 없었어요</div>`}</div>`
@@ -2011,8 +2016,9 @@ pages.invest = {
     if (!c) return "";
     return `<div class="at-cost ${c.ok ? "" : "over"}">
         <div class="at-cost-top"><span>AI 엔진${c.auto ? "(자동)" : ""}</span><b>${esc(c.label.split(" · ")[0])} · 하루 ${c.cycles}번${c.web ? "" : " · 웹 검색 없이"}</b></div>
+        ${c.quick_gap ? `<div class="at-cost-top"><span>빠른 재추천</span><b>${c.quick_gap}분마다 · 하루 약 ${c.quick_n}번 · 한 번에 약 ${won(Math.max(1, Math.round(c.quick_usd * (c.fx || 1400))))}원</b></div>` : ""}
         <div class="at-cost-top"><span>한 달 AI 비용</span><b>약 ${kr ? `${won(c.month_cur)}원` : `$${c.month_usd}`}${real ? ` · 쓸 돈의 ${c.pct}%` : ""}</b></div>
-        ${c.warn ? `<div class="notice warn">${esc(c.warn)}</div>` : `<div class="tiny">${real ? "한 달 비용이 쓸 돈의 1%를 넘지 않게 맞췄어요." : "모의도 AI 비용은 실제로 나가요. 하루 $0.6 안에서 맞췄어요."}${c.auto && !c.web ? " 비용에 맞추느라 웹 검색(뉴스)을 뺐어요." : ""}</div>`}
+        ${c.warn ? `<div class="notice warn">${esc(c.warn)}</div>` : `<div class="tiny">${real ? "한 달 비용이 쓸 돈의 1%를 넘지 않게 맞췄어요." : "모의도 AI 비용은 실제로 나가요. 하루 $0.6 안에서 맞췄어요."}${c.auto && !c.web ? " 비용에 맞추느라 웹 검색(뉴스)을 뺐어요." : ""}${c.quick_gap ? " 빠른 재추천은 가장 싼 엔진으로 달라진 흐름만 다시 물어요(이미 다룬 종목은 빼고)." : ""}</div>`}
         ${pv.ready ? `<div class="notice ${pv.ready.ok ? "" : "warn"}"><b>모의 검증</b> ${esc(pv.ready.text)}</div>` : ""}
       </div>`;
   },
@@ -2039,7 +2045,7 @@ pages.invest = {
         </div>
         ${pv.variant ? `<div class="notice">모의 실험에서 검증한 <b>${esc(pv.variant.label)}</b> 플랜의 기준을 그대로 가져왔어요(실전은 관망에 쉬는 것을 지켜요). <button type="button" class="chip" id="atVarOff">기본 플랜으로</button></div>` : ""}
         ${this.atCostHtml(pv)}
-        <div class="tiny">AI 추천 비용: 한 번에 약 ${won(c.per_usd * (c.fx || 1400))}원, 하루 최대 약 ${won(c.day_usd * (c.fx || 1400))}원. 이번 달 AI 예산 $${c.budget_usd ?? "-"} 가운데 $${Number(c.month_usd || 0).toFixed(2)} 사용.</div>
+        <div class="tiny">AI 추천 비용: 정밀 추천 한 번에 약 ${won(c.per_usd * (c.fx || 1400))}원, 하루 최대 약 ${won(c.day_usd * (c.fx || 1400))}원. 이번 달 AI 예산 $${c.budget_usd ?? "-"} 가운데 $${Number(c.month_usd || 0).toFixed(2)} 사용.</div>
       </section>
       ${real ? `<section class="card"><label class="field"><span>실제 주문이 나가요. 시작하려면 <b>실전</b>이라고 적어 주세요</span><input id="atConfirm" autocomplete="off" placeholder="실전" value="${esc(F.confirm)}"></label></section>` : ""}
       <button type="button" class="btn ${real ? "red" : "dark"} wide" id="atStart" ${ok ? "" : "disabled"}>${real ? "실전으로 시작" : "모의로 시작"}</button>
@@ -2118,7 +2124,7 @@ pages.invest = {
       </section>
       <section class="card at-today">
         <div class="card-head"><h2>오늘 한 일</h2><span class="tiny">${N.busy ? "AI 추천 받는 중" : N.phase === "open" ? "장 열림" : N.phase === "pre" ? "장 시작 전" : N.phase === "post" ? "장 마감" : "쉬는 날"}</span></div>
-        <div class="sc-kpi"><div><span>AI 추천</span><b>${T.cycles}<small> / ${T.cycles_max}번</small></b></div><div><span>매수 · 매도</span><b>${T.buys} · ${T.sells}${T.sells ? `<small> (승 ${T.wins})</small>` : ""}</b></div>
+        <div class="sc-kpi"><div><span>AI 추천${T.quick_gap ? ` · ${T.quick_gap}분마다` : ""}</span><b>${T.quick_gap ? `${T.cycles}<small>번 · 정밀 ${T.full}/${T.cycles_max} · 빠른 ${T.quick}</small>` : `${T.cycles}<small> / ${T.cycles_max}번</small>`}</b></div><div><span>매수 · 매도</span><b>${T.buys} · ${T.sells}${T.sells ? `<small> (승 ${T.wins})</small>` : ""}</b></div>
           <div><span>오늘 손익</span><b class="${tone(dayPnl)}">${M(dayPnl, true)}</b></div></div>
         ${gauge("하루 손실 한도", dayUsed, `${M(Math.min(0, dayPnl))} / -${M(T.limit)}`, dayUsed >= 100 ? "full" : "")}
         ${gauge("전체 손실 한도", totUsed, `${M(N.risk.loss ? -N.risk.loss : 0)} / -${M(N.risk.limit)}`, totUsed >= 100 ? "full" : "")}
@@ -2135,7 +2141,7 @@ pages.invest = {
         </dl></section>
       <section class="card at-last">
         <div class="card-head"><h2>최근 추천</h2><span class="tiny">${L ? esc(L.ts.replace("T", " ").slice(5, 16)) : ""}</span></div>
-        ${L ? `<div class="small">${L.stance ? `<span class="tag">${esc(L.stance)}</span> ` : ""}${esc(L.view || L.msg)}</div>
+        ${L ? `<div class="small">${L.lite ? `<span class="tag y">빠른 재추천</span> ` : ""}${L.stance ? `<span class="tag">${esc(L.stance)}</span> ` : ""}${esc(L.view || L.msg)}</div>
           ${L.picks ? `<div class="at-last-l">${L.bought.map((x) => `<div class="buy"><b>${esc(x)}</b><span>샀어요</span></div>`).join("")}${L.skipped.map((x) => `<div><b>${esc(x.name)}</b><span>${esc(x.why || "건너뜀")}</span></div>`).join("")}</div>` : `<div class="tiny">${esc(L.msg)}</div>`}`
           : `<div class="empty small">아직 받은 추천이 없어요.${N.next.kind === "at" ? `<br>첫 추천은 ${esc(N.next.text)}에 받아요.` : ""}</div>`}
       </section>`;
@@ -2308,12 +2314,13 @@ pages.invest = {
   // 하루 AI 비용 한도만 빠르게 바꾼다(현황의 'AI 비용'과, 한도에 걸렸을 때 뜨는 버튼에서 연다)
   atAiLimit() {
     const A = this.at, d = A.d, N = d.now, cur = Number(d.params.ai_daily_usd != null ? d.params.ai_daily_usd : 1);
-    const per = N && N.ai.cycles_all ? N.ai.total_usd / N.ai.cycles_all : 0.8, need = Math.ceil(per * d.params.cycles_per_day * 2) / 2;
+    const qg = Number(d.params.quick_gap_min) || 0;
+    const per = qg ? 0.15 : N && N.ai.cycles_all ? N.ai.total_usd / N.ai.cycles_all : 0.8, need = Math.ceil((per * d.params.cycles_per_day + (qg ? 0.2 : 0)) * 2) / 2;
     openSheet("하루 AI 비용 한도", `<div class="at-bud">
         <div class="at-bud-now"><span>지금 한도 · 오늘 쓴 돈</span><b>$${cur} · $${N ? N.ai.today_usd.toFixed(2) : "0.00"}</b></div>
         <label class="field">새 한도($, 0.2~20)<input id="alV" class="r big" inputmode="decimal" autocomplete="off" value="${Math.max(cur, need)}"></label>
         <div class="chips">${[1, 2, 3, 5].map((v) => `<button type="button" class="chip" data-v="${v}">$${v}</button>`).join("")}</div>
-        <div class="tiny">추천 한 번에 약 $${per.toFixed(2)}(약 ${won(Math.round(per * 1400 / 10) * 10)}원)가 들어요. 하루 ${d.params.cycles_per_day}번을 다 받으려면 $${need} 정도가 필요해요. 올리면 바로 다음 추천을 받아요. 조건이 같은 자동매매끼리는 추천을 한 번만 받아 함께 써요.</div>
+        <div class="tiny">${qg ? `정밀 추천은 한 번에 약 $0.1~0.2, ${qg}분마다 받는 빠른 재추천은 한 번에 약 $0.01이 들어요. 하루 일정을 다 받으려면 $${need} 정도면 돼요.` : `추천 한 번에 약 $${per.toFixed(2)}(약 ${won(Math.round(per * 1400 / 10) * 10)}원)가 들어요. 하루 ${d.params.cycles_per_day}번을 다 받으려면 $${need} 정도가 필요해요.`} 올리면 바로 다음 추천을 받아요. 조건이 같은 자동매매끼리는 추천을 한 번만 받아 함께 써요.</div>
         <button type="button" class="btn dark wide" id="alGo">한도 바꾸기</button></div>`, (box) => {
       box.addEventListener("click", (e) => { const c = e.target.closest("[data-v]"); if (c) $("#alV", box).value = c.dataset.v; });
       $("#alGo", box).onclick = async () => {
@@ -2327,7 +2334,7 @@ pages.invest = {
     openSheet("플랜 직접 고치기", `<div class="fields">${Object.entries(d.keys).map(([k, l]) => typeof p[k] === "boolean"
       ? `<label class="field">${esc(l)}<select data-k="${k}"><option value="true" ${p[k] ? "selected" : ""}>예</option><option value="false" ${p[k] ? "" : "selected"}>아니오</option></select></label>`
       : `<label class="field">${esc(l)}<input data-k="${k}" class="r" ${/^entry_/.test(k) ? 'type="time"' : 'inputmode="decimal"'} value="${esc(p[k] != null ? p[k] : "")}"></label>`).join("")}</div>
-      <div class="fields" style="margin-top:8px"><label class="field">하루 AI 비용 한도($) · 추천 한 번에 보통 $0.5~0.9<input data-k="ai_daily_usd" class="r" inputmode="decimal" value="${esc(p.ai_daily_usd != null ? p.ai_daily_usd : 1)}"></label></div>
+      <div class="fields" style="margin-top:8px"><label class="field">하루 AI 비용 한도($) · 정밀 추천과 빠른 재추천을 합쳐서 봐요<input data-k="ai_daily_usd" class="r" inputmode="decimal" value="${esc(p.ai_daily_usd != null ? p.ai_daily_usd : 1)}"></label></div>
       <div class="tiny" style="margin:8px 0">고치면 플랜 판이 하나 올라가고 이력에 남아요. 범위를 벗어난 값은 가장 가까운 값으로 맞춰요.</div>
       <button type="button" class="btn dark wide" id="atSave">저장</button>`, (box) => {
       $("#atSave", box).onclick = async () => {

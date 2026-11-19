@@ -39,6 +39,8 @@ SKIP = {"winprob": "승률 기준 미달", "score": "점수 기준 미달", "rr"
 _SKIP_TEXT = (("승률", "winprob"), ("점수", "score"), ("손익비", "rr"), ("비용", "fee"), ("쫓아가지", "chase"), ("1주를 못", "qty"),
               ("꽉 참", "full"), ("이미 거래", "dup"), ("예비 종목", "auto"), ("시세", "quote"), ("매수 실패", "fail"))
 SHARE_SEC = 600        # 같은 조건의 추천을 함께 쓰는 시간(초)
+QUICK_MIN = 10         # 빠른 재추천의 가장 짧은 간격(분)
+QUICK_GAP = {"day": 20, "swing": 60, "month": 90}   # 모의의 빠른 재추천 간격(분): 단타는 분봉이 바뀌는 속도, 스윙·장기는 하루 몇 번
 OPP_MIN = 8            # 건너뛴 종목의 실제 결과가 이만큼은 쌓여야 기준을 낮춘다
 
 
@@ -59,8 +61,9 @@ PLAN_KEYS = {
     "tp_cap": (0.5, 60, float, "익절 상한(%)"),
     "sl_cap": (0.3, 20, float, "손절 상한(%)"),
     "min_rr": (1.0, 3.0, float, "최소 손익비"),
-    "cycles_per_day": (1, 6, int, "하루 추천 횟수"),
-    "cycle_gap_min": (20, 240, int, "추천 간격(분)"),
+    "cycles_per_day": (1, 6, int, "하루 정밀 추천 횟수"),
+    "cycle_gap_min": (20, 240, int, "정밀 추천 간격(분)"),
+    "quick_gap_min": (0, 120, int, "빠른 재추천 간격(분, 0=끔)"),
     "entry_start": (None, None, "hm", "매수 시작 시각"),
     "entry_end": (None, None, "hm", "매수 끝 시각"),
     "daily_loss_pct": (0.5, 10, float, "하루 손실 한도(%)"),
@@ -89,6 +92,8 @@ def _clamp_key(key, val):
     if math.isnan(v) or math.isinf(v):
         raise ValueError("숫자를 확인해 주세요")
     v = min(hi, max(lo, v))
+    if key == "quick_gap_min" and 0 < v < QUICK_MIN:
+        v = QUICK_MIN                            # 너무 잦으면 같은 자료를 다시 묻게 된다
     return int(round(v)) if typ is int else round(v, 2)
 
 
@@ -115,7 +120,10 @@ def make_plan(budget, mkt, style, days, mode="real"):
     p.update(loss_streak=3, chase_pct=0.5, skip_watch=mode == "real", watch_mult=0.5,
              idx_floor={"day": -1.0, "swing": -1.5, "month": -2.0}[style] if mode == "real" else 0.0,
              warmup_trades=10, warmup_mult=0.5,
-             review_every=30, review_days=5, auto_apply=False, ai_review=True, ai_daily_usd=1.0, web_search=True)
+             review_every=30, review_days=5, auto_apply=False, ai_review=True, ai_daily_usd=1.0, web_search=True,
+             # 빠른 재추천: 정밀 추천(좋은 엔진·뉴스 검색) 사이사이에, 가장 싼 엔진으로 달라진 흐름만 다시 묻는다.
+             # 모의는 자료를 빨리 모으려고 기본으로 켠다. 실전은 사용자가 플랜에서 켠다
+             quick_gap_min=QUICK_GAP[style] if mode != "real" else 0)
     return p
 
 
@@ -173,9 +181,12 @@ def plan_text(run):
         {"t": "고르는 기준", "d": f"AI 승률 {p['min_win_prob']:g}% 이상 · 점수 {p['min_score']:g} 이상 · 손익비 {p['min_rr']:g} 이상만 매수"
                               + (" · AI가 관망이면 쉬어요" if p["skip_watch"] else f" · AI가 관망이면 {p.get('watch_mult', 0.5):g}배 크기로만 사요") + "."},
         {"t": "비용 아끼기", "d": (f"지수가 {p['idx_floor']:g}% 넘게 내린 날은 AI를 부르지 않고 쉬어요(무료 점검). " if p.get("idx_floor") else "")
-                                + "관망을 받으면 지수가 회복되거나 추천 간격의 두 배가 지날 때까지 다시 묻지 않아요."},
+                                + ("관망을 받으면 지수가 회복되거나 추천 간격의 두 배가 지날 때까지 다시 묻지 않아요." if p["skip_watch"] or not p.get("quick_gap_min")
+                                   else "이미 보유했거나 오늘 거래한 종목은 후보에서 빼고 물어, 같은 답에 돈을 쓰지 않아요.")},
         {"t": "파는 기준", "d": f"익절 최대 +{p['tp_cap']:g}%, 손절 최대 -{p['sl_cap']:g}% 안에서 AI가 종목마다 정해요."},
-        {"t": "추천 받기", "d": f"하루 최대 {p['cycles_per_day']}번, {p['entry_start']}~{p['entry_end']}({'한국' if run['mkt'] == 'kr' else '뉴욕'} 시간) 사이, 자리가 비었을 때만."},
+        {"t": "추천 받기", "d": (f"정밀 추천(뉴스 검색 포함) 하루 최대 {p['cycles_per_day']}번 + 그 사이 {p['quick_gap_min']}분마다 빠른 재추천(가장 싼 엔진, 이미 다룬 종목은 빼고 새 후보만). "
+                                 if p.get("quick_gap_min") else f"하루 최대 {p['cycles_per_day']}번, ")
+                                + f"{p['entry_start']}~{p['entry_end']}({'한국' if run['mkt'] == 'kr' else '뉴욕'} 시간) 사이, 자리가 비었을 때만."},
         {"t": "손실 한도", "d": f"하루 -{p['daily_loss_pct']:g}%(약 {money(b * p['daily_loss_pct'] / 100)})면 그날 매수 중지, "
                               f"누적 -{p['total_loss_pct']:g}%(약 {money(b * p['total_loss_pct'] / 100)})면 전부 정리하고 종료. 연속 {p['loss_streak']}번 손절이면 그날 쉬어요."},
         {"t": "개선", "d": f"매매 {p['review_every']}건 또는 {p.get('review_days', 5)}거래일마다 성적을 분석해 개선안을 내요. 매수가 너무 적으면 건너뛴 종목이 그 뒤 실제로 어땠는지 보고 "
@@ -257,7 +268,7 @@ class AutoTrade:
         db.x("""CREATE TABLE IF NOT EXISTS at_changes(
             id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL, ts TEXT NOT NULL, ver INTEGER NOT NULL, source TEXT NOT NULL,
             changes TEXT NOT NULL, stats TEXT)""")
-        AP._col(db, "at_runs", (("last_review_day", "TEXT"), ("lab_id", "INTEGER"), ("variant", "TEXT")))
+        AP._col(db, "at_runs", (("last_review_day", "TEXT"), ("lab_id", "INTEGER"), ("variant", "TEXT"), ("last_full", "REAL NOT NULL DEFAULT 0")))
         self._idx = {}        # 시장 → (받은 시각, 지수 등락률)
         self._last = 0.0
         self._busy = {}       # run_id → 추천을 받는 중인 스레드
@@ -393,44 +404,88 @@ class AutoTrade:
         m = self.rt.ai.meter("pick" if style == "day" else "pickw", model, web)
         return (m["avg_usd"] if m.get("avg_usd") is not None else (m["usd_lo"] + m["usd_hi"]) / 2), m
 
+    def _quick_usd(self):
+        """빠른 재추천 한 번의 비용(달러). 써 본 평균이 있으면 그 값."""
+        from .ai import LITE_MODEL
+        m = self.rt.ai.meter("pickq", LITE_MODEL, False)
+        return m["avg_usd"] if m.get("avg_usd") is not None else (m["usd_lo"] + m["usd_hi"]) / 2
+
+    @staticmethod
+    def _window(p):
+        """매수 시간의 길이(분)."""
+        (h1, m1), (h2, m2) = (map(int, p[k].split(":")) for k in ("entry_start", "entry_end"))
+        return max(0, (h2 * 60 + m2) - (h1 * 60 + m1))
+
     def fit_cost(self, budget, mkt, style, mode, p, model, day_usd=None):
         """AI 비용을 쓸 돈에 맞춘다. 실전은 한 달 비용이 쓸 돈의 1%를, 모의는 하루 0.6달러를 넘지 않게
         모델·하루 횟수·웹 검색을 고른다(model이 'auto'일 때). 직접 고른 모델이면 계산만 해서 알려 준다.
+        빠른 재추천이 켜져 있으면 그 몫을 먼저 떼고, 남은 돈으로 정밀 추천(좋은 엔진·뉴스 검색)을 맞춘다.
         반환: (모델, 바뀐 플랜 값, 안내)"""
         from .ai import MODELS
         fx = self.rt.ai.fx()
         cap_month = (budget / (fx if mkt == "kr" else 1.0)) * COST_PCT / 100 if mode == "real" else (day_usd or PAPER_DAY_USD) * MONTH_DAYS
         conf = self.rt.ai.conf().get("model") or "claude-sonnet-5-5"
+        win, q_per = self._window(p), self._quick_usd()
 
-        def info(mdl, cycles, web):
+        def info(mdl, cycles, web, qg=0):
             per, _ = self._per_usd(style, mdl, web)
-            month = per * cycles * MONTH_DAYS
+            nq = max(0, win // qg - cycles) if qg else 0             # 정밀 추천을 받는 차례에는 빠른 재추천을 받지 않는다
+            day = per * cycles + q_per * nq
+            month = day * MONTH_DAYS
             return {"model": mdl, "label": MODELS[mdl][0], "cycles": cycles, "web": web, "per_usd": round(per, 3), "month_usd": round(month, 2),
                     "month_cur": round(month * (fx if mkt == "kr" else 1.0)), "pct": round(month / (budget / (fx if mkt == "kr" else 1.0)) * 100, 2),
-                    "cap_usd": round(cap_month, 2), "ok": month <= cap_month + 1e-6, "fx": fx}
+                    "cap_usd": round(cap_month, 2), "ok": month <= cap_month + 1e-6, "fx": fx,
+                    "quick_gap": qg, "quick_n": nq, "quick_usd": round(q_per, 4), "day_usd": round(day, 3)}
+
+        def limit(c):
+            return math.ceil(c["day_usd"] * 1.4 * 10) / 10
+        qg0 = int(p.get("quick_gap_min") or 0)
         if model != "auto":
-            c = info(model, p["cycles_per_day"], bool(p.get("web_search", True)))
+            c = info(model, p["cycles_per_day"], bool(p.get("web_search", True)), qg0)
             c["auto"] = False
-            return model, {"ai_daily_usd": max(1.0, math.ceil(c["per_usd"] * c["cycles"] * 1.4 * 10) / 10)}, c
+            return model, {"ai_daily_usd": max(1.0, limit(c))}, c
         order = sorted(MODELS, key=lambda k: -MODELS[k][1])                     # 비싼(좋은) 모델부터
         order = [m for m in order if MODELS[m][1] <= MODELS.get(conf, MODELS["claude-sonnet-5-5"])[1]] or order[-1:]
-        best = None                                   # 하루 횟수 → 웹 검색(뉴스) → 좋은 모델 순으로 지킨다
-        for cycles in range(p["cycles_per_day"], 0, -1):
-            for web in (True, False):
-                for mdl in order:
-                    c = info(mdl, cycles, web)
-                    if c["ok"]:
-                        best = c
+        best = None
+        if qg0:
+            # 자주 묻는 일은 빠른 재추천이 맡으니, 정밀 추천은 하루 2번(시작할 때·한가운데)까지만 받고
+            # 뉴스 검색 → 횟수 → 좋은 엔진 순으로 지킨다. 그래도 넘으면 빠른 재추천 간격을 넓힌다
+            for qg in [g for g in (qg0, 30, 45, 60, 90, 120) if g >= qg0]:
+                for web in (True, False):
+                    for cycles in range(min(p["cycles_per_day"], 2), 0, -1):
+                        for mdl in order:
+                            c = info(mdl, cycles, web, qg)
+                            if c["ok"]:
+                                best = c
+                                break
+                        if best:
+                            break
+                    if best:
                         break
                 if best:
                     break
-            if best:
-                break
-        if not best:
-            best = info(order[-1], 1, False)                                     # 가장 싼 조합으로도 넘는다 → 알리고 그 조합으로
+            if not best:
+                best = info(order[-1], 1, False, 120)
+        else:                                         # 하루 횟수 → 웹 검색(뉴스) → 좋은 모델 순으로 지킨다
+            for cycles in range(p["cycles_per_day"], 0, -1):
+                for web in (True, False):
+                    for mdl in order:
+                        c = info(mdl, cycles, web)
+                        if c["ok"]:
+                            best = c
+                            break
+                    if best:
+                        break
+                if best:
+                    break
+            if not best:
+                best = info(order[-1], 1, False)                                 # 가장 싼 조합으로도 넘는다 → 알리고 그 조합으로
         best["auto"] = True
-        patch = {"cycles_per_day": best["cycles"], "web_search": best["web"], "ai_daily_usd": max(0.3, math.ceil(best["per_usd"] * best["cycles"] * 1.4 * 10) / 10)}
-        if best["cycles"] < p["cycles_per_day"]:
+        patch = {"cycles_per_day": best["cycles"], "web_search": best["web"], "ai_daily_usd": max(0.3, limit(best))}
+        if qg0:
+            # 정밀 추천은 매수 시간에 고르게 편다(예: 2번이면 시작할 때와 한가운데)
+            patch.update(quick_gap_min=best["quick_gap"], cycle_gap_min=int(min(240, max(60, win // best["cycles"]))))
+        elif best["cycles"] < p["cycles_per_day"]:
             patch["cycle_gap_min"] = max(p["cycle_gap_min"], 120)
         return best["model"], patch, best
 
@@ -480,7 +535,7 @@ class AutoTrade:
         return {"mkt": mkt, "style": style, "budget": budget, "days": days, "model": model, "params": p, "plan": plan_text(run), "mode": mode,
                 "cost": dict(cost, warn=warn), "ready": self.readiness(mkt, style) if mode == "real" else None,
                 "variant": {"key": var, "label": VARIANTS[var][0]} if var else None,
-                "ai_cost": {"per_usd": cost["per_usd"], "day_usd": round(min(cost["per_usd"] * p["cycles_per_day"], p["ai_daily_usd"]), 2),
+                "ai_cost": {"per_usd": cost["per_usd"], "day_usd": round(min(cost["day_usd"], p["ai_daily_usd"]), 2),
                             "fx": m.get("fx"), "budget_usd": m.get("budget_usd"), "month_usd": m.get("month_usd")}}
 
     def create(self, d):
@@ -555,6 +610,7 @@ class AutoTrade:
             return
         self._last = time.time()
         try:
+            self._upgrade()
             self._autopilot()
         except Exception as e:
             self.rt.db.log("system", "error", f"모의 자동 테스트 오류: {type(e).__name__}: {e}", self._now())
@@ -811,6 +867,36 @@ class AutoTrade:
         self._idx[mkt] = (time.time(), v)
         return v
 
+    def _due(self, run):
+        """지금 받을 추천의 종류와 다음 차례. kind: full(정밀 — 좋은 엔진·뉴스 검색)·quick(빠른 재추천 — 가장 싼 엔진)·None(아직).
+        빠른 재추천이 꺼져 있으면 예전 그대로 '하루 횟수 + 간격'만 본다."""
+        p, now = run["params"], time.time()
+        rows = self.rt.db.q("SELECT ts, data FROM at_log WHERE run_id=? AND kind='cycle' AND day=? ORDER BY id", (run["id"], AP.mkt_date(run["mkt"])))
+        n_quick = sum(1 for r in rows if r["data"] and '"lite": true' in r["data"])
+        n_full = len(rows) - n_quick
+        qg, fg = int(p.get("quick_gap_min") or 0), int(p["cycle_gap_min"])
+        since = now - (run["last_cycle"] or 0)
+        out = {"rows": rows, "n_full": n_full, "n_quick": n_quick, "quick": qg, "since": since, "gap": qg or fg, "kind": None, "code": "gap", "left": 0, "span": (qg or fg) * 60}
+        if not qg:
+            if n_full >= p["cycles_per_day"]:
+                out["code"] = "cycles"
+            elif since >= fg * 60:
+                out["kind"] = "full"
+            else:
+                out["left"] = fg * 60 - since
+            return out
+        # 그날 첫 추천과, 정해 둔 간격이 지난 뒤의 추천은 정밀로(하루 횟수 안에서). 그 밖에는 빠른 재추천.
+        # 빠른 재추천을 받은 직후에 정밀 추천이 겹치지 않게 반 간격은 띄운다
+        t_quick = qg * 60 - since
+        t_full = float("inf")
+        if n_full < p["cycles_per_day"]:
+            t_full = max(fg * 60 - (now - (run.get("last_full") or 0)) if n_full else 0, min(qg, fg) * 30 - since)
+        out["next"] = "full" if t_full <= max(t_quick, 0) else "quick"     # 둘 다 차례면 정밀이 먼저
+        out["left"] = max(0, min(t_quick, t_full))
+        if out["left"] <= 0:
+            out["kind"] = out["next"]
+        return out
+
     def gate(self, run):
         """지금 새로 사도 되는지. (허용, 사유)"""
         ok, _, why = self.gate_code(run)
@@ -836,12 +922,11 @@ class AutoTrade:
         elif not any(self._room(x) is None for x in sibs):
             return False, "full", "모든 실험이 자리가 없거나 오늘은 쉬는 중이에요"
         day = AP.mkt_date(mkt)
-        cycles = self.rt.db.q("SELECT ts, data FROM at_log WHERE run_id=? AND kind='cycle' AND day=? ORDER BY id", (run["id"], day))
-        if len(cycles) >= p["cycles_per_day"]:
-            return False, "cycles", "오늘 추천 횟수를 다 썼어요"
-        gap = p["cycle_gap_min"] * 60
-        since = time.time() - (run["last_cycle"] or 0)
-        if since < gap:
+        D = self._due(run)
+        cycles, since = D["rows"], D["since"]
+        if not D["kind"]:
+            if D["code"] == "cycles":
+                return False, "cycles", "오늘 추천 횟수를 다 썼어요"
             return False, "gap", "다음 추천 시간을 기다리는 중이에요"
         ids = [x["id"] for x in sibs] if sibs else [run["id"]]
         usd = sum(float((json.loads(c["data"]) if c["data"] else {}).get("usd") or 0) for c in self.rt.db.q(
@@ -853,8 +938,10 @@ class AutoTrade:
         floor = float(p.get("idx_floor") or 0)
         if floor < 0 and idx is not None and idx <= floor:
             return False, "market", f"지수가 {idx:+.2f}%로 약해 AI를 부르지 않고 쉬어요(기준 {floor:g}%, 비용 없음)"
+        # 관망 뒤 쉬기: 관망이면 사지 않는 플랜이거나 추천이 비싼(빠른 재추천이 꺼진) 플랜에서만. 관망에도 작게 사 보는 플랜은 싼 재추천을 그대로 이어 간다
+        gap = D["gap"] * 60
         last = json.loads(cycles[-1]["data"]) if cycles and cycles[-1]["data"] else None
-        if last and (last.get("watch") or last.get("stance") == "관망") and since < gap * 2:
+        if (p.get("skip_watch") or not D["quick"]) and last and (last.get("watch") or last.get("stance") == "관망") and since < gap * 2:
             was = last.get("idx")
             if not (idx is not None and was is not None and idx >= was + 0.3):
                 return False, "watchwait", (f"직전 추천이 관망이라, 지수가 회복되거나 {int(gap * 2 / 60)}분이 지날 때까지 다시 묻지 않아요"
@@ -922,10 +1009,11 @@ class AutoTrade:
         if st == "paused":
             return {"kind": "paused", "label": "새 매수를 멈춘 상태예요. 들고 있는 종목은 목표·손절에 닿으면 팔아요"}
         if busy:
-            return {"kind": "busy", "label": "AI 추천을 받는 중이에요. 1~2분쯤 걸려요"}
+            lite = bool((self._prog.get(run["id"]) or {}).get("lite"))
+            return {"kind": "busy", "label": "빠른 재추천을 받는 중이에요. 10~20초쯤 걸려요" if lite else "AI 추천을 받는 중이에요. 1~2분쯤 걸려요"}
         ok, code, why = self.gate_code(run)
         if ok:
-            return {"kind": "soon", "label": "조건이 맞아 곧 AI 추천을 받아요"}
+            return {"kind": "soon", "label": "조건이 맞아 곧 AI 추천을 받아요" if self._due(run)["kind"] != "quick" else "곧 빠른 재추천을 받아요"}
         today, hm = loc.date(), loc.strftime("%H:%M")
         end = datetime.strptime(run["end_date"], "%Y-%m-%d").date()
 
@@ -957,11 +1045,14 @@ class AutoTrade:
                 return dict(nxt(why.replace("바로 다시 받아요", "오늘도 더 받아요") + ". 그대로 두면 다음 거래일에 다시 시작해요", self._next_day(mkt, today), today_why=why), code=code)
             return nxt(why + ". 다음 거래일에 다시 시작해요" if code != "cycles" else "오늘 추천 횟수를 다 썼어요. 다음 거래일에 다시 받아요", self._next_day(mkt, today), today_why=why)
         if code == "gap":
-            at = loc + timedelta(minutes=math.ceil(max(0, (run["last_cycle"] or 0) + p["cycle_gap_min"] * 60 - time.time()) / 60))
+            D = self._due(run)
+            left = max(0, round(D["left"]))
+            at = loc + timedelta(minutes=math.ceil(left / 60))
             if at.strftime("%H:%M") > self._entry(run, today)[1]:
                 return nxt("오늘은 매수 시간이 끝나기 전에 다음 추천 차례가 오지 않아요", self._next_day(mkt, today))
-            left = max(0, round((run["last_cycle"] or 0) + p["cycle_gap_min"] * 60 - time.time()))
-            return {"kind": "at", "label": f"추천 간격({p['cycle_gap_min']}분)을 기다리는 중이에요", **self._when(mkt, at), "in_sec": left, "span_sec": int(p["cycle_gap_min"] * 60)}
+            label = (f"추천 간격({D['gap']}분)을 기다리는 중이에요" if not D["quick"] else "정밀 추천(뉴스 검색 포함) 차례를 기다리는 중이에요" if D.get("next") == "full"
+                     else f"{D['gap']}분마다 빠른 재추천을 받아요. 다음 차례를 기다리는 중이에요")
+            return {"kind": "at", "label": label, **self._when(mkt, at), "in_sec": left, "span_sec": int(D["span"])}
         if code in ("market", "watchwait"):
             return {"kind": "wait", "label": why, "code": code}
         if code in ("full", "cash"):
@@ -985,7 +1076,7 @@ class AutoTrade:
         m = self.money(run)
         logs = self.rt.db.q("SELECT ts, msg, data FROM at_log WHERE run_id=? AND kind='cycle' ORDER BY id", (rid,))
         usd_all = usd_day = 0.0
-        cyc_today, last = [], None
+        cyc_today, last, n_quick = [], None, 0
         for x in logs:
             d = json.loads(x["data"]) if x["data"] else {}
             usd_all += float(d.get("usd") or 0)
@@ -993,12 +1084,13 @@ class AutoTrade:
         for x in self.rt.db.q("SELECT ts, msg, data FROM at_log WHERE run_id=? AND kind='cycle' AND day=? ORDER BY id", (rid, day)):
             d = json.loads(x["data"]) if x["data"] else {}
             usd_day += float(d.get("usd") or 0)
+            n_quick += 1 if d.get("lite") else 0
             cyc_today.append({"ts": x["ts"], "msg": x["msg"]})
         last_cycle = None
         if last:
             x, d = last
             dec = d.get("decisions") or []
-            last_cycle = {"ts": x["ts"], "msg": x["msg"], "stance": d.get("stance"), "view": d.get("view"), "picks": len(dec),
+            last_cycle = {"ts": x["ts"], "msg": x["msg"], "stance": d.get("stance"), "view": d.get("view"), "picks": len(dec), "lite": bool(d.get("lite")),
                           "bought": [q.get("name") or q.get("sym") for q in dec if q.get("act") == "buy"],
                           "skipped": [{"name": q.get("name") or q.get("sym"), "why": q.get("why")} for q in dec if q.get("act") == "skip"][:5]}
         buys = self.rt.db.one("SELECT COUNT(*) n FROM at_trades WHERE run_id=? AND entry_day=? AND status!='cancelled'", (rid, day))["n"]
@@ -1021,7 +1113,8 @@ class AutoTrade:
         s_o, s_c = self._hours(mkt, show)
         s_es, s_ee = self._entry(run, show)
         soon = (datetime.strptime(s_c, "%H:%M") - timedelta(minutes=8)).strftime("%H:%M")
-        rows = [(s_o, "장 시작", "보유 종목 감시 시작"), (s_es, "매수 시작", f"AI 추천을 받아요(하루 최대 {p['cycles_per_day']}번, {p['cycle_gap_min']}분 간격)"),
+        rows = [(s_o, "장 시작", "보유 종목 감시 시작"), (s_es, "매수 시작", (f"AI 추천을 받아요(정밀 하루 {p['cycles_per_day']}번 + {p['quick_gap_min']}분마다 빠른 재추천)" if p.get("quick_gap_min")
+                                                                                      else f"AI 추천을 받아요(하루 최대 {p['cycles_per_day']}번, {p['cycle_gap_min']}분 간격)")),
                 (s_ee, "매수 끝", "이 뒤로는 새로 사지 않아요")]
         if run["style"] == "day":
             rows.append((soon, "전부 정리", "들고 있는 종목을 모두 팔아요"))
@@ -1037,7 +1130,8 @@ class AutoTrade:
             "clock": {"kst": f"{AP.kst_now():%H:%M}", "local": f"{loc:%H:%M}" if mkt == "us" else None, "left_min": ss.get("left_min") or 0},
             "steps": {"day": show.isoformat(), "today": show == today, "label": "오늘" if show == today else f"{show.month}/{show.day}({self.WD[show.weekday()]})", "rows": steps,
                       "note": (AP.kr_note(show).replace("오늘은", "오늘은" if show == today else "이날은") if mkt == "kr" else "")},
-            "today": {"cycles": len(cyc_today), "cycles_max": p["cycles_per_day"], "buys": buys, "sells": len(closed),
+            "today": {"cycles": len(cyc_today), "cycles_max": p["cycles_per_day"], "full": len(cyc_today) - n_quick, "quick": n_quick, "quick_gap": int(p.get("quick_gap_min") or 0),
+                      "buys": buys, "sells": len(closed),
                       "wins": sum(1 for c in closed if (c["pnl"] or 0) > 0), "pnl": round(day_real, 2), "unreal": round(day_unreal, 2),
                       "limit": round(run["budget"] * p["daily_loss_pct"] / 100, 2), "streak": streak, "streak_max": int(p["loss_streak"])},
             "risk": {"loss": round(max(0.0, run["budget"] - m["equity"]), 2), "limit": round(run["budget"] * p["total_loss_pct"] / 100, 2)},
@@ -1063,9 +1157,11 @@ class AutoTrade:
                     self._note_once(x, why if code != "market" else why.split("(")[0].strip() + " · 비용 없음")
             return
         ids = [x["id"] for x in sibs] if sibs else [run["id"]]
-        self.rt.db.x(f"UPDATE at_runs SET last_cycle=? WHERE id IN ({','.join('?' * len(ids))})", (time.time(), *ids))
-        P = self._step(run["id"], 0, "실시간 순위·분봉·호가를 모으는 중", new=True)
-        th = threading.Thread(target=self._cycle, args=(run["id"], ids), name=f"moa-auto-{run['id']}", daemon=True)
+        lite = self._due(run)["kind"] == "quick"
+        q = ",".join("?" * len(ids))
+        self.rt.db.x(f"UPDATE at_runs SET last_cycle=?{'' if lite else ', last_full=?'} WHERE id IN ({q})", (*((time.time(),) * (1 if lite else 2)), *ids))
+        P = self._step(run["id"], 0, "실시간 순위·분봉·호가를 모으는 중", new=True, lite=lite)
+        th = threading.Thread(target=self._cycle, args=(run["id"], ids, lite), name=f"moa-auto-{run['id']}", daemon=True)
         for i in ids:
             self._busy[i] = th
             self._prog[i] = P                       # 같은 진행 상태를 함께 본다
@@ -1084,7 +1180,7 @@ class AutoTrade:
         if msg:
             P["msg"] = msg
         for k, v in add.items():
-            P[k] = P[k] + v if k in ("search", "sources", "chars") else v
+            P[k] = P.get(k, 0) + v if k in ("search", "sources", "chars") else v
         P["at"] = now
         return P
 
@@ -1094,18 +1190,31 @@ class AutoTrade:
         if not (th and th.is_alive()) or not P:
             return None
         now = time.time()
-        return {"step": P["step"], "steps": list(self.SCAN), "msg": P["msg"], "elapsed": round(now - P["start"]), "step_sec": round(now - P["step_at"]),
+        return {"step": P["step"], "steps": list(self.SCAN), "msg": P["msg"], "elapsed": round(now - P["start"]), "step_sec": round(now - P["step_at"]), "lite": bool(P.get("lite")),
                 "search": P["search"], "sources": P["sources"], "chars": P["chars"], "src": P["src"], "picks": P["picks"]}
 
-    def _ask_ai(self, run):
-        """AI 추천을 끝까지 받아 결과만 돌려준다(스트리밍을 서버에서 소비). 받는 동안 어디까지 왔는지 적어 둔다."""
+    def _seen(self, ids, mkt):
+        """이 자동매매(실험이면 묶음 전체)가 들고 있거나 오늘 거래한 종목. 다시 추천받아도 살 수 없으니 후보에서 뺀다."""
+        q = ",".join("?" * len(ids))
+        return sorted({r["sym"] for r in self.rt.db.q(
+            f"SELECT DISTINCT sym FROM at_trades WHERE run_id IN ({q}) AND (status='open' OR entry_day=?) AND status!='cancelled'", (*ids, AP.mkt_date(mkt)))})
+
+    def _ask_ai(self, run, lite=False, ids=None):
+        """AI 추천을 끝까지 받아 결과만 돌려준다(스트리밍을 서버에서 소비). 받는 동안 어디까지 왔는지 적어 둔다.
+        lite: 빠른 재추천(가장 싼 엔진, 검색 없이, 줄인 자료)."""
         rid = run["id"]
         d = {"mkt": run["mkt"], "horizon": run["style"], "model": run["model"], "web_search": bool(run["params"].get("web_search", True))}
         cap = self._price_cap(run)
         if cap:
             d["max_price"] = cap
+        if lite:
+            from .ai import LITE_MODEL
+            d.update(lite=True, model=LITE_MODEL, web_search=False)
+        ex = self._seen(ids or [rid], run["mkt"])
+        if ex:
+            d["exclude"] = ex
         # 시장·방식·모델이 같은 자동매매(예: 모의와 실전)가 거의 같은 때에 추천을 받으면 한 번만 받아 함께 쓴다(비용은 받은 쪽에만 든다)
-        key = (d["mkt"], d["horizon"], d["model"], d["web_search"], d.get("max_price"))
+        key = (d["mkt"], d["horizon"], d["model"], d["web_search"], d.get("max_price"), bool(lite))
         with self._share_lock:
             lock = self._share.setdefault(key, {"lock": threading.Lock(), "ts": 0.0, "out": None, "used": set()})
         if not lock["lock"].acquire(blocking=False):
@@ -1164,15 +1273,16 @@ class AutoTrade:
                     self._step(rid, 2, "AI가 추천 종목과 근거를 쓰는 중")
         return res, err, done
 
-    def _cycle(self, rid, ids=None):
+    def _cycle(self, rid, ids=None, lite=False):
         ids = ids or [rid]
         try:
             run = self._run(rid)
-            res, err, done = self._ask_ai(run)
+            res, err, done = self._ask_ai(run, lite, ids)
+            done = dict(done or {}, lite=True) if lite else done
             with self.rt._lock:
                 if err or not res:
                     for i in ids:
-                        self.log(i, "cycle", f"추천을 받지 못했어요: {err or '결과 없음'}")
+                        self.log(i, "cycle", f"{'빠른 재추천' if lite else '추천'}을 받지 못했어요: {err or '결과 없음'}", {"lite": True} if lite else None)
                     return
                 # 실험 묶음: 같은 추천을 각자의 플랜으로 거른다. AI 비용은 똑같이 나눠 적는다
                 share = dict(done or {}, usd=round(float((done or {}).get("usd") or 0) / len(ids), 4))
@@ -1180,7 +1290,7 @@ class AutoTrade:
                     r = self._run(i)
                     why = self._room(r) if len(ids) > 1 and r["status"] == "running" else None
                     if why and why[0] != "full":
-                        self.log(i, "cycle", f"추천은 받았지만 {why[1]}", {"pick_id": res.get("id"), "stance": res.get("stance"), "view": res.get("view"), "usd": share.get("usd")})
+                        self.log(i, "cycle", f"추천은 받았지만 {why[1]}", {"pick_id": res.get("id"), "stance": res.get("stance"), "view": res.get("view"), "usd": share.get("usd"), **({"lite": True} if lite else {})})
                         continue
                     self._enter(r, res, share)
         except Exception as e:
@@ -1198,6 +1308,9 @@ class AutoTrade:
         picks = res.get("picks") or []
         decisions, bought = [], 0
         head = {"pick_id": res.get("id"), "stance": res.get("stance"), "view": res.get("view"), "usd": (done or {}).get("usd"), "idx": self.index_pct(mkt)}
+        lite = bool((done or {}).get("lite"))
+        if lite:
+            head["lite"] = True                      # 빠른 재추천으로 받은 것(정밀 추천과 성적을 따로 보려고 남긴다)
         if run["status"] != "running":
             self.log(rid, "cycle", "추천은 받았지만 멈춘 상태라 사지 않았어요", head)
             return 0
@@ -1266,13 +1379,13 @@ class AutoTrade:
                 skip("qty", f"배정 금액({alloc:,.0f})으로 1주를 못 삼")
                 continue
             try:
-                tid = self._buy(run, x, sym, name, q, qty, price, buy_px, tp, sl, res)
+                tid = self._buy(run, x, sym, name, q, qty, price, buy_px, tp, sl, dict(res, lite=lite))
             except Exception as e:
                 skip("fail", f"매수 실패: {e}")
                 continue
             bought += 1
             dec.update(act="buy", qty=qty, price=buy_px, target_pct=tp, stop_pct=sl, trade=tid)
-        self.log(rid, "cycle", f"추천 {len(picks)}종목 중 {bought}종목 매수" + (f" · {res.get('view')}" if res.get("view") else ""),
+        self.log(rid, "cycle", f"{'빠른 재추천' if lite else '추천'} {len(picks)}종목 중 {bought}종목 매수" + (f" · {res.get('view')}" if res.get("view") else ""),
                  dict(head, mult=mult, decisions=decisions))
         return bought
 
@@ -1309,7 +1422,7 @@ class AutoTrade:
             exit_date = min(AP.swing_end(mkt, AP.kst_now().replace(tzinfo=None), hold)[1].isoformat(), run["end_date"])
         why = {"reasons": x.get("reasons"), "risks": x.get("risks"), "catalyst": x.get("catalyst"), "theme": x.get("theme"),
                "view": res.get("view"), "entry_type": x.get("entry_type"), "ref_price": x.get("entry_price"),
-               "ai_target": x.get("target_pct"), "ai_stop": x.get("stop_pct"), "change_pct": q.get("change_pct")}
+               "ai_target": x.get("target_pct"), "ai_stop": x.get("stop_pct"), "change_pct": q.get("change_pct"), "lite": bool(res.get("lite"))}
         tid = self.rt.db.x(
             "INSERT INTO at_trades(run_id,ver,mkt,sym,name,exch,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,"
             "trail_pct,exit_by,exit_date,high,low,last,pick_id,score,win_prob,cal_prob,stance,feat,why,buy_no,fill_ok) "
@@ -1890,6 +2003,32 @@ class AutoTrade:
             "style_label": STYLES[run["style"]]["label"], "lab_id": run.get("lab_id"), "variant": run.get("variant")}
 
     # ------------------------------------------------------------------ 모의 자동 테스트(켜고 끄기만)
+    def _upgrade(self):
+        """예전 판에서 시작한 자동매매에 '빠른 재추천'을 붙인다(자동매매마다 한 번).
+        모의·실험은 켠다(실험은 하루 비용 상한 안에서 정밀 추천 횟수까지 다시 맞춘다). 실전은 꺼 둔 채로 두고, 사용자가 플랜에서 켠다."""
+        rows = [r for r in self._runs("WHERE status IN ('running','paused','closing')") if "quick_gap_min" not in r["params"]]
+        labs = {}
+        for r in rows:
+            if r["lab_id"]:
+                labs.setdefault(r["lab_id"], []).append(r)
+                continue
+            qg = QUICK_GAP[r["style"]] if r["mode"] == "paper" else 0
+            self.rt.db.x("UPDATE at_runs SET params=? WHERE id=?", (json.dumps(dict(r["params"], quick_gap_min=qg), ensure_ascii=False), r["id"]))
+            if qg:
+                self.log(r["id"], "control", f"추천을 더 자주 받게 바꿨어요 · 정밀 추천 사이에 {qg}분마다 빠른 재추천(가장 싼 엔진, 한 번에 약 10원)", {"quick_gap_min": qg})
+        for lab, rs in labs.items():
+            b = next((x for x in rs if x["variant"] == "base"), rs[0])
+            qg = QUICK_GAP[b["style"]]
+            patch, model = {"quick_gap_min": qg}, b["model"]
+            try:
+                p0 = dict(b["params"], quick_gap_min=qg, cycles_per_day=make_plan(b["budget"], b["mkt"], b["style"], 30, "paper")["cycles_per_day"])
+                model, patch, _ = self.fit_cost(b["budget"], b["mkt"], b["style"], "paper", p0, "auto", AUTO_SET.get((b["mkt"], b["style"]), (PAPER_DAY_USD,))[0])
+            except Exception as e:
+                self.rt.db.log("system", "error", f"실험 추천 주기 맞추기 실패: {type(e).__name__}: {e}", self._now())
+            for r in rs:
+                self.rt.db.x("UPDATE at_runs SET params=?, model=? WHERE id=?", (json.dumps(dict(r["params"], **patch), ensure_ascii=False), model, r["id"]))
+            self.log(b["id"], "control", f"추천을 더 자주 받게 바꿨어요 · 정밀 추천 하루 {patch.get('cycles_per_day', b['params']['cycles_per_day'])}번 + {patch['quick_gap_min']}분마다 빠른 재추천(하루 비용 상한은 그대로)", {"patch": patch})
+
     def auto_on(self):
         return bool((self.rt.settings.get("autolab") or {}).get("on"))
 
@@ -2120,12 +2259,13 @@ class AutoTrade:
         """가장 최근 추천에서 종목마다 몇 개 플랜이 샀고, 나머지는 왜 건너뛰었는지."""
         ids = [x["id"] for x in L["runs"]]
         q = ",".join("?" * len(ids))
-        rows = self.rt.db.q(f"SELECT ts, data FROM at_log WHERE run_id IN ({q}) AND kind='cycle' AND data IS NOT NULL ORDER BY id DESC LIMIT {len(ids) * 2}", ids)
+        rows = [r for r in self.rt.db.q(f"SELECT ts, data FROM at_log WHERE run_id IN ({q}) AND kind='cycle' AND data IS NOT NULL ORDER BY id DESC LIMIT {len(ids) * 2}", ids)
+                if '"pick_id"' in r["data"]]
         if not rows:
             return None
         first = json.loads(rows[0]["data"])
         pid = first.get("pick_id")
-        out = {"ts": rows[0]["ts"], "stance": first.get("stance"), "view": first.get("view"), "picks": {}}
+        out = {"ts": rows[0]["ts"], "stance": first.get("stance"), "view": first.get("view"), "lite": bool(first.get("lite")), "picks": {}}
         for r in rows:
             d = json.loads(r["data"])
             if d.get("pick_id") != pid:
@@ -2165,6 +2305,8 @@ class AutoTrade:
             L["status"] = "running" if any(x["status"] == "running" for x in act) else "paused" if act else "ended"
             L["usd"] = round(sum(x["ai_usd"] for x in L["runs"]), 2)
             L["cycles"] = self.rt.db.one("SELECT COUNT(*) n FROM at_log WHERE run_id=? AND kind='cycle' AND data IS NOT NULL", (L["id"],))["n"]
+            L["quick"] = self.rt.db.one("SELECT COUNT(*) n FROM at_log WHERE run_id=? AND kind='cycle' AND data LIKE '%\"lite\": true%'", (L["id"],))["n"]
+            L["plan"] = next(({k: r["params"].get(k) for k in ("cycles_per_day", "quick_gap_min", "web_search")} for r in self._runs("WHERE id=?", (L["id"],))), None)
             L["closed"] = sum(x["closed"] for x in L["runs"])
             L["open"] = sum(x["open"] for x in L["runs"])
             L["holders"] = sum(1 for x in L["runs"] if x["open"])
@@ -2180,7 +2322,7 @@ class AutoTrade:
                     for k in x["skips"]:
                         why[k["why"]] = why.get(k["why"], 0) + k["n"]
                 top = max(why, key=why.get) if why else None
-                L["last_line"] = (f"최근 추천({la['ts'][11:16]}{' · ' + la['stance'] if la.get('stance') else ''}): {len(la['picks'])}종목 중 "
+                L["last_line"] = (f"최근 {'빠른 재추천' if la.get('lite') else '추천'}({la['ts'][11:16]}{' · ' + la['stance'] if la.get('stance') else ''}): {len(la['picks'])}종목 중 "
                                   + (f"{', '.join(x['name'] for x in got[:2])}을(를) 플랜 {max(x['bought'] for x in got)}개가 샀어요" if got else "산 플랜이 없어요")
                                   + (f". 안 산 이유는 주로 '{top}'" if top else ""))
             else:
@@ -2209,7 +2351,7 @@ class AutoTrade:
                 self.rt.db.log("system", "error", f"자동매매 요약 오류: {type(e).__name__}: {e}", self._now())
         labs = []
         try:
-            labs = [{k: L.get(k) for k in ("id", "mkt", "style_label", "status", "lead", "note", "closed", "usd", "now", "open", "holders", "bought", "cycles", "stocks", "last_line")} | {"hold": [{"name": g["name"], "pct": g["pct"]} for g in L.get("positions", [])[:4]]} | {"n": len(L["runs"])}
+            labs = [{k: L.get(k) for k in ("id", "mkt", "style_label", "status", "lead", "note", "closed", "usd", "now", "open", "holders", "bought", "cycles", "quick", "plan", "stocks", "last_line")} | {"hold": [{"name": g["name"], "pct": g["pct"]} for g in L.get("positions", [])[:4]]} | {"n": len(L["runs"])}
                     for L in self.labs()["labs"] if L["status"] != "ended"]
         except Exception as e:
             self.rt.db.log("system", "error", f"실험 요약 오류: {type(e).__name__}: {e}", self._now())
@@ -2257,7 +2399,7 @@ class AutoTrade:
         m["ret_pct"] = round(m["equity"] / run["budget"] * 100 - 100, 2)
         b = self.real_broker()[0] if run["mode"] == "real" else None
         O = self.opportunity(run)
-        return {"run": s, "params": run["params"], "plan": plan_text(run), "open": opens, "closed": recent, "stats": st,
+        return {"run": s, "params": dict({"quick_gap_min": 0}, **run["params"]), "plan": plan_text(run), "open": opens, "closed": recent, "stats": st,
                 "equity": self.rt.db.q("SELECT day, equity FROM at_equity WHERE run_id=? ORDER BY day", (rid,)),
                 "log": log, "proposals": [self._proposal(x["id"]) for x in props], "changes": self.changes(rid),
                 "next": {"ok": ok, "why": why, "busy": bool(th and th.is_alive())},

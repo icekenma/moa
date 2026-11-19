@@ -51,7 +51,7 @@ class Env:
         d.update(kw)
         rid = self.at.create(d)["run"]["id"]
         if not new:      # 예전 테스트는 '관망이면 쉰다 · 하루 3번 · $1 · 배정 금액으로 1주를 못 사면 건너뛴다'를 전제로 쓰였다
-            self.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.skip_watch',json('true'),'$.cycles_per_day',3,'$.cycle_gap_min',60,'$.ai_daily_usd',1.0,'$.web_search',json('true'),'$.min_one',json('false')) WHERE id=?", (rid,))
+            self.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.skip_watch',json('true'),'$.cycles_per_day',3,'$.cycle_gap_min',60,'$.ai_daily_usd',1.0,'$.web_search',json('true'),'$.min_one',json('false'),'$.quick_gap_min',0) WHERE id=?", (rid,))
         return rid
 
     def pick(self, sym="005930", **kw):
@@ -510,7 +510,7 @@ def test_now_tells_what_happens_next_and_what_happened_today(env):
     assert n["steps"]["today"] and n["steps"]["label"] == "오늘" and [(r["hm"], r["name"]) for r in rows] == [
         ("09:00", "장 시작"), ("09:10", "매수 시작"), ("14:30", "매수 끝"), ("15:12", "전부 정리"), ("15:20", "장 마감")]
     assert not any(r["done"] for r in rows) and all(r["local"] is None for r in rows)
-    assert n["today"] == {"cycles": 0, "cycles_max": 3, "buys": 0, "sells": 0, "wins": 0, "pnl": 0, "unreal": 0, "limit": 20000.0, "streak": 0, "streak_max": 3}
+    assert n["today"] == {"cycles": 0, "cycles_max": 3, "full": 0, "quick": 0, "quick_gap": 0, "buys": 0, "sells": 0, "wins": 0, "pnl": 0, "unreal": 0, "limit": 20000.0, "streak": 0, "streak_max": 3}
     assert n["risk"] == {"loss": 0.0, "limit": 80000.0}
     assert n["size"] == {"alloc": 165000.0, "pct": 33.0, "mult": 0.5, "warm_done": 0, "warm_need": 10, "slots_used": 0, "slots": 3}     # 검증 단계: 비중의 절반
     assert n["period"] == {"day": 1, "days": 30, "left": 29, "end": run()["end_date"]} and n["ai"]["total_usd"] == 0 and n["last_cycle"] is None
@@ -1029,7 +1029,7 @@ def test_free_precheck_watch_backoff_and_paper_buys_small_on_watch(env, monkeypa
     assert make_plan(3_000_000, "kr", "day", 30)["skip_watch"] is True and make_plan(3_000_000, "kr", "swing", 30)["idx_floor"] == -1.5
     env.idx = -1.46
     assert at.gate_code(run())[0] is True
-    at.edit(rid, {"idx_floor": -1.0})                                    # 아래는 실전 기본값(-1%)에서의 동작
+    at.edit(rid, {"idx_floor": -1.0, "quick_gap_min": 0, "cycles_per_day": 3, "cycle_gap_min": 60})   # 아래는 실전 기본값(-1%, 빠른 재추천 없음)에서의 동작
     calls = []
 
     def stream(kind, d):
@@ -1095,9 +1095,12 @@ def test_ai_cost_fits_the_budget_and_results_count_ai_cost(env, monkeypatch):
     # 실전 500만: $35.7 → 하루 3번을 지키는 가장 좋은 모델(Opus $25.2)
     pv = at.preview({"budget": 5_000_000, "mkt": "kr", "style": "day", "days": 20, "mode": "real", "model": "auto"})
     assert (pv["model"], pv["params"]["cycles_per_day"], pv["params"]["web_search"]) == ("claude-opus-5-5", 3, True)
-    # 모의: 하루 $0.6 목표 → Sonnet 3번
+    # 모의: 하루 $0.6 목표 → 20분마다 빠른 재추천(14번) 몫을 먼저 떼고, 남은 돈으로 정밀 추천은 Sonnet 2번(시작할 때·한가운데)
     pv = at.preview({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 20, "mode": "paper", "model": "auto"})
-    assert (pv["model"], pv["params"]["cycles_per_day"], pv["cost"]["ok"]) == ("claude-sonnet-5-5", 3, True) and pv["ready"] is None
+    c = pv["cost"]
+    assert (pv["model"], pv["params"]["cycles_per_day"], c["ok"]) == ("claude-sonnet-5-5", 2, True) and pv["ready"] is None
+    assert (pv["params"]["quick_gap_min"], c["quick_n"], pv["params"]["cycle_gap_min"], pv["params"]["web_search"]) == (20, 14, 160, True)
+    assert 0.5 < c["day_usd"] <= 0.6 and c["quick_usd"] < 0.02 and "빠른 재추천" in next(x["d"] for x in pv["plan"] if x["t"] == "추천 받기")
     # 모델을 직접 고르면 바꾸지 않고 비용만 알려 준다(한도는 횟수에 맞춘다)
     pv = at.preview({"budget": 600_000, "mkt": "kr", "style": "day", "days": 20, "mode": "real", "model": "claude-fable-5-2"})
     assert pv["model"] == "claude-fable-5-2" and pv["params"]["cycles_per_day"] == 3 and pv["cost"]["auto"] is False and pv["cost"]["pct"] == 11.76 and pv["params"]["ai_daily_usd"] == 3.4
@@ -1203,8 +1206,9 @@ def test_autopilot_only_needs_on_off_and_feeds_a_real_plan(env, monkeypatch):
     assert S["on"] is True and sorted((x["mkt"], x["style"]) for x in L) == sorted(AUTO_SET) and all(len(x["runs"]) == 10 for x in L)
     kd = at._run(next(x["id"] for x in L if (x["mkt"], x["style"]) == ("kr", "day")))
     ks = at._run(next(x["id"] for x in L if (x["mkt"], x["style"]) == ("kr", "swing")))
-    # 비용은 앱이 정한다: 단타 하루 $0.35 → Haiku 3번, 스윙 $0.15 → Haiku 1번
-    assert (kd["model"], kd["params"]["cycles_per_day"]) == ("claude-haiku-4-5", 3) and (ks["model"], ks["params"]["cycles_per_day"]) == ("claude-haiku-4-5", 1)
+    # 비용은 앱이 정한다: 단타 하루 $0.35 → 20분마다 빠른 재추천 + 정밀 추천 Haiku 2번, 스윙 $0.15 → 60분마다 + Haiku 1번
+    assert (kd["model"], kd["params"]["cycles_per_day"], kd["params"]["quick_gap_min"]) == ("claude-haiku-4-5", 2, 20)
+    assert (ks["model"], ks["params"]["cycles_per_day"], ks["params"]["quick_gap_min"]) == ("claude-haiku-4-5", 1, 60)
     at._auto_at = 0
     at.tick(force=True)
     assert len(at.labs()["labs"]) == 4                                   # 이미 있으면 또 만들지 않는다
@@ -1331,3 +1335,159 @@ def test_marks_for_chart_split_real_and_paper(env):
     sell = next(e for e in M["events"] if e["kind"] == "sell" and e["mode"] == "real")
     assert buy["target"] == round(buy["price"] * 1.03, 2) and sell["reason"] == "익절" and sell["pct"] > 0 and M["has"] == {"real": True, "paper": True, "rec": True}
     assert at.marks("kr", "035420")["events"] == [] and [e["kind"] for e in at.marks("kr", "000660")["events"]] == ["rec"]
+
+
+# ---------- 빠른 재추천(자주, 싸게) ----------
+def test_quick_rescans_between_full_scans(env, monkeypatch):
+    """모의는 정밀 추천(좋은 엔진·뉴스) 사이사이에 20분마다 가장 싼 엔진으로 다시 묻는다. 이미 다룬 종목은 빼고 묻고, 비용·횟수는 따로 센다."""
+    at = env.at
+    rid = env.run(new_defaults=True)
+    run = lambda: at._run(rid)
+    p = run()["params"]
+    assert p["quick_gap_min"] == 20 and make_plan(3_000_000, "kr", "day", 30)["quick_gap_min"] == 0     # 실전은 사용자가 켠다
+    assert _clamp_key("quick_gap_min", 3) == 10 and _clamp_key("quick_gap_min", 0) == 0 and _clamp_key("quick_gap_min", 999) == 120
+    sent = []
+
+    def stream(kind, d):
+        sent.append(dict(d))
+        sym = ["005930", "000660", "035420"][len(sent) - 1]
+        yield {"t": "picks", "id": 40 + len(sent), "stance": "보통", "view": "v", "picks": [env.pick(sym)]}
+        yield {"t": "done", "usd": 0.008 if d.get("lite") else 0.1}
+    monkeypatch.setattr(env.rt.ai, "stream", stream)
+
+    def go():
+        at.tick(force=True)
+        at._busy[rid].join(5)
+    # 1) 그날 첫 추천은 정밀
+    assert at._due(run())["kind"] == "full"
+    go()
+    assert len(sent) == 1 and not sent[0].get("lite") and "exclude" not in sent[0] and run()["last_full"] > 0
+    # 2) 20분이 안 됐으면 기다린다(남은 시간을 알려 준다)
+    at.rt.db.x("UPDATE at_runs SET last_cycle=? WHERE id=?", (time.time() - 5 * 60, rid))
+    ok, code, _ = at.gate_code(run())
+    n = at.now(run())["next"]
+    assert (ok, code) == (False, "gap") and n["kind"] == "at" and "20분마다" in n["label"] and 14 * 60 < n["in_sec"] <= 15 * 60 and n["span_sec"] == 1200
+    at.tick(force=True)
+    assert len(sent) == 1
+    # 3) 20분이 지나면 빠른 재추천: 가장 싼 엔진 · 검색 없이 · 이미 산 종목은 빼고
+    at.rt.db.x("UPDATE at_runs SET last_cycle=? WHERE id=?", (time.time() - 21 * 60, rid))
+    assert at._due(run())["kind"] == "quick" and "빠른 재추천" in at.now(run())["next"]["label"]
+    go()
+    d = sent[1]
+    assert (d["lite"], d["model"], d["web_search"], d["exclude"]) == (True, "claude-haiku-4-5", False, ["005930"])
+    t = at._open(rid)
+    assert [x["sym"] for x in t] == ["005930", "000660"] and json.loads(t[1]["why"])["lite"] is True and json.loads(t[0]["why"])["lite"] is False
+    N = at.now(run())
+    assert (N["today"]["cycles"], N["today"]["full"], N["today"]["quick"], N["today"]["quick_gap"]) == (2, 1, 1, 20) and N["last_cycle"]["lite"] is True
+    assert N["ai"]["today_usd"] == 0.108 and "빠른 재추천" in at.detail(rid)["log"][0]["msg"]
+    assert "20분마다 빠른 재추천" in next(r["sub"] for r in N["steps"]["rows"] if r["name"] == "매수 시작")
+    # 4) 정밀 추천 간격이 지나면 다시 정밀로(하루 횟수 안에서). 횟수를 다 쓰면 빠른 재추천만 이어 간다
+    gap = p["cycle_gap_min"] * 60
+    at.rt.db.x("UPDATE at_runs SET last_cycle=?, last_full=? WHERE id=?", (time.time() - 21 * 60, time.time() - gap - 60, rid))
+    assert at._due(run())["kind"] == ("full" if p["cycles_per_day"] > 1 else "quick")
+    at.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.cycles_per_day',1) WHERE id=?", (rid,))
+    assert at._due(run())["kind"] == "quick"
+    go()
+    assert sent[2]["lite"] is True and sent[2]["exclude"] == ["000660", "005930"]
+    # 5) 관망이어도(작게 사 보는 플랜) 빠른 재추천은 쉬지 않는다. 관망에 쉬는 플랜은 예전처럼 두 배를 기다린다
+    at.log(rid, "cycle", "x", {"lite": True, "stance": "관망", "idx": -0.5, "usd": 0.008, "pick_id": 99})
+    env.idx = -0.5
+    at.rt.db.x("UPDATE at_runs SET last_cycle=? WHERE id=?", (time.time() - 21 * 60, rid))
+    at.rt.db.x("UPDATE at_trades SET status='closed', exit_ts=entry_ts, exit_price=entry_price, pnl=0, pnl_pct=0 WHERE run_id=?", (rid,))
+    assert at.gate_code(run())[0] is True
+    at.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.skip_watch',json('true')) WHERE id=?", (rid,))
+    assert at.gate_code(run())[1] == "watchwait" and "40분" in at.gate_code(run())[2]
+    # 6) 하루 비용 한도는 정밀·빠른 재추천을 합쳐서 본다
+    at.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.skip_watch',json('false'),'$.ai_daily_usd',0.12) WHERE id=?", (rid,))
+    assert at.gate_code(run())[1] == "aicost"
+
+
+def test_quick_rescan_sends_a_short_table_and_keeps_the_morning_news(env, monkeypatch):
+    """빠른 재추천은 같은 후보를 표 한 덩어리로 줄여 보내고, 앞선 정밀 추천이 찾은 재료를 메모로 이어받는다. 추천 탭 기록에는 섞지 않는다."""
+    rt, ap, inv = env.rt, env.rt.aipick, env.rt.invest
+    items = [{"rank": i + 1, "sym": s, "name": n, "price": px, "change_pct": 2.0 + i, "value": 9e11, "volume": 1e6}
+             for i, (s, n, px) in enumerate([("005930", "삼성전자", 70_000), ("000660", "SK하이닉스", 150_000), ("035420", "NAVER", 200_000)])]
+    bars = [{"t": f"11/18 09:{5 * i:02d}", "o": 100 + i, "h": 102 + i, "l": 99 + i, "c": 101 + i, "v": 1000 + 10 * i} for i in range(12)]
+    monkeypatch.setattr(inv, "kr", lambda: object())
+    monkeypatch.setattr(inv, "ranking", lambda mkt, k: {"items": items})
+    monkeypatch.setattr(inv, "candles", lambda mkt, sym, tf: {"bars": bars})
+    monkeypatch.setattr(inv, "orderbook", lambda mkt, sym: {"tot_bid": 300, "tot_ask": 200})
+    monkeypatch.setattr(rt.market, "kr_indices", lambda: [{"name": "코스피", "price": 2700, "change_pct": 0.4}])
+    monkeypatch.setattr(ap, "_cash", lambda mkt: (1_000_000, {}))
+    monkeypatch.setattr(AP, "session", lambda mkt: {"open": True, "kst": "2026-11-18 10:30", "local": "10:30", "left_min": 290, "close_kst": "15:30", "phase": "mid"})
+    full = ap.parse('판단 글: 반도체 수출 호조 기사 확인\n```json\n{"stance":"보통","market_view":"반도체 강세","picks":[{"sym":"005930","name":"삼성전자","score":70,"win_prob":60,'
+                    '"entry_price":70000,"target_pct":3,"stop_pct":1.5,"reasons":["수출 호조 뉴스"],"risks":["지수"]}]}\n```', "kr", "claude-sonnet-5-5", 0.1)
+    _, ask_f, data_f = ap.context({"mkt": "kr", "horizon": "day"})
+    _, ask_q, data_q = ap.context({"mkt": "kr", "horizon": "day", "lite": True, "exclude": ["005930"]})
+    tbl = data_q["후보"].split("\n")
+    assert "실시간 순위" in data_f and "실시간 순위" not in data_q and "계좌(참고)" not in data_q
+    assert tbl[0].startswith("sym|이름|현재가|등락률%|시가대비%|VWAP대비%") and [r.split("|")[0] for r in tbl[1:]] == ["000660", "035420"]      # 이미 다룬 종목은 뺀다
+    assert data_q["이미 다룬 종목(빼고 골라)"] == ["005930"] and "표" in ask_q
+    memo = data_q["앞선 정밀 추천 메모"]
+    assert memo["시장 판단"] == "반도체 강세" and "수출 호조" in memo["판단 글"] and memo["그때 고른 종목"] == ["삼성전자(005930): 수출 호조 뉴스"]
+    size = lambda d: len(json.dumps(d, ensure_ascii=False))
+    assert size(data_q) < size(data_f) * 0.6
+    # 빠른 재추천의 결과는 따로 표시해 두고, 추천 탭의 기록·오늘 횟수에는 넣지 않는다. 다음 메모도 정밀 추천에서만 가져온다
+    q = ap.parse('```json\n{"stance":"보통","market_view":"눌림 뒤 재상승","picks":[{"sym":"000660","name":"SK하이닉스","score":66,"win_prob":58,"entry_price":150000,'
+                 '"target_pct":2.4,"stop_pct":1.2,"reasons":["VWAP 위 재상승"],"risks":["지수"]}]}\n```', "kr", "claude-haiku-4-5", 0.008, lite=True)
+    assert q["lite"] is True and q["picks"][0]["sym"] == "000660" and full["lite"] is False
+    assert [r["id"] for r in ap.history()] == [full["id"]] and ap.memo("kr", "day")["시장 판단"] == "반도체 강세"
+    assert rt.db.one("SELECT lite FROM ai_picks WHERE id=?", (q["id"],))["lite"] == 1
+    # 프롬프트: 빠른 재추천은 표(JSON)만 받는다. 스윙도 같은 방식
+    assert "설명 글 없이" in AP.system_prompt("day", True) and "설명 글 없이" in AP.system_prompt("swing", True) and "5거래일" in AP.system_prompt("swing", True)
+    assert AP.system_prompt("day") == AP.PICK_SYSTEM
+    monkeypatch.setattr(ap, "index_state", lambda mkt, sym="": {"price": 2700, "sym": "KOSPI"})
+    monkeypatch.setattr(rt.market, "watch", lambda: {})
+    dbars = [{"t": f"2026-{8 + i // 30:02d}-{1 + i % 28:02d}", "o": 100 + i, "h": 103 + i, "l": 98 + i, "c": 101 + i, "v": 1000 + i} for i in range(70)]
+    monkeypatch.setattr(inv, "candles", lambda mkt, sym, tf: {"bars": dbars})
+    _, ask_s, data_s = ap.context({"mkt": "kr", "horizon": "swing", "lite": True, "exclude": ["035420"]})
+    rows = data_s["후보"].split("\n")
+    assert "실시간 순위" not in data_s and rows[0].startswith("sym|이름|현재가|등락률%|") and "20일선대비%" in rows[0] and [r.split("|")[0] for r in rows[1:]] == ["005930", "000660"]
+
+
+def test_quick_rescan_api_call_is_cheap(rt):
+    """빠른 재추천은 가장 싼 엔진으로, 검색 없이, 짧은 답만 받고 비용을 따로 센다."""
+    from moa.ai import LITE_MODEL
+    rt.settings.update({"ai": {"api_key": "sk-ant-test", "model": "claude-fable-5-2", "web_search": True}})
+    sent = []
+
+    def fake_post(body):
+        sent.append(body)
+        yield {"type": "message_start", "message": {"usage": {"input_tokens": 3000, "output_tokens": 0}}}
+        yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": '```json\n{"stance":"관망","market_view":"v","picks":[]}\n```'}}
+        yield {"type": "content_block_stop", "index": 0}
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 400}}
+    rt.ai._post = fake_post
+    rt.ai.context = lambda kind, d: ("t", "ask", {"후보": "sym|이름"})
+    rt.market.yh_quote = lambda s: {"price": 1400.0}
+    out = list(rt.ai.stream("pick", {"mkt": "kr", "horizon": "day", "lite": True, "web_search": True}))
+    b = sent[0]
+    assert b["model"] == LITE_MODEL and "tools" not in b and b["max_tokens"] == 1500 and "설명 글 없이" in b["system"]
+    done = out[-1]
+    assert done["t"] == "done" and done["model"] == LITE_MODEL and abs(done["usd"] - (3000 * 1 + 400 * 5) / 1e6) < 1e-9
+    assert rt.db.one("SELECT kind, model FROM ai_usage ORDER BY id DESC LIMIT 1") == {"kind": "pickq", "model": LITE_MODEL}
+    m = rt.ai.meter("pickq", LITE_MODEL)
+    assert m["web"] is False and m["avg_usd"] == 0.005 and rt.autotrade._quick_usd() == 0.005
+
+
+def test_old_runs_get_quick_rescans_once(env, monkeypatch):
+    """예전 판에서 시작한 모의·실험은 빠른 재추천을 스스로 켠다(하루 비용 상한 안에서). 실전은 그대로 둔다."""
+    at = env.at
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: ({"claude-sonnet-5-5": 0.2, "claude-haiku-4-5": 0.1}.get(model, 0.8) * (1 if web else 0.6), {"fx": 1400.0}))
+    paper, us = env.run(), env.run(mkt="us", budget=3000)
+    at.rt.db.x("UPDATE at_runs SET mode='real' WHERE id=?", (us,))
+    at.auto_set(True)
+    lab = next(x["id"] for x in at.labs()["labs"] if (x["mkt"], x["style"]) == ("kr", "day"))
+    at.rt.db.x("UPDATE at_runs SET params=json_remove(params,'$.quick_gap_min')")
+    at.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.cycles_per_day',3,'$.cycle_gap_min',60) WHERE lab_id=?", (lab,))
+    env.open = False
+    at.tick(force=True)
+    P = lambda i: at._run(i)["params"]
+    assert P(paper)["quick_gap_min"] == 20 and P(paper)["cycles_per_day"] == 3 and P(us)["quick_gap_min"] == 0       # 직접 만든 모의: 간격만 붙인다. 실전: 끈 채로
+    sibs = at._runs("WHERE lab_id=?", (lab,))
+    assert all((r["params"]["quick_gap_min"], r["params"]["cycles_per_day"], r["params"]["cycle_gap_min"]) == (20, 2, 160) for r in sibs) and len(sibs) == 10
+    assert sum(1 for x in at.rt.db.q("SELECT msg FROM at_log WHERE kind='control'") if "더 자주" in x["msg"]) == 5       # 직접 만든 모의 1 + 실험 묶음 4
+    at.tick(force=True)
+    assert sum(1 for x in at.rt.db.q("SELECT msg FROM at_log WHERE kind='control'") if "더 자주" in x["msg"]) == 5       # 한 번만
+    assert at.detail(us)["params"]["quick_gap_min"] == 0 and at.edit(us, {"quick_gap_min": 30})["params"]["quick_gap_min"] == 30   # 실전은 플랜에서 켠다

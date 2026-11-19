@@ -1430,6 +1430,71 @@ class AutoTrade:
         self.log(run["id"], "review", f"개선안 {len(applied)}건을 반영했어요 · 플랜 {ver}판", {"proposal": pid, "changes": applied})
         return self.detail(run["id"])
 
+    def budget(self, rid, d):
+        """돌고 있는 자동매매의 쓸 돈을 늘리거나 줄인다. dry면 바꾸지 않고 바꾼 뒤 모습만 돌려준다.
+        손익(원)은 그대로 두고 쓸 돈만 바뀐다. 수익률·1회 매수 금액·손실 한도는 새 쓸 돈 기준으로 다시 계산된다."""
+        run = self._run(rid)
+        if run["status"] in ("ended", "closing"):
+            raise ValueError("끝났거나 정리 중인 자동매매는 쓸 돈을 바꿀 수 없어요")
+        mkt, p, old = run["mkt"], run["params"], float(run["budget"])
+        kr = mkt == "kr"
+        mon = (lambda v: f"{v:,.0f}원") if kr else (lambda v: f"${v:,.2f}")
+        try:
+            new = float(str(d.get("budget") or 0).replace(",", ""))
+        except ValueError:
+            raise ValueError("금액은 숫자로 넣어 주세요")
+        new = round(new) if kr else round(new, 2)
+        m = self.money(run)
+        loss = max(0.0, -(m["realized"] + m["unrealized"]))
+        # 줄일 수 있는 바닥: 최소 금액, 이미 주식에 들어가 있는 돈, 그리고 지금 손실이 새 손실 한도를 넘지 않는 금액
+        floors = [(MIN_BUDGET[mkt], f"최소 금액 {mon(MIN_BUDGET[mkt])} 이상으로 넣어 주세요"),
+                  (m["open_cost"] - m["realized"], f"지금 주식에 들어가 있는 돈({mon(m['open_cost'])}) 때문에 {{}} 아래로는 줄일 수 없어요. 종목이 정리된 뒤에 줄여 주세요")]
+        if loss > 0:
+            floors.append((loss / (p["total_loss_pct"] / 100) * 1.02, f"지금 손실({mon(loss)})이 전체 손실 한도({p['total_loss_pct']:g}%)를 넘어 바로 종료돼요. {{}} 이상으로 넣어 주세요"))
+        lo, lo_why = max(floors, key=lambda x: x[0])
+        lo = math.ceil(lo / 10000) * 10000 if kr else math.ceil(lo)
+        hi = 5_000_000_000 if kr else 5_000_000
+        out = {"old": old, "new": new, "min": lo, "max": hi, "diff": round(new - old, 2), "error": None, "notes": []}
+        if new < lo:
+            out["error"] = lo_why.format(mon(lo)) if "{}" in lo_why else lo_why
+        elif new > hi:
+            out["error"] = "금액을 확인해 주세요"
+        elif new == old:
+            out["error"] = "지금과 같은 금액이에요"
+        after = dict(run, budget=new)
+        m2 = self.money(after)
+        n_closed = self.rt.db.one("SELECT COUNT(*) n FROM at_trades WHERE run_id=? AND status='closed'", (rid,))["n"]
+        mult = float(p.get("warmup_mult") or 1) if n_closed < int(p.get("warmup_trades") or 0) else 1.0
+        size = lambda mm: round(min(mm["base"] * p["per_trade_pct"] / 100 * mult, max(0.0, mm["cash"])), 2)
+        out.update(cash=[m["cash"], m2["cash"]], equity=[m["equity"], m2["equity"]], ret_pct=[m["ret_pct"], m2["ret_pct"]], per_trade=[size(m), size(m2)],
+                   day_limit=[round(old * p["daily_loss_pct"] / 100, 2), round(new * p["daily_loss_pct"] / 100, 2)],
+                   total_limit=[round(old * p["total_loss_pct"] / 100, 2), round(new * p["total_loss_pct"] / 100, 2)], warmup=mult < 1)
+        # 금액대가 바뀌면 종목 수·1회 비중의 기본값도 달라진다. 지금 값이 예전 기본값 그대로일 때만 맞추기를 권한다
+        d0, d1 = make_plan(old, mkt, run["style"], 30), make_plan(new, mkt, run["style"], 30)
+        fit = None
+        if (d0["max_positions"], d0["per_trade_pct"]) != (d1["max_positions"], d1["per_trade_pct"]) \
+                and (p["max_positions"], p["per_trade_pct"]) == (d0["max_positions"], d0["per_trade_pct"]):
+            fit = {"max_positions": [p["max_positions"], d1["max_positions"]], "per_trade_pct": [p["per_trade_pct"], d1["per_trade_pct"]]}
+        out["fit"] = fit
+        if run["mode"] == "real" and new > old:
+            out["notes"].append("실전이라 늘린 금액만큼 실제 주문이 더 나갈 수 있어요. 계좌의 주문 가능 금액을 확인해 주세요.")
+        if new < old and m2["cash"] < m2["base"] * p["per_trade_pct"] / 100 * mult:
+            out["notes"].append("줄이면 남는 현금이 1회 매수 금액보다 적어, 종목이 정리될 때까지는 남은 현금만큼만 살 수 있어요.")
+        day_pnl = sum(c["pnl"] or 0 for c in self._today_closed(run)) + sum(t["qty"] * ((t["last"] or t["entry_price"]) - t["entry_price"]) for t in self._open(rid))
+        if new < old and day_pnl <= -new * p["daily_loss_pct"] / 100:
+            out["notes"].append("오늘 손실이 새 하루 손실 한도를 넘어, 오늘은 새로 사지 않게 돼요.")
+        if d.get("dry"):
+            return out
+        if out["error"]:
+            raise ValueError(out["error"])
+        if run["mode"] == "real" and new > old and str(d.get("confirm") or "").strip() != "실전":
+            raise ValueError("실전은 실제 주문이 나가요. 늘리려면 확인란에 '실전'을 적어 주세요")
+        self.rt.db.x("UPDATE at_runs SET budget=? WHERE id=?", (new, rid))
+        self.log(rid, "control", f"쓸 돈 {mon(old)} → {mon(new)}({'+' if new > old else '-'}{mon(abs(new - old))})", {"budget": {"from": old, "to": new}})
+        if fit and d.get("fit"):
+            self.edit(rid, {"max_positions": fit["max_positions"][1], "per_trade_pct": fit["per_trade_pct"][1]})
+        return self.detail(rid)
+
     def edit(self, rid, patch):
         """사용자가 플랜 값을 직접 고친다(판이 하나 올라가고 이력에 남는다)."""
         run = self._run(rid)

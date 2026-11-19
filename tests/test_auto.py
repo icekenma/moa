@@ -917,3 +917,59 @@ def test_scan_progress_while_asking_ai(env, monkeypatch):
     # 간격을 기다리는 동안은 남은 초와 전체 간격을 준다(화면의 초 단위 카운트다운·진행 막대)
     nx = at.now(at._run(rid))["next"]
     assert nx["kind"] == "at" and nx["span_sec"] == 3600 and 3500 < nx["in_sec"] <= 3600
+
+
+def test_budget_can_be_changed_while_running(env):
+    """돌고 있는 중에 쓸 돈을 늘리고 줄인다. 손익(원)은 그대로, 1회 매수 금액·손실 한도·수익률은 새 금액 기준. 줄이는 데는 바닥이 있다."""
+    at = env.at
+    rid = env.run(budget=900_000)                                   # 100만 미만: 2종목 · 33%
+    run = lambda: at._run(rid)
+    assert (run()["params"]["max_positions"], run()["params"]["per_trade_pct"]) == (2, 33.0)
+    env.enter(rid, [env.pick("005930")])                            # 검증 단계: 90만 × 33% × 50% = 148,500 → 2주(141,000쯤)
+    cost = at.money(run())["open_cost"]
+    assert cost > 0
+    # 미리 보기(dry): 바꾸지 않고 바뀐 뒤 모습만
+    pv = at.budget(rid, {"budget": "1,500,000", "dry": True})
+    assert pv["error"] is None and pv["diff"] == 600_000 and pv["cash"] == [900_000 - cost, 1_500_000 - cost] and pv["per_trade"] == [148_500.0, 247_500.0]
+    assert pv["total_limit"] == [72_000.0, 120_000.0] and pv["day_limit"] == [18_000.0, 30_000.0] and pv["warmup"] is True
+    assert pv["fit"] == {"max_positions": [2, 3], "per_trade_pct": [33.0, 33.0]} and run()["budget"] == 900_000
+    # 늘리기 + 종목 수를 새 금액대에 맞추기
+    d = at.budget(rid, {"budget": 1_500_000, "fit": True})
+    assert d["run"]["money"]["budget"] == 1_500_000 and run()["params"]["max_positions"] == 3 and run()["ver"] == 2
+    assert d["now"]["size"]["alloc"] == 247_500.0 and d["now"]["risk"]["limit"] == 120_000.0
+    assert "쓸 돈 900,000원 → 1,500,000원(+600,000원)" in [x["msg"] for x in d["log"]]
+    # 손익은 그대로, 수익률은 새 금액 기준
+    env.px["005930"] = 71_500.0
+    at.tick(force=True)
+    m = at.money(run(), live=True)
+    assert m["unrealized"] > 0 and m["equity"] == 1_500_000 + m["unrealized"] and m["ret_pct"] == round(m["unrealized"] / 1_500_000 * 100, 2)
+    # 줄이기: 주식에 들어간 돈·최소 금액 아래로는 안 된다
+    pv = at.budget(rid, {"budget": 100_000, "dry": True})
+    assert pv["min"] == 300_000 and "최소 금액" in pv["error"]
+    with pytest.raises(ValueError, match="최소 금액"):
+        at.budget(rid, {"budget": 100_000})
+    with pytest.raises(ValueError, match="같은 금액"):
+        at.budget(rid, {"budget": 1_500_000})
+    d = at.budget(rid, {"budget": 300_000})
+    assert d["run"]["money"]["cash"] == 300_000 - cost and at.money(run())["open_cost"] == cost
+    # 지금 손실이 새 손실 한도를 넘게 줄이는 것은 막는다(바로 종료되지 않게)
+    at.budget(rid, {"budget": 2_000_000})
+    env.px["005930"] = 40_000.0                                      # 크게 물린 상태(손절은 다음 tick 전)
+    at.rt.db.x("UPDATE at_trades SET last=40000 WHERE run_id=? AND status='open'", (rid,))
+    pv = at.budget(rid, {"budget": 400_000, "dry": True})
+    loss = -at.money(run())["unrealized"]
+    assert loss > 400_000 * 0.08 and "바로 종료" in pv["error"] and pv["min"] >= loss / 0.08
+    with pytest.raises(ValueError, match="바로 종료"):
+        at.budget(rid, {"budget": 400_000})
+    # 실전: 늘릴 때는 '실전' 확인이 필요하고, 줄일 때는 필요 없다
+    at.rt.db.x("UPDATE at_trades SET last=70500 WHERE run_id=? AND status='open'", (rid,))
+    at.rt.db.x("UPDATE at_runs SET mode='real' WHERE id=?", (rid,))
+    assert any("실제 주문" in n for n in at.budget(rid, {"budget": 2_500_000, "dry": True})["notes"])
+    with pytest.raises(ValueError, match="실전"):
+        at.budget(rid, {"budget": 2_500_000})
+    assert at.budget(rid, {"budget": 2_500_000, "confirm": "실전"})["run"]["money"]["budget"] == 2_500_000
+    assert at.budget(rid, {"budget": 1_800_000})["run"]["money"]["budget"] == 1_800_000
+    # 끝난 뒤에는 바꿀 수 없다
+    at.rt.db.x("UPDATE at_runs SET status='ended' WHERE id=?", (rid,))
+    with pytest.raises(ValueError, match="바꿀 수 없어요"):
+        at.budget(rid, {"budget": 2_000_000})

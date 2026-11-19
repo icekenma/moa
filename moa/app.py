@@ -1264,6 +1264,11 @@ def create_app(rt, updater=None):
         with rt._lock:
             return jsonify(rt.autotrade.edit(rid, body()))
 
+    @app.post("/api/auto/runs/<int:rid>/budget")
+    def auto_budget(rid):
+        with rt._lock:
+            return jsonify(rt.autotrade.budget(rid, body()))
+
     @app.post("/api/auto/runs/<int:rid>/review")
     def auto_review(rid):
         with rt._lock:

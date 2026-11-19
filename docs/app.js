@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.0938";
+const UI_VERSION = "261119.0942";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1780,7 +1780,7 @@ pages.invest = {
         <div class="at-run-top"><b>${esc(r.name)}</b><span class="tag ${cls}">${lbl}</span><span class="tag g">${r.mode === "real" ? esc(d.broker || "실전") : "모의"}</span></div>
         <div class="at-hero-eq">${M(m.equity)}</div>
         <div class="at-hero-ret ${tone(m.ret_pct)}">${M(m.equity - m.budget, true)} (${pct(m.ret_pct, 2)})</div>
-        <div class="at-hero-kv"><div><span>쓸 돈</span><b>${M(m.budget)}</b></div><div><span>남은 현금</span><b>${M(m.cash)}</b></div><div><span>확정 손익</span><b class="${tone(m.realized)}">${M(m.realized, true)}</b></div></div>
+        <div class="at-hero-kv">${["running", "paused"].includes(r.status) ? `<button type="button" id="atBud" aria-label="쓸 돈 바꾸기"><span>쓸 돈 <em>바꾸기 ›</em></span><b>${M(m.budget)}</b></button>` : `<div><span>쓸 돈</span><b>${M(m.budget)}</b></div>`}<div><span>남은 현금</span><b>${M(m.cash)}</b></div><div><span>확정 손익</span><b class="${tone(m.realized)}">${M(m.realized, true)}</b></div></div>
         ${N ? `${N.busy ? this.atScanHtml(N) : `<div class="at-nowline ${N.next.kind}"><span class="at-dot ${r.status === "running" && N.engine.ok ? "on" : ""}"></span>
           <div><b>${esc(next)}</b><span>${this.atNextLine(N)}</span>${N.next.span_sec && N.next.in_sec != null ? `<i class="at-gap" data-gap="${N.next.in_sec}" data-span="${N.next.span_sec}" data-t0="${Date.now()}" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, (1 - N.next.in_sec / N.next.span_sec) * 100)).toFixed(1)}%"></i></i>` : ""}</div></div>`}
         <div class="ap-h2">${r.end_date.slice(5).replace("-", "/")}까지(${N.period.day}일째/${N.period.days}일) · 플랜 ${r.ver}판 · 엔진 ${N.engine.ok ? `정상(${N.engine.sec}초 전 확인)` : "확인 필요"}</div>`
@@ -1792,6 +1792,7 @@ pages.invest = {
       </section><div id="atBody" class="at-body"></div>`;
     $("#atBack").onclick = () => { A.view = "list"; A.o = null; this.auto(box); };
     bindSeg(box, "자동탭", (v) => { A.tab = v; this.atTab(); });
+    if ($("#atBud")) $("#atBud").onclick = () => this.atBudget();
     $$("[data-ctl]", box).forEach((b) => (b.onclick = async () => {
       const a = b.dataset.ctl;
       if (a === "end" && !confirmTap(b, d.open.length ? "보유 종목을 모두 팔고 끝내요. 한 번 더 누르기" : "한 번 더 누르면 종료")) return;
@@ -1958,6 +1959,57 @@ pages.invest = {
       A.d = await run(() => api("POST", `/api/auto/proposals/${pid}`, { action: a }), a === "apply" ? "개선안을 반영했어요" : "반영하지 않았어요");
       this.auto($("#iv"));
     };
+  },
+  // 돌고 있는 중에 쓸 돈을 늘리거나 줄인다. 넣는 금액에 따라 바뀌는 값을 미리 보여 준다
+  atBudget() {
+    const A = this.at, d = A.d, r = d.run, kr = r.mkt === "kr", M = (v, s) => this.atM(r.mkt, v, s), real = r.mode === "real";
+    const steps = kr ? [[-500000, "-50만"], [-100000, "-10만"], [100000, "+10만"], [500000, "+50만"], [1000000, "+100만"]] : [[-500, "-$500"], [-100, "-$100"], [100, "+$100"], [500, "+$500"], [1000, "+$1,000"]];
+    openSheet("쓸 돈 바꾸기", `<div class="at-bud">
+        <div class="at-bud-now"><span>지금 쓸 돈</span><b>${M(r.money.budget)}</b></div>
+        <label class="field">바꿀 금액(${kr ? "원" : "달러"})<input id="abV" class="r big" inputmode="decimal" autocomplete="off" value="${esc(kr ? won(r.money.budget) : String(r.money.budget))}"></label>
+        <div class="chips">${steps.map(([v, l]) => `<button type="button" class="chip" data-add="${v}">${l}</button>`).join("")}</div>
+        <div id="abPv" class="at-bud-pv" aria-live="polite"></div>
+        <div class="tiny">지금까지의 손익은 그대로 두고 쓸 돈만 바꿔요. 수익률과 손실 한도는 새 금액을 기준으로 다시 계산돼요. 바꾼 기록은 판단 기록에 남아요.</div>
+        <button type="button" class="btn dark wide" id="abGo" disabled>쓸 돈 바꾸기</button></div>`, (box) => {
+      const inp = $("#abV", box), go = $("#abGo", box), pvBox = $("#abPv", box);
+      const val = () => Number(String(inp.value).replace(/[^0-9.]/g, "")) || 0;
+      let seq = 0, last = null;
+      const row = (label, a, b, sign) => `<div><dt>${label}</dt><dd>${a === b ? M(a, sign) : `<s>${M(a, sign)}</s> <b>${M(b, sign)}</b>`}</dd></div>`;
+      const draw = async () => {
+        const my = ++seq;
+        let P;
+        try { P = await api("POST", `/api/auto/runs/${r.id}/budget`, { budget: val(), dry: true }); } catch (e) { P = { error: e.message }; }
+        if (my !== seq) return;
+        last = P;
+        const same = P.error && /같은 금액/.test(P.error);
+        pvBox.innerHTML = `${P.error && !same ? `<div class="notice warn">${esc(P.error)}</div>` : ""}
+          ${P.cash ? `<dl class="dt-rows">${row("쓸 돈", P.old, P.new)}${row("남은 현금", P.cash[0], P.cash[1])}${row(`한 번에 사는 금액${P.warmup ? "(검증 단계)" : ""}`, P.per_trade[0], P.per_trade[1])}
+            ${row("하루 손실 한도", -P.day_limit[0], -P.day_limit[1])}${row("전체 손실 한도", -P.total_limit[0], -P.total_limit[1])}
+            <div><dt>수익률 표시</dt><dd>${P.ret_pct[0] === P.ret_pct[1] ? pct(P.ret_pct[0], 2) : `<s>${pct(P.ret_pct[0], 2)}</s> <b>${pct(P.ret_pct[1], 2)}</b>`}</dd></div></dl>` : ""}
+          ${P.error ? "" : (P.notes || []).map((n) => `<div class="notice">${esc(n)}</div>`).join("")}
+          ${P.fit && !P.error ? `<label class="at-bud-fit"><input type="checkbox" id="abFit" checked><span>종목 수도 새 금액대에 맞추기 <b>${P.fit.max_positions[0]} → ${P.fit.max_positions[1]}종목</b>${P.fit.per_trade_pct[0] !== P.fit.per_trade_pct[1] ? `, 1회 비중 <b>${P.fit.per_trade_pct[0]} → ${P.fit.per_trade_pct[1]}%</b>` : ""}</span></label>` : ""}
+          ${real && P.diff > 0 && !P.error ? `<label class="field">실제 주문이 더 나갈 수 있어요. 확인하려면 '실전'이라고 적어 주세요<input id="abOk" autocomplete="off" placeholder="실전"></label>` : ""}`;
+        go.disabled = !!P.error;
+        go.textContent = P.error ? "쓸 돈 바꾸기" : `${M(Math.abs(P.diff))} ${P.diff > 0 ? "늘리기" : "줄이기"}`;
+      };
+      let t = null;
+      const later = () => { go.disabled = true; clearTimeout(t); t = setTimeout(draw, 250); };
+      inp.addEventListener("input", () => { if (kr) { const v = val(); inp.value = v ? won(v) : ""; } later(); });
+      box.addEventListener("click", (e) => {
+        const c = e.target.closest("[data-add]");
+        if (!c) return;
+        const v = Math.max(0, val() + Number(c.dataset.add));
+        inp.value = kr ? won(v) : String(v);
+        later();
+      });
+      go.onclick = async () => {
+        if (!last || last.error) return;
+        const body = { budget: val(), fit: !!($("#abFit", box) && $("#abFit", box).checked), confirm: $("#abOk", box) ? $("#abOk", box).value : "" };
+        try { A.d = await run(() => api("POST", `/api/auto/runs/${r.id}/budget`, body), `쓸 돈을 ${M(body.budget)}으로 바꿨어요`); } catch (e) { return; }
+        closeSheet(); this.auto($("#iv"));
+      };
+      draw();
+    });
   },
   atEdit() {
     const A = this.at, d = A.d, p = d.params;

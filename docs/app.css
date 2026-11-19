@@ -2260,3 +2260,23 @@ html:not(.dark-theme) .card .at-scan-steps li.on i::after{background:linear-grad
 #hmAuto:empty{display:none}
 #hmAuto{display:flex;flex-direction:column;gap:8.5px}
 .at-nowline>div{flex:1}
+
+/* ---------- v4.47 자동매매: 쓸 돈 바꾸기 ---------- */
+.at-hero-kv button{all:unset;box-sizing:border-box;display:flex;flex-direction:column;gap:1px;padding:7px 9px;border-radius:10px;background:rgba(255,255,255,.12);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.22);min-width:0;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.at-hero-kv button:active{background:rgba(255,255,255,.2)}
+.at-hero-kv button:focus-visible{outline:2px solid #FDE68A;outline-offset:2px}
+.at-hero-kv button span em{font-style:normal;color:#FDE68A;font-weight:800;margin-left:2px}
+.at-bud{display:flex;flex-direction:column;gap:10px}
+.at-bud-now{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:10px 12px;border-radius:12px;background:var(--bg)}
+.at-bud-now span{font-size:11px;font-weight:700;color:var(--ink3)}
+.at-bud-now b{font-size:17px;font-weight:800;font-variant-numeric:tabular-nums}
+.at-bud input.big{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums}
+.at-bud-pv{display:flex;flex-direction:column;gap:8px;min-height:40px}
+.at-bud-pv .dt-rows dd{margin:0;font-weight:800;font-variant-numeric:tabular-nums;text-align:right}
+.at-bud-pv .dt-rows dd s{font-weight:600;color:var(--ink3);text-decoration-thickness:1px;margin-right:4px}
+.at-bud-pv .dt-rows dd b{color:var(--sec-i,var(--sec))}
+.at-bud-fit{display:flex;align-items:flex-start;gap:9px;padding:10px 12px;border-radius:12px;background:var(--bg);font-size:12px;line-height:1.5}
+.at-bud-fit input{flex:0 0 auto;width:18px;height:18px;margin-top:1px;accent-color:var(--sec)}
+html.dark-theme .at-bud-now,html.dark-theme .at-bud-fit{background:rgba(255,255,255,.06)}
+html.dark-theme .at-bud-pv .dt-rows dd b{color:var(--n-i,#FF8FD0)}

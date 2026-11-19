@@ -2596,3 +2596,29 @@ html.dark-theme .at-mk-i.buy.paper::after{border-bottom-color:#14111F}html.dark-
 
 /* v4.64 빠른 재추천 */
 .lab-freq{margin:-2px 0 8px}
+
+/* v4.67 차트 크게 보기 */
+.mk-range-row{display:flex;align-items:center;gap:6px}
+.mk-range-row .mk-range{flex:1;min-width:0}
+.cz-btn{flex:none;display:inline-grid;place-items:center;width:34px;height:30px;border:0;border-radius:8.5px;background:var(--bg);color:var(--ink);cursor:pointer}
+html.dark-theme .cz-btn{background:rgba(255,255,255,.08);color:var(--n-i)}
+.cz-btn:active{transform:scale(.94)}
+.cz-btn:focus-visible,.cz-x:focus-visible{outline:2px solid var(--hl);outline-offset:2px}
+.cz{position:fixed;inset:0;z-index:400;background:var(--card);overflow:hidden;animation:czIn .22s ease both}
+html.dark-theme .cz{background:var(--nbg)}
+@keyframes czIn{from{opacity:0}to{opacity:1}}
+.cz-in{position:absolute;top:0;left:0;display:flex;flex-direction:column;gap:6px;box-sizing:border-box;
+  padding:max(8px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left))}
+/* 세로로 들고 있을 때: 안쪽을 시계 방향으로 90도 돌린다. 휴대폰을 왼쪽으로 눕히면 바로 읽힌다(화면 윗변의 섬은 왼쪽으로 간다) */
+.cz.rot .cz-in{left:100%;transform:rotate(90deg);transform-origin:0 0;
+  padding:max(8px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) 8px max(14px,env(safe-area-inset-top))}
+.cz-top{display:flex;align-items:center;gap:10px;flex:none}
+.cz-name{display:flex;align-items:baseline;gap:8px;min-width:0;flex:1}
+.cz-name b{font-size:15px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cz-name span{font-size:13px;font-weight:800;white-space:nowrap;font-variant-numeric:tabular-nums}
+.cz-name i{font-style:normal;font-size:11.5px;margin-left:3px}
+.cz-seg{flex:none;width:220px}
+.cz-x{flex:none;display:inline-grid;place-items:center;width:36px;height:32px;border:0;border-radius:9px;background:var(--bg);color:var(--ink);cursor:pointer}
+html.dark-theme .cz-x{background:rgba(255,255,255,.1)}
+.cz-chart{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-start}
+.cz-chart .mk-svg{width:100%}

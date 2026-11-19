@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1420";
+const UI_VERSION = "261119.1448";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -4358,7 +4358,8 @@ const mkt = {
         <div class="dt-tabs">${seg("보기", [["chart", "차트"], ["book", "호가"], ["ticks", "체결"], ["info", "정보"]], D.tab)}</div>
         <section class="card mk-chart-card" id="dtChart" ${D.tab === "chart" ? "" : "hidden"}>
           <div class="mk-chart" id="mkChart"></div>
-          ${seg("기간", [["1d", "1일"], ["m5", "5분"], ["d", "일"], ["w", "주"], ["mo", "월"]], D.range, "on-card mk-range")}
+          <div class="mk-range-row">${seg("기간", [["1d", "1일"], ["m5", "5분"], ["d", "일"], ["w", "주"], ["mo", "월"]], D.range, "on-card mk-range")}
+            <button type="button" class="cz-btn" id="mkZoom" aria-label="차트 크게 보기(가로 전체 화면)">${ZOOM_ICO}</button></div>
         </section>
         <section class="card" id="dtPane" ${D.tab === "chart" ? "hidden" : ""}><div class="empty small loading">불러오는 중</div></section>
         <div id="mkAt"></div>
@@ -4381,6 +4382,7 @@ const mkt = {
         } catch (e) { if (v === "1d") D.chart = { points: [], error: e.message }; else D.cd = { bars: [], error: e.message }; }
         if (D.range === v && this.d === D) this.drawChart();
       });
+      $("#mkZoom", box).onclick = () => this.zoom();
       $$("[data-o]", box).forEach((b) => b.onclick = () => orderSheet({ code: D.sym, market: m, side: b.dataset.o, exch: D.q?.exch, name: D.q?.name, holding: D.q?.holding,
         qty: b.dataset.o === "sell" && D.q?.holding ? (D.q.holding.sellable || D.q.holding.qty) : 1 }));
       if ($("#mkDca", box)) {
@@ -4418,8 +4420,62 @@ const mkt = {
       <div class="ds-row"><span>시가 <b>${M(q.open)}</b></span><span>전일 <b>${M(prev)}</b></span><span>변동폭 <b>${prev ? ((hi - lo) / prev * 100).toFixed(2) + "%" : "-"}</b></span><span>거래량 <b>${q.volume != null ? bigNum(q.volume) : "-"}</b></span></div>
     </div>`;
   },
+  // 차트 크게 보기: 화면 전체를 쓰고, 휴대폰을 세로로 들고 있으면 화면을 90도 돌려 가로로 넓게 보여 준다
+  zoom() {
+    const D = this.d;
+    if (!D || this.zv) return;
+    const Z = this.zv = { D, range: D.range === "1d" ? "m5" : D.range, cd: D.range === "1d" ? null : D.cd };
+    const ov = document.createElement("div");
+    ov.className = "cz";
+    ov.setAttribute("role", "dialog"); ov.setAttribute("aria-modal", "true"); ov.setAttribute("aria-label", `${D.q.name} 차트 크게 보기`);
+    ov.innerHTML = `<div class="cz-in"><div class="cz-top">
+        <div class="cz-name"><b>${esc(D.q.name)}</b><span id="czPx"></span></div>
+        ${seg("크게기간", [["m5", "5분"], ["d", "일"], ["w", "주"], ["mo", "월"]], Z.range, "cz-seg")}
+        <button type="button" class="cz-x" id="czX" aria-label="크게 보기 닫기">${CLOSE_ICO}</button></div>
+      <div class="cz-chart mk-chart" id="czChart"><div class="empty small loading">불러오는 중</div></div></div>`;
+    document.body.appendChild(ov);
+    Z.ov = ov; Z.prevOverflow = document.body.style.overflow; document.body.style.overflow = "hidden";
+    const load = async () => {
+      const r = Z.range;
+      try { const cd = await GET(`/api/invest/candles/${D.m}/${encodeURIComponent(D.sym)}?tf=${r}`); if (this.zv === Z && Z.range === r) { Z.cd = cd; this.drawZoom(); } }
+      catch (e) { if (this.zv === Z && Z.range === r) { Z.cd = { bars: [], error: e.message }; this.drawZoom(); } }
+    };
+    bindSeg(ov, "크게기간", (v) => { Z.range = v; Z.cd = v === D.range ? D.cd : null; $("#czChart").innerHTML = `<div class="empty small loading">불러오는 중</div>`; if (Z.cd) this.drawZoom(); load(); });
+    Z.close = () => {
+      clearInterval(Z.timer); removeEventListener("resize", Z.fit); removeEventListener("keydown", Z.key); removeEventListener("hashchange", Z.close);
+      document.body.style.overflow = Z.prevOverflow; ov.remove(); if (this.zv === Z) this.zv = null; $("#mkZoom")?.focus();
+    };
+    Z.key = (e) => { if (e.key === "Escape") Z.close(); };
+    Z.fit = () => { if (this.zv === Z) this.drawZoom(); };
+    $("#czX", ov).onclick = Z.close;
+    addEventListener("resize", Z.fit); addEventListener("keydown", Z.key); addEventListener("hashchange", Z.close);
+    Z.timer = setInterval(() => { if (this.zv === Z && !document.hidden) load(); }, 20000);
+    this.drawZoom();
+    if (!Z.cd) load();
+    $("#czX", ov).focus();
+  },
+  drawZoom() {
+    const Z = this.zv;
+    if (!Z) return;
+    const D = Z.D, q = D.q, cur = q.currency, vw = innerWidth, vh = innerHeight, rot = vh > vw;
+    Z.ov.classList.toggle("rot", rot);
+    const inn = $(".cz-in", Z.ov);
+    // 돌릴 때는 안쪽 상자를 가로(긴 변)×세로(짧은 변)로 잡고 90도 돌려 화면에 맞춘다
+    inn.style.width = `${rot ? vh : vw}px`; inn.style.height = `${rot ? vw : vh}px`;
+    $("#czPx", Z.ov).innerHTML = `${this.money(q.price, cur)} <i class="${tone(q.change)}">${pct(q.change_pct, 2)}</i>`;
+    const el = $("#czChart", Z.ov);
+    if (!Z.cd) return;
+    const r = el.getBoundingClientRect(), k = 1.15;                    // SVG 1단위 ≈ 1.15px(글자 크기가 평소 차트와 비슷하게)
+    const w = rot ? r.height : r.width, h = rot ? r.width : r.height;
+    const W = Math.max(340, Math.round(w / k)), VH = 40, PH = Math.max(120, Math.round(h / k) - VH - 6 - 64);
+    const o = { W, PH, VH, N: Math.max(60, Math.min(240, Math.round(W / 6.5))) };
+    const fmt = (n) => this.money(n, cur), mark = Z.range === D.range ? D.mark : null;
+    el.innerHTML = candleChart(Z.cd, cur, fmt, mark, D.at, o);
+    bindCandle(el, Z.cd, fmt, mark, o);
+  },
   drawChart() {
     const D = this.d, el = $("#mkChart");
+    if (this.zv && this.zv.D === D && $("#czPx")) $("#czPx").innerHTML = `${this.money(D.q.price, D.q.currency)} <i class="${tone(D.q.change)}">${pct(D.q.change_pct, 2)}</i>`;
     if (!el) return;
     if (D.range !== "1d") { const a0 = !$("svg", el); el.innerHTML = candleChart(D.cd, D.q.currency, (n) => this.money(n, D.q.currency), D.mark, D.at); bindCandle(el, D.cd, (n) => this.money(n, D.q.currency), D.mark); this.drawAt();
       if (D.mark && D.range === "m5" && cdWin(D.cd, D.mark).gone && !D.markFell) { D.markFell = true; D.range = "d"; $$('[data-seg="기간"]').forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === "d"))); GET(`/api/invest/candles/${D.m}/${encodeURIComponent(D.sym)}?tf=d`).then((cd) => { if (this.d === D) { D.cd = cd; this.drawChart(); } }).catch(() => {}); } if (a0) $("svg", el)?.classList.add("anim"); return; }
@@ -4488,6 +4544,8 @@ const mkt = {
   },
 };
 
+const ZOOM_ICO = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M10.5 7.5v6M7.5 10.5h6"/></svg>`;
+const CLOSE_ICO = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>`;
 const BELL = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>`;
 function maLine(bars, n, X, Y) {
   const pts = [];
@@ -4495,17 +4553,17 @@ function maLine(bars, n, X, Y) {
   return pts.join("");
 }
 // 추천 표시가 있으면 추천 시점이 보이게 구간을 잡는다
-function cdWin(cd, mark) {
+function cdWin(cd, mark, N = 80) {
   const all = (cd && cd.bars) || [];
-  if (!mark) return { bars: all.slice(-80), ri: -1, ei: -1 };
+  if (!mark) return { bars: all.slice(-N), ri: -1, ei: -1 };
   const key = (iso, daily) => daily ? iso.slice(0, 10) : `${iso.slice(5, 7)}/${iso.slice(8, 10)} ${iso.slice(11, 16)}`;
   const daily = all.length && /^\d{4}-/.test(all[0].t);
   const rk = key(mark.ts, daily), ek = mark.end ? key(mark.end, daily) : null;
   let ri = all.findIndex((b) => b.t >= rk);
   if (!daily && ri > 0 && all[ri].t > rk) ri -= 1;  // 추천 시각이 들어 있는 봉
-  if (ri < 0 || (!daily && all[0].t > rk)) return { bars: all.slice(-80), ri: -1, ei: -1, gone: !daily };
-  const from = Math.max(0, Math.min(ri - 10, all.length - 80));
-  const bars = all.slice(from, from + 80);
+  if (ri < 0 || (!daily && all[0].t > rk)) return { bars: all.slice(-N), ri: -1, ei: -1, gone: !daily };
+  const from = Math.max(0, Math.min(ri - Math.round(N / 8), all.length - N));
+  const bars = all.slice(from, from + N);
   let ei = ek ? bars.findIndex((b) => b.t >= ek) : -1;
   return { bars, ri: ri - from, ei, daily };
 }
@@ -4533,10 +4591,11 @@ function atMarkPoints(bars, evs) {
   }
   return [...out.values()].map((g) => ({ ...g, price: g.n ? g.sum / g.n : 0 }));
 }
-function candleChart(cd, cur, fmt, mark, evs) {
-  const win = cdWin(cd, mark), bars = win.bars;
+// o: 크게 보기에서 쓰는 크기(W·PH·VH는 SVG 단위, N은 보여 줄 봉 수)
+function candleChart(cd, cur, fmt, mark, evs, o = {}) {
+  const win = cdWin(cd, mark, o.N), bars = win.bars;
   if (bars.length < 2) return `<div class="empty small">${esc((cd && cd.error) || "차트 자료가 아직 없어요")}</div>`;
-  const W = 340, PH = 150, VH = 34, G = 6, n = bars.length, bw = W / n;
+  const W = o.W || 340, PH = o.PH || 150, VH = o.VH || 34, G = 6, n = bars.length, bw = W / n;
   const pts = atMarkPoints(bars, evs);
   const lv = (mark ? [mark.tp, mark.sl, mark.entry].filter(Boolean) : []).concat(pts.filter((p) => p.kind !== "rec" && p.price).map((p) => p.price));
   const hi = Math.max(...bars.map((b) => b.h), ...lv), lo = Math.min(...bars.map((b) => b.l), ...lv), rr = hi - lo || 1;
@@ -4591,10 +4650,10 @@ function candleChart(cd, cur, fmt, mark, evs) {
     <g id="cdCur" visibility="hidden"><line y1="0" y2="${PH + G + VH}" stroke="var(--ink3)" stroke-width=".7" stroke-dasharray="2 2"/></g>
   </svg><div class="tiny cd-src">${esc(bars[0].t)} ~ ${esc(bars[bars.length - 1].t)} · ${esc(cd.source || "")}</div>`;
 }
-function bindCandle(el, cd, fmt, mark) {
-  const svg = $("svg", el), bars = cdWin(cd, mark).bars;
+function bindCandle(el, cd, fmt, mark, o = {}) {
+  const svg = $("svg", el), bars = cdWin(cd, mark, o.N).bars;
   if (!svg || bars.length < 2) return;
-  const g = $("#cdCur", el), tip = $("#cdTip", el), W = 340, bw = W / bars.length;
+  const g = $("#cdCur", el), tip = $("#cdTip", el), W = o.W || 340, bw = W / bars.length;
   const at = (ev) => {
     const r = svg.getBoundingClientRect(), x = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left) / r.width * W;
     const i = Math.max(0, Math.min(bars.length - 1, Math.floor(x / bw))), b = bars[i], cx = i * bw + bw / 2;

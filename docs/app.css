@@ -3505,3 +3505,22 @@ html.dark-theme .cz-zm{background:rgba(255,255,255,.08)}
 .cz-zm button:active{background:var(--press)}
 .cz-zm button:disabled{opacity:.3;cursor:default}
 .cz-zm button:focus-visible{outline:2px solid var(--hl);outline-offset:1px}
+/* v4.85 크게 보기: 손가락 판 · 시간·가격 눈금 · 가격표 */
+#czChart{position:relative}
+#czPlot{flex:1;min-height:0;display:flex;flex-direction:column}
+.cz-hit{position:absolute;inset:0;z-index:2;touch-action:none;cursor:grab}
+.cz-hit:active{cursor:grabbing}
+.ax-g{stroke:var(--line);stroke-width:.6;stroke-dasharray:2 3}
+.ax-pv{font-size:7.5px;font-weight:700;fill:var(--ink3);paint-order:stroke;stroke:var(--card);stroke-width:2.5px}
+html.dark-theme .ax-pv{stroke:var(--nbg)}
+.ax-tk{stroke:var(--line2);stroke-width:.6}
+.ax-tm{font-size:7.5px;font-weight:600;fill:var(--ink3)}
+.ax-tm.on{font-weight:800;fill:var(--ink2)}
+.ax-ch{font-size:6.5px;font-weight:800;fill:var(--ink3);paint-order:stroke;stroke:var(--card);stroke-width:2px}
+html.dark-theme .ax-ch{stroke:var(--nbg)}
+.ax-ch.up{fill:var(--up)}.ax-ch.down{fill:var(--down)}
+.cd-hl{stroke:var(--ink3);stroke-width:.7;stroke-dasharray:2 2}
+.cd-pt rect,.cd-tt rect{fill:var(--ink)}
+.cd-pt text,.cd-tt text{font-size:7.5px;font-weight:800;fill:var(--card)}
+html.dark-theme .cd-pt text,html.dark-theme .cd-tt text{fill:var(--nbg)}
+

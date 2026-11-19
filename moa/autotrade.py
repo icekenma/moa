@@ -922,7 +922,7 @@ class AutoTrade:
             if hm < self._entry(run, today)[0]:
                 late = AP.kr_note(today) if mkt == "kr" else ""
                 return nxt((late + ". " if late else "") + ("장 시작 전이에요. 매수 시작 시각에 AI 추천을 받아요" if hm < self._hours(mkt, today)[0] else "장은 열렸고, 매수 시작 시각을 기다려요"), today)
-            return nxt("오늘 매수 시간은 끝났어요. 다음 거래일에 이어 가요", self._next_day(mkt, today))
+            return nxt("오늘 매수 시간은 끝났어요. 다음 거래일에 이어 가요" if mkt == "kr" else "지금은 미국장이 닫혀 있어요. 다음 장이 열리면 이어 가요", self._next_day(mkt, today))
         if code == "over":
             return {"kind": "hold", "label": why}
         if code in ("dayloss", "streak", "cycles", "aicost"):
@@ -2008,6 +2008,9 @@ class AutoTrade:
             L["usd"] = round(sum(x["ai_usd"] for x in L["runs"]), 2)
             L["cycles"] = self.rt.db.one("SELECT COUNT(*) n FROM at_log WHERE run_id=? AND kind='cycle' AND data IS NOT NULL", (L["id"],))["n"]
             L["closed"] = sum(x["closed"] for x in L["runs"])
+            L["open"] = sum(x["open"] for x in L["runs"])
+            L["holders"] = sum(1 for x in L["runs"] if x["open"])
+            L["bought"] = sum(x["buys"] for x in L["runs"])
             lead = next((x for x in L["runs"] if x["closed"] >= 10), None)
             L["lead"] = lead["label"] if lead else None
             L["note"] = (f"지금은 '{lead['label']}'이 앞서요(AI 비용 빼고 {lead['net_ret_pct']:+.2f}%, {lead['closed']}건)." + ("" if lead["enough"] else f" {READY_N}건이 쌓여야 믿을 만해요.")
@@ -2032,7 +2035,7 @@ class AutoTrade:
                 self.rt.db.log("system", "error", f"자동매매 요약 오류: {type(e).__name__}: {e}", self._now())
         labs = []
         try:
-            labs = [{k: L.get(k) for k in ("id", "mkt", "style_label", "status", "lead", "note", "closed", "usd", "now")} | {"n": len(L["runs"])}
+            labs = [{k: L.get(k) for k in ("id", "mkt", "style_label", "status", "lead", "note", "closed", "usd", "now", "open", "holders", "bought", "cycles")} | {"n": len(L["runs"])}
                     for L in self.labs()["labs"] if L["status"] != "ended"]
         except Exception as e:
             self.rt.db.log("system", "error", f"실험 요약 오류: {type(e).__name__}: {e}", self._now())

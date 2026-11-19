@@ -2456,3 +2456,5 @@ html:not(.dark-theme) .kr{--mk:#D9661A;--mk2:#E0457A}html:not(.dark-theme) .us{-
 .card.lab.kr,.card.lab.us{border-left:3px solid var(--mk)}
 .card.lab.kr .lab-nm i,.card.lab.us .lab-nm i{background:color-mix(in srgb,var(--mk) 18%,transparent);color:var(--mk)}
 .card.lab.kr .lab-tr:nth-child(2) .lab-nm i:not(.few),.card.lab.us .lab-tr:nth-child(2) .lab-nm i:not(.few){background:var(--mk);color:#1A1024}
+.bot-kpi.k4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.bot-kpi dd small{display:block;font-size:9px;font-weight:600;color:var(--bot-ink3)}

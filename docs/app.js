@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1215";
+const UI_VERSION = "261119.1223";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1751,7 +1751,9 @@ pages.invest = {
         <div class="bot-top"><span class="bot-mode">실험</span><b class="bot-name">${esc(L.style_label)} · 플랜 ${L.n}개</b>
           <span class="bot-st live-dot ${L.status === "running" ? "on" : ""}">${L.status === "running" ? "가동 중" : "멈춤"}</span></div>
         ${L.now ? (L.now.busy ? this.atScanHtml(L.now, true) : `<div class="bot-now"><b>${esc(L.now.next.label)}</b><span>${this.atNextLine(L.now)}</span></div>`) : ""}
-        <div class="bot-note">${esc(L.note)} 끝난 거래 ${L.closed}건 · AI 비용 $${Number(L.usd).toFixed(2)}</div></a>`).join("")}`;
+        <dl class="bot-kpi k4"><div><dt>추천</dt><dd>${L.cycles}번</dd></div><div><dt>지금 보유</dt><dd>${L.open}종목<small>${L.holders}/${L.n} 플랜</small></dd></div>
+          <div><dt>산 횟수</dt><dd>${L.bought}</dd></div><div><dt>끝난 거래</dt><dd>${L.closed}</dd></div></dl>
+        <div class="bot-note">${esc(L.note)} AI 비용 $${Number(L.usd).toFixed(2)}</div></a>`).join("")}`;
       }).join("")}</section>`;
   },
   atReadyHtml(R) {
@@ -1835,7 +1837,7 @@ pages.invest = {
       const kr = L.mkt === "kr", N = L.now;
       return `<section class="card lab ${L.status} ${L.mkt}">
         <div class="card-head"><div><h2><span class="mk-tag ${L.mkt}">${kr ? "국내장" : "미국장"}</span>${esc(L.style_label)} 실험 · 플랜 ${L.runs.length}개</h2>
-          <div class="tiny">${esc(L.start_date.slice(5))}~${esc(L.end_date.slice(5))} · 추천 ${L.cycles}번 · 끝난 거래 ${L.closed}건 · AI 비용 $${L.usd.toFixed(2)}(모두 합쳐)</div></div>
+          <div class="tiny">${esc(L.start_date.slice(5))}~${esc(L.end_date.slice(5))} · 추천 ${L.cycles}번 · 지금 보유 ${L.open}종목(${L.holders}개 플랜) · 끝난 거래 ${L.closed}건 · AI 비용 $${L.usd.toFixed(2)}(모두 합쳐)</div></div>
           <span class="tag ${{ running: "y", paused: "g", ended: "" }[L.status]}">${{ running: "가동 중", paused: "멈춤", ended: "끝남" }[L.status]}</span></div>
         ${N ? (N.busy ? this.atScanHtml(N, true) : `<div class="lab-now"><b>${esc(N.next.label)}</b><span>${this.atNextLine(N)}</span></div>`) : ""}
         <div class="notice">${esc(L.note)}</div>
@@ -1843,7 +1845,7 @@ pages.invest = {
           <div class="lab-tr lab-th" role="row"><span>플랜</span><span>거래</span><span>승률</span><span>비용 뺀 수익률</span></div>
           ${L.runs.map((x, i) => `<button type="button" class="lab-tr" role="row" data-run="${x.id}">
             <span class="lab-nm"><i class="${x.closed >= 10 ? "" : "few"}">${x.closed >= 10 ? i + 1 : "·"}</i><span><b>${esc(x.label)}</b><small>${esc(x.desc)}</small></span></span>
-            <span>${x.closed}${x.open ? `<small>+${x.open}</small>` : ""}</span>
+            <span>${x.closed}${x.open ? `<small>보유 ${x.open}</small>` : ""}</span>
             <span>${x.win_rate == null ? "-" : `${x.win_rate}%`}</span>
             <span class="${tone(x.net_ret_pct)}">${pct(x.net_ret_pct, 2)}<small>비용 전 ${pct(x.ret_pct, 2)}</small></span></button>`).join("")}
         </div>

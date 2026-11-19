@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1831";
+const UI_VERSION = "261119.1958";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -355,6 +355,18 @@ function applyTheme(id, accentId, save = true) {
 if (store.get("themeV") !== "5") { store.set("themeV", "5"); applyTheme("neon", "magenta"); }
 else { const t0 = THEMES[store.get("theme") || "neon"] || {}; document.documentElement.classList.toggle("dark-theme", !!t0.dark); document.documentElement.dataset.neon = t0.neon || ""; }
 
+// ---------- 투자 화면 게임 테마 ----------
+// 기능은 그대로 두고 투자 화면만 게임처럼(입체 패널·누르는 버튼·금화 숫자) 보이게 한다. 설정 → 화면에서 끌 수 있다
+const gameOn = () => store.get("gameInvest") !== "0";
+function gameTheme(sec) {
+  const on = sec === "invest" && gameOn(), el = document.documentElement;
+  if (el.classList.contains("gm-on") === on && (!on || el.dataset.gmMeta)) return;
+  el.classList.toggle("gm-on", on);
+  el.dataset.gmMeta = on ? "1" : "";
+  const mc = document.querySelector('meta[name="theme-color"]');
+  if (mc) mc.content = on ? "#0B1830" : getComputedStyle(el).getPropertyValue("--deep").trim() || mc.content;
+}
+
 // ---------- 은행·단축어 ----------
 const BANKS = [["하나", "하나은행"], ["NH농협", "NH농협은행"], ["신한", "신한은행"], ["KB국민", "KB국민은행"], ["우리", "우리은행"],
   ["IBK", "IBK기업은행"], ["카카오뱅크", "카카오뱅크"], ["토스뱅크", "토스뱅크"], ["케이뱅크", "케이뱅크"], ["기타", "기타 은행"]];
@@ -643,6 +655,7 @@ async function route() {
   const page = pages[h.name];
   const tabName = h.name;
   document.documentElement.dataset.sec = h.name;
+  gameTheme(h.name);
   document.documentElement.dataset.sub = (h.sub === "scalp" ? "ai" : h.sub) || "";
   $$(".tab").forEach((a) => {
     const on = a.dataset.tab === tabName;
@@ -6011,6 +6024,11 @@ pages.settings = {
           <div class="swatches">${Object.entries(ACCENTS).map(([id, [name, c]]) => `<button type="button" class="swatch" style="background:${c}" data-accent="${id}" aria-pressed="${id === aid}" aria-label="${name}"></button>`).join("")}</div>
           <div class="tiny">지금: ${esc(THEMES[tid].name)} 바탕 · ${esc(ACCENTS[aid][0])} 포인트</div>
         </section>
+        <section class="card"><h2>투자 화면</h2>
+          <div class="small muted">투자 탭만 게임처럼 바꿔요. 입체 패널, 누르는 버튼, 금화색 숫자로 상태를 한눈에 보여 줘요. 기능은 같아요.</div>
+          <div class="fs-opts">${[["1", "게임", "🎮"], ["0", "기본", "▤"]].map(([v, name, ic]) => `<button type="button" class="fs-opt" data-gm="${v}" aria-pressed="${(gameOn() ? "1" : "0") === v}">
+            <span class="fs-a" aria-hidden="true">${ic}</span><span>${name}</span></button>`).join("")}</div>
+        </section>
         <section class="card"><h2>미리 보기</h2>
           <div class="hero" style="font-size:16px">하루 <span class="hl">63,700원</span>씩 쓸 수 있어요</div>
           <div class="btns"><button type="button" class="btn dark">저장</button><button type="button" class="btn">취소</button></div>
@@ -6022,8 +6040,9 @@ pages.settings = {
     let tid = cur, aid = curA;
     draw(tid, aid);
     view.onclick = (e) => {
-      const fz = e.target.closest("[data-fs]");
+      const fz = e.target.closest("[data-fs]"), gm = e.target.closest("[data-gm]");
       if (fz) { applyFontSize(fz.dataset.fs); draw(tid, aid); return; }
+      if (gm) { store.set("gameInvest", gm.dataset.gm === "1" ? "" : "0"); draw(tid, aid); toast(gm.dataset.gm === "1" ? "투자 화면을 게임 테마로 바꿨어요" : "투자 화면을 기본으로 되돌렸어요"); return; }
       const t = e.target.closest("[data-theme]"), a = e.target.closest("[data-accent]"), r = e.target.closest("[data-reset-theme]");
       if (t) { tid = t.dataset.theme; aid = THEMES[tid].accent; }
       else if (a) aid = a.dataset.accent;

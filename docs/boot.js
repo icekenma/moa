@@ -4,6 +4,8 @@ try { if (window.top !== window.self) document.documentElement.style.display = "
 /* 저장한 색상 테마를 화면 그리기 전에 먼저 적용(깜빡임 방지) */
 try { var tv = JSON.parse(localStorage.getItem("moa.themeVars") || "null"); if (tv) { for (var k in tv) document.documentElement.style.setProperty(k, tv[k]); var mc = document.querySelector('meta[name="theme-color"]'); if (mc && tv["--deep"]) mc.content = tv["--deep"]; } } catch (e) {}
 try { if (localStorage.getItem("moa.themeV") !== "5" || localStorage.getItem("moa.dark") === "1") document.documentElement.classList.add("dark-theme"); document.documentElement.dataset.neon = localStorage.getItem("moa.neon") || ""; } catch (e) {}
+/* 투자 화면의 게임 테마(설정 → 화면에서 끌 수 있다). 투자 화면에서 열면 처음부터 입혀 깜빡임을 막는다 */
+try { if (localStorage.getItem("moa.gameInvest") !== "0" && /^#invest/.test(location.hash)) document.documentElement.classList.add("gm-on"); } catch (e) {}
 /* 글자 크기(작게·보통·크게) */
 try { var fz = { m: 1.15, l: 1.3 }[localStorage.getItem("moa.fontSize")]; if (fz) { document.documentElement.style.zoom = fz; document.documentElement.style.setProperty("--zoom", fz); } } catch (e) {}
 /* 앱이 안 뜨면(빈 화면) 한 번 자동으로 다시 받고, 그래도 안 되면 이유와 다시 불러오기 버튼을 보여 준다 */

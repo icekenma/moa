@@ -2746,3 +2746,168 @@ html.dark-theme .hx-ixg div{background:rgba(255,255,255,.05)}
 .bot-now.one b{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bot-line{font-size:11.5px;color:var(--bot-ink2);font-variant-numeric:tabular-nums}
 .bot-line b{color:var(--bot-ink);font-weight:800}
+
+/* =====================================================================
+   v4.75 투자 게임 테마 (html.gm-on — 투자 탭에서만, 설정 → 화면에서 끔)
+   전략 게임의 지휘 화면: 남색 전장 위에 입체 패널(윗면 빛·아래 턱), 누르면 내려가는 버튼,
+   금화색 숫자·금 탭. 기능·배치는 그대로 두고 겉모습만 바꾼다.
+   ===================================================================== */
+html.gm-on{
+  --g-field:#0C1C36;--g-field2:#132E58;--g-panel:#1B3967;--g-panel2:#15305A;--g-top:#24487E;--g-edge:#2F5C9C;--g-lip:#07132A;
+  --g-slot:rgba(4,12,28,.6);--g-gold:#FFC531;--g-gold2:#FFA51F;--g-gold-d:#9A5F00;--g-gold-ink:#3B2300;
+  --g-go:#4BDB76;--g-go2:#21A94F;--g-go-d:#0F6B30;--g-ink:#F3F7FF;--g-ink2:#BCCDEB;--g-ink3:#8AA1C8;
+  --g-up:#FF5B70;--g-down:#52ABFF;--g-font:"GameD","Pretendard","Apple SD Gothic Neo",system-ui,sans-serif;
+  color-scheme:dark;background:var(--g-field);
+  --ink:var(--g-ink);--ink2:var(--g-ink2);--ink3:var(--g-ink3);--line:rgba(130,175,255,.16);--line2:rgba(150,195,255,.32);
+  --bg:var(--g-field);--card:var(--g-panel);--deep:var(--g-field);--deep2:var(--g-field2);--solid:var(--g-field);
+  --hl:var(--g-gold);--up:var(--g-up);--down:var(--g-down);--in:var(--g-go);--focus:var(--g-gold);
+  --nbg:var(--g-field);--ncard:var(--g-panel);--nglass:var(--g-panel);--n0:#FF8A1C;--n1:#FFC531;--n2:#FFE07A;--n-rgb:255,197,49;--n-i:#FFE08A;
+  --sec:var(--g-gold);--sec-s:rgba(255,197,49,.15);--sec-i:#FFE08A;--sec2:var(--g-go);
+  --grad:linear-gradient(180deg,#FFDA4D,#FFA51F);--grad-d:linear-gradient(180deg,#FFDA4D,#F59E0B);--grad2:linear-gradient(120deg,#FFA51F,#FFD84A);
+  --on-deep:#E8F0FF;--on-deep2:#A3B8DC;--on-deep-strong:#FFFFFF;--sub-bg:rgba(0,0,0,.28);
+  --glass:var(--g-panel);--glass-b:var(--g-edge);--glass-hi:none;
+  --shadow:0 4px 0 var(--g-lip),0 12px 22px -12px rgba(0,0,0,.8);--shadow-up:var(--shadow);
+  --bot-ink:var(--g-ink);--bot-ink2:var(--g-ink2)}
+/* 전장 바닥: 위에서 내려오는 빛 + 아주 옅은 마름모 격자 */
+html.gm-on body{background:radial-gradient(130% 55% at 50% -8%,rgba(70,140,255,.30),transparent 62%),
+  repeating-linear-gradient(45deg,rgba(255,255,255,.022) 0 1.5px,transparent 1.5px 24px),
+  repeating-linear-gradient(-45deg,rgba(255,255,255,.022) 0 1.5px,transparent 1.5px 24px),var(--g-field)!important;color:var(--g-ink)}
+html.gm-on body::before{background:transparent!important}
+
+/* 머리글: 금 테두리 띠 */
+html.gm-on .top{background:linear-gradient(180deg,#081429,rgba(12,28,54,.94))!important;border-bottom:2px solid #2C578F;box-shadow:0 3px 0 var(--g-lip)!important;
+  -webkit-backdrop-filter:none;backdrop-filter:none}
+html.gm-on .top h1{font-family:var(--g-font);font-weight:400;font-size:21px;letter-spacing:.01em;color:var(--g-gold)!important;
+  text-shadow:0 2px 0 #6B3D00,0 0 18px rgba(255,197,49,.35)}
+html.gm-on .top h1::before{width:12px!important;height:12px!important;border-radius:2px!important;transform:rotate(45deg);
+  background:linear-gradient(135deg,#FFF1B0,#FFC531 45%,#C77A00)!important;box-shadow:0 0 0 2px #6B3D00,0 0 12px rgba(255,197,49,.6)!important}
+
+/* 아래 메뉴: 게임 메뉴판 */
+html.gm-on .tabbar{background:linear-gradient(180deg,#132A50,#0A1730)!important;border-top:2px solid #2C578F!important;box-shadow:0 -4px 0 rgba(0,0,0,.25),0 -12px 24px rgba(0,0,0,.4)!important}
+html.gm-on .tab{color:#8FA6CC!important}
+html.gm-on .tab.on{color:#fff!important}
+html.gm-on .tab.on .dot{background:linear-gradient(180deg,#FFDA4D,#FFA51F)!important;color:var(--g-gold-ink)!important;box-shadow:0 3px 0 var(--g-gold-d),inset 0 1px 0 rgba(255,255,255,.6)!important}
+html.gm-on .subnav{background:rgba(3,10,24,.72)!important;border:1.5px solid #24477C;box-shadow:inset 0 2px 6px rgba(0,0,0,.5)!important;border-radius:14px;padding:4px}
+html.gm-on .subtab{font-family:var(--g-font);font-weight:400!important;font-size:13px;color:#A9BEE3!important;border-radius:10px}
+html.gm-on .subtab[aria-current="page"]{background:linear-gradient(180deg,#FFDA4D,#FFA51F)!important;color:var(--g-gold-ink)!important;
+  box-shadow:0 3px 0 var(--g-gold-d),inset 0 1.5px 0 rgba(255,255,255,.65)!important;text-shadow:0 1px 0 rgba(255,255,255,.35)}
+
+/* 묶음 탭: 두꺼운 판 */
+html.gm-on .ivg{border:0!important;gap:6px;margin:0 0 2px}
+html.gm-on .ivg-t{font-family:var(--g-font);font-weight:400!important;font-size:14.5px;color:#93AAD2!important;padding:7px 13px 8px;border-radius:12px;
+  background:linear-gradient(180deg,#183564,#122A50);border:1.5px solid #24477C;box-shadow:0 3px 0 var(--g-lip)}
+html.gm-on .ivg-t::after{display:none}
+html.gm-on .ivg-t[aria-current="page"]{color:#fff!important;background:linear-gradient(180deg,#2C5CA0,#1D4078);border-color:var(--g-gold);
+  box-shadow:0 3px 0 var(--g-gold-d),inset 0 1.5px 0 rgba(255,255,255,.22),0 0 16px -4px rgba(255,197,49,.55);text-shadow:0 2px 0 rgba(0,0,0,.4)}
+
+/* 패널(카드): 윗면 빛, 아래 턱 — 이 테마의 얼굴 */
+html.gm-on #view .card,html.gm-on #view .notice:not(.warn){
+  background:linear-gradient(180deg,var(--g-top) 0,var(--g-panel) 34px,var(--g-panel2) 100%)!important;
+  border:2px solid var(--g-edge)!important;border-radius:16px!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important;
+  box-shadow:inset 0 2px 0 rgba(255,255,255,.13),inset 0 -3px 0 rgba(0,0,0,.22),0 4px 0 var(--g-lip),0 14px 24px -14px rgba(0,0,0,.85)!important}
+html.gm-on #view .card .card{box-shadow:inset 0 2px 0 rgba(255,255,255,.1),0 3px 0 var(--g-lip)!important}
+html.gm-on #view .card.dark{background:linear-gradient(180deg,#2B4F8C,#1B3967 60%)!important;border-color:var(--g-gold)!important}
+html.gm-on #view .notice.warn{background:linear-gradient(180deg,#4A3210,#3A260B)!important;border:2px solid #E89A1A!important;color:#FFE6B5!important;border-radius:14px!important;
+  box-shadow:inset 0 2px 0 rgba(255,255,255,.1),0 3px 0 #1E1304!important}
+html.gm-on #view .card-head h2,html.gm-on #view .card>h2,html.gm-on #view .sec-title,html.gm-on #view .hx-title b,html.gm-on #view .ap-h1{
+  font-family:var(--g-font);font-weight:400!important;letter-spacing:.01em;color:#fff;text-shadow:0 2px 0 rgba(0,0,0,.45)}
+html.gm-on #view .card-head h2{font-size:16px}
+html.gm-on #view .card-head h2::before,html.gm-on #view .sec-title::before{width:9px!important;height:9px!important;border-radius:2px!important;transform:rotate(45deg);
+  background:linear-gradient(135deg,#FFF1B0,#FFC531 45%,#C77A00)!important;box-shadow:0 0 0 1.5px #6B3D00!important;margin:0 3px 0 2px}
+html.gm-on #view .sec-title{font-size:14px;color:var(--g-ink2);padding-top:10px}
+html.gm-on #view .tiny,html.gm-on #view .small.muted,html.gm-on #view .muted{color:var(--g-ink3)}
+
+/* 큰 머리 패널(투자 홈·AI 추천·시세): 점수판 */
+html.gm-on #view :is(.ih-hero,.ap-hero,.mk-hero){background:linear-gradient(180deg,#0A1730 0%,#163363 100%)!important;border-bottom:3px solid var(--g-gold);
+  box-shadow:0 4px 0 var(--g-gold-d),0 16px 26px -14px rgba(0,0,0,.9)!important;border-radius:0 0 22px 22px!important}
+html.gm-on #view :is(.ih-total,.mk-price,.hx-kpi b,.sc-kpi b,.bot-kpi dd,.hx-val b,.hx-date b,.at-cell-k b,.lab-hero b,.dv-big,.as-big,.at-hero-eq,.at-hero-net b){
+  font-family:var(--g-font);font-weight:400!important;letter-spacing:.01em}
+html.gm-on #view :is(.ih-total,.mk-price){font-size:36px!important;color:#fff;text-shadow:0 3px 0 rgba(0,0,0,.45),0 0 22px rgba(255,197,49,.25)}
+
+/* 숫자 칸: 패인 홈 안의 보석 숫자 */
+html.gm-on #view :is(.sc-kpi>div,.hx-kpi>div,.hx-kv>div,.bot-kpi>div,.dv-kpi>div,.dv-kpi4>div,.hx-tbl,.hx-ixg>div){
+  background:var(--g-slot)!important;border:1px solid rgba(120,170,255,.16)!important;border-radius:11px!important;box-shadow:inset 0 2px 6px rgba(0,0,0,.5)!important}
+html.gm-on #view :is(.sc-kpi,.hx-kpi,.bot-kpi) :is(b,dd){font-size:17px;text-shadow:0 2px 0 rgba(0,0,0,.4)}
+html.gm-on #view :is(.sc-kpi,.hx-kpi,.hx-kv,.bot-kpi) :is(span,dt){color:#9FB6DD!important}
+
+/* 오르면 빨강, 내리면 파랑(국내 표기) — 큰 숫자에만 은은한 빛 */
+html.gm-on #view .up{color:var(--g-up)!important}
+html.gm-on #view .down{color:var(--g-down)!important}
+html.gm-on #view :is(.hx-kpi,.sc-kpi,.ih-hero,.hx-val,.lab-hero) .up{text-shadow:0 0 12px rgba(255,91,112,.45),0 2px 0 rgba(0,0,0,.35)}
+html.gm-on #view :is(.hx-kpi,.sc-kpi,.ih-hero,.hx-val,.lab-hero) .down{text-shadow:0 0 12px rgba(82,171,255,.45),0 2px 0 rgba(0,0,0,.35)}
+
+/* 고르기 판(seg): 패인 홈 + 금 단추 */
+html.gm-on #view .seg{background:var(--g-slot)!important;border:1.5px solid rgba(120,170,255,.16);box-shadow:inset 0 2px 6px rgba(0,0,0,.55)!important;border-radius:13px!important;padding:4px;gap:4px}
+html.gm-on #view .seg button{color:#A3B9E0!important;font-weight:800;border-radius:9.5px!important;min-height:30px}
+html.gm-on #view .seg button[aria-pressed="true"]{background:linear-gradient(180deg,#FFDA4D,#FFA51F)!important;color:var(--g-gold-ink)!important;
+  box-shadow:0 3px 0 var(--g-gold-d),inset 0 1.5px 0 rgba(255,255,255,.6)!important;text-shadow:0 1px 0 rgba(255,255,255,.3)}
+/* 국내·미국 고르기는 팀 색 */
+html.gm-on #view .seg button[aria-pressed="true"][data-v="us"]{background:linear-gradient(180deg,#7DD3FF,#3B9BFF)!important;color:#06264D!important;box-shadow:0 3px 0 #1A5AB0,inset 0 1.5px 0 rgba(255,255,255,.6)!important}
+
+/* 칩 */
+html.gm-on #view .chip{background:linear-gradient(180deg,#1F4073,#183563)!important;border:1.5px solid #2E5A99!important;color:#C9D8F2!important;font-weight:800;box-shadow:0 2px 0 var(--g-lip)}
+html.gm-on #view .chip[aria-pressed="true"]{background:linear-gradient(180deg,#FFDA4D,#FFA51F)!important;border-color:#FFE08A!important;color:var(--g-gold-ink)!important;box-shadow:0 2px 0 var(--g-gold-d)}
+
+/* 단추: 누르면 아래로 눌린다 */
+html.gm-on #view .btn,html.gm-on .sheet .btn{background:linear-gradient(180deg,#2E5EA3,#1F467F)!important;border:1.5px solid #3D6DB3!important;color:#fff!important;border-radius:13px!important;
+  font-weight:800;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.22),0 4px 0 #0A1D3A!important;transition:transform .08s,box-shadow .08s!important;text-shadow:0 1px 0 rgba(0,0,0,.35)}
+html.gm-on #view .btn:active,html.gm-on .sheet .btn:active{transform:translateY(3px)!important;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.22),0 1px 0 #0A1D3A!important}
+html.gm-on #view :is(.btn.dark,.ap-go,.ai-btn),html.gm-on .sheet .btn.dark{background:linear-gradient(180deg,#5BE882,#22AE52)!important;border-color:#8BF5A8!important;
+  font-family:var(--g-font);font-weight:400;font-size:15px;letter-spacing:.02em;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.45),0 4px 0 var(--g-go-d),0 10px 18px -8px rgba(40,200,90,.55)!important;
+  text-shadow:0 2px 0 rgba(0,70,20,.55)}
+html.gm-on #view :is(.btn.dark,.ap-go,.ai-btn):active{box-shadow:inset 0 1.5px 0 rgba(255,255,255,.45),0 1px 0 var(--g-go-d)!important}
+html.gm-on #view .btn.soft{background:linear-gradient(180deg,#203F6F,#183562)!important;border-color:#2E5A99!important;color:#D7E4FA!important}
+html.gm-on #view .btn.sell,html.gm-on #view [data-o="sell"]{background:linear-gradient(180deg,#6CB6FF,#2E7FE6)!important;border-color:#9ACDFF!important;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.4),0 4px 0 #13468F!important}
+html.gm-on #view .btn.buy,html.gm-on #view [data-o="buy"]{background:linear-gradient(180deg,#FF7A8A,#E8384F)!important;border-color:#FFA3AE!important;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.4),0 4px 0 #8E1426!important}
+html.gm-on .fab{background:linear-gradient(180deg,#5BE882,#22AE52)!important;color:#fff!important;border:2px solid #8BF5A8;font-family:var(--g-font);font-weight:400!important;
+  box-shadow:inset 0 1.5px 0 rgba(255,255,255,.45),0 4px 0 var(--g-go-d),0 12px 22px -8px rgba(0,0,0,.6)!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important;text-shadow:0 2px 0 rgba(0,70,20,.5)}
+
+/* 이름표 */
+html.gm-on #view .tag{background:rgba(255,255,255,.08)!important;border:1px solid rgba(160,200,255,.32);color:#DCE8FF!important;border-radius:6px!important;font-weight:800;animation:none}
+html.gm-on #view .tag.y{background:linear-gradient(180deg,#FFDA4D,#FFA51F)!important;border-color:#FFE08A;color:var(--g-gold-ink)!important}
+html.gm-on #view .tag.warn{background:linear-gradient(180deg,#FF8B5C,#E8522A)!important;border-color:#FFB08F;color:#fff!important}
+
+/* 입력칸 */
+html.gm-on #view :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),select,textarea),html.gm-on .sheet :is(input:not([type="checkbox"]):not([type="radio"]),select,textarea){
+  background-color:var(--g-slot)!important;border:1.5px solid rgba(120,170,255,.22)!important;color:#fff!important;box-shadow:inset 0 2px 5px rgba(0,0,0,.45)!important}
+
+/* 살아 있음 표시: 초록 보석 */
+html.gm-on #view .live-dot.on::before{background:var(--g-go)!important;box-shadow:0 0 0 2px rgba(75,219,118,.25),0 0 10px rgba(75,219,118,.8)!important}
+
+/* ---- 자동매매 ---- */
+/* 실험 2×2: 팀 색 띠가 위에 붙은 전투 카드 */
+html.gm-on #view .at-cell{background:linear-gradient(180deg,#22457A,#183563)!important;border:2px solid #2E5A99;border-top:4px solid var(--mk,#FFC531);border-radius:14px!important;
+  box-shadow:inset 0 2px 0 rgba(255,255,255,.1),0 4px 0 var(--g-lip)!important}
+html.gm-on #view .at-cell:active{transform:translateY(2px);box-shadow:0 2px 0 var(--g-lip)!important}
+html.gm-on #view .at-row{border-top-color:rgba(130,175,255,.14)!important}
+/* 플랜 순위: 1·2·3등 메달 */
+html.gm-on #view .lab-nm i{font-family:var(--g-font);font-style:normal;font-weight:400;width:24px!important;height:24px!important;border-radius:50%!important;
+  display:inline-grid;place-items:center;background:linear-gradient(180deg,#3A5F99,#25467A)!important;color:#fff!important;box-shadow:inset 0 1.5px 0 rgba(255,255,255,.3),0 2px 0 var(--g-lip)}
+html.gm-on #view .lab-tbl>:nth-child(2) .lab-nm i:not(.few){background:radial-gradient(circle at 35% 30%,#FFF4B8,#FFC531 45%,#C77A00)!important;color:#5A3300!important;box-shadow:0 0 0 2px #8A5200,0 0 14px rgba(255,197,49,.7)}
+html.gm-on #view .lab-tbl>:nth-child(3) .lab-nm i:not(.few){background:radial-gradient(circle at 35% 30%,#FFFFFF,#C9D3E3 45%,#7D8BA3)!important;color:#2A3446!important;box-shadow:0 0 0 2px #56637A}
+html.gm-on #view .lab-tbl>:nth-child(4) .lab-nm i:not(.few){background:radial-gradient(circle at 35% 30%,#FFD9B8,#D98A4B 45%,#8A4B1C)!important;color:#3D1A00!important;box-shadow:0 0 0 2px #6A3510}
+
+/* ---- 매매 기록 ---- */
+/* 승률 막대: HP 게이지(칸이 나뉜 초록) */
+html.gm-on #view .hx-bar{background:#071226!important;border:1.5px solid #2E5A99;height:18px;border-radius:6px}
+html.gm-on #view .hx-bar i{background:linear-gradient(180deg,#8DF7AA,#2DBE5A)!important;border-right:0!important;
+  -webkit-mask:repeating-linear-gradient(90deg,#000 0 8px,transparent 8px 10px);mask:repeating-linear-gradient(90deg,#000 0 8px,transparent 8px 10px)}
+html.gm-on #view .hx-bar em{text-shadow:0 1px 2px #000;line-height:15px}
+html.gm-on #view .hx-item+.hx-item,html.gm-on #view .hx-tr+.hx-tr,html.gm-on #view .hx-ar+.hx-ar{border-top-color:rgba(130,175,255,.14)!important}
+html.gm-on #view .hx-item.on>.hx-row{background:rgba(255,197,49,.08)}
+html.gm-on #view .hx-date{background:var(--g-slot);border-radius:10px;padding:4px 0;box-shadow:inset 0 2px 5px rgba(0,0,0,.45)}
+html.gm-on #view .hx-date b{font-size:15px;color:#fff}
+
+/* ---- 시세·차트 ---- */
+html.gm-on #view .mk-chart-card{background:linear-gradient(180deg,#0E2142,#0A1A36)!important}
+html.gm-on .cz{background:var(--g-field)!important}
+
+/* 시트(아래에서 올라오는 창)도 같은 패널 */
+html.gm-on .sheet .sheet-in{background:linear-gradient(180deg,var(--g-top),var(--g-panel2) 120px)!important;border-top:3px solid var(--g-gold);color:var(--g-ink)}
+html.gm-on .sheet #sheetTitle{font-family:var(--g-font);font-weight:400;color:var(--g-gold);text-shadow:0 2px 0 #6B3D00}
+
+@media (prefers-reduced-motion:reduce){html.gm-on #view .btn,html.gm-on #view .at-cell{transition:none!important}}
+html.gm-on #view .at-cell::before{display:none}
+html.gm-on #view :is(.at-top>div>b,.at-auto-top>div>b,.at-cell-h b,.lab-hero h2,.dv-hero b){font-family:var(--g-font);font-weight:400!important;letter-spacing:.01em;text-shadow:0 2px 0 rgba(0,0,0,.45)}
+html.gm-on #view .at-top>div>b{font-size:19px;color:var(--g-gold);text-shadow:0 2px 0 #6B3D00}
+html.gm-on #view .at-cell-h b{font-size:16px}

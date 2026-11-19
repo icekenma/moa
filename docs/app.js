@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1448";
+const UI_VERSION = "261119.1458";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2749,7 +2749,7 @@ pages.invest = {
 
   // ---------- 발견: 실시간 순위 ----------
   async discover(box) {
-    const S = this.dv || (this.dv = { m: "kr", kind: "value" });
+    const S = this.disc || (this.disc = { m: "kr", kind: "value" });   // 배당 화면(this.dv)과 상태를 나눠 쓴다
     if (S.m === "kr" && ["views", "watch", "buy"].includes(S.kind)) S.kind = "value";
     if (!$("#dvList", box)) {
       const am = curMkt(S.m);
@@ -2994,10 +2994,13 @@ pages.invest = {
     if (this.dv) return this.dv;
     let s = {};
     try { s = JSON.parse(store.get("dv") || "{}") || {}; } catch (e) { s = {}; }
-    return (this.dv = Object.assign({ tab: "mine", amount: 300000000, add: 0, years: 10, reinvest: true, pg: 3, gs: 1, fxc: 0, preset: "growth", assets: null,
-      style: "balance", region: "mix", memo: "", web: true, model: "",
-      live: { on: false, spend: 2000000, other: 0, from: 1, health: "local", years: 30 } }, s,
-      { uni: null, sim: null, view: "first", f: "all", sort: "yield", plan: null, busy: false, text: "", src: [], used: null, err: "", status: "", mine: null }));
+    const live0 = { on: false, spend: 2000000, other: 0, from: 1, health: "local", years: 30 };
+    const D = Object.assign({ tab: "mine", amount: 300000000, add: 0, years: 10, reinvest: true, pg: 3, gs: 1, fxc: 0, preset: "growth", assets: null,
+      style: "balance", region: "mix", memo: "", web: true, model: "" }, s,
+      { uni: null, sim: null, view: "first", f: "all", sort: "yield", plan: null, busy: false, text: "", src: [], used: null, err: "", status: "", mine: null });
+    // 저장된 값이 비었거나(예전 판) 일부만 있어도 생활비 설정은 늘 온전한 모양으로
+    D.live = Object.assign({}, live0, D.live && typeof D.live === "object" ? D.live : {});
+    return (this.dv = D);
   },
   dvSave() {
     const D = this.dv, keep = {};
@@ -4468,7 +4471,7 @@ const mkt = {
     const r = el.getBoundingClientRect(), k = 1.15;                    // SVG 1단위 ≈ 1.15px(글자 크기가 평소 차트와 비슷하게)
     const w = rot ? r.height : r.width, h = rot ? r.width : r.height;
     const W = Math.max(340, Math.round(w / k)), VH = 40, PH = Math.max(120, Math.round(h / k) - VH - 6 - 64);
-    const o = { W, PH, VH, N: Math.max(60, Math.min(240, Math.round(W / 6.5))) };
+    const o = { W, PH, VH, N: Math.max(60, Math.min(240, Math.round(W / 6.5))), rot };
     const fmt = (n) => this.money(n, cur), mark = Z.range === D.range ? D.mark : null;
     el.innerHTML = candleChart(Z.cd, cur, fmt, mark, D.at, o);
     bindCandle(el, Z.cd, fmt, mark, o);
@@ -4655,7 +4658,9 @@ function bindCandle(el, cd, fmt, mark, o = {}) {
   if (!svg || bars.length < 2) return;
   const g = $("#cdCur", el), tip = $("#cdTip", el), W = o.W || 340, bw = W / bars.length;
   const at = (ev) => {
-    const r = svg.getBoundingClientRect(), x = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left) / r.width * W;
+    const r = svg.getBoundingClientRect(), p = ev.touches ? ev.touches[0] : ev;
+    // 크게 보기에서 화면을 90도 돌렸으면 손가락의 세로 위치가 차트의 가로 위치다
+    const x = (o.rot ? (p.clientY - r.top) / r.height : (p.clientX - r.left) / r.width) * W;
     const i = Math.max(0, Math.min(bars.length - 1, Math.floor(x / bw))), b = bars[i], cx = i * bw + bw / 2;
     g.setAttribute("visibility", "visible"); $("line", g).setAttribute("x1", cx); $("line", g).setAttribute("x2", cx);
     const ch = i ? (b.c / bars[i - 1].c - 1) * 100 : 0;

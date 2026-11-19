@@ -2622,3 +2622,4 @@ html.dark-theme .cz{background:var(--nbg)}
 html.dark-theme .cz-x{background:rgba(255,255,255,.1)}
 .cz-chart{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-start}
 .cz-chart .mk-svg{width:100%}
+.cz .cd-svg{touch-action:none}

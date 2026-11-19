@@ -1129,7 +1129,7 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     lab = L["id"]
     P = lambda k: at._run(ids[k])["params"]
     assert lab == ids["base"] and P("loose")["min_win_prob"] == 50 and P("strict")["min_score"] == 70 and P("watch_skip")["skip_watch"] is True
-    assert (P("tight")["tp_cap"], P("tight")["sl_cap"], P("wide")["tp_cap"]) == (2.0, 1.0, 6.0) and (P("focus")["max_positions"], P("spread")["per_trade_pct"]) == (1, 20)
+    assert (P("tight")["exit_mult"], P("wide")["exit_mult"], P("wide")["tp_cap"], P("base").get("exit_mult")) == (0.5, 1.5, 6.0, None) and (P("focus")["max_positions"], P("spread")["per_trade_pct"]) == (1, 20)
     at.rt.db.x("UPDATE at_runs SET status='paused' WHERE id=?", (solo,))
     calls = []
 
@@ -1147,6 +1147,16 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     held = {k: sorted(t["sym"] for t in at._open(i)) for k, i in ids.items()}
     assert held["base"] == ["005930"] and held["loose"] == ["000660", "005930"] and held["strict"] == [] and held["watch_skip"] == []
     assert held["watch_full"] == ["005930"] and at._open(ids["watch_full"])[0]["qty"] >= 2 * at._open(ids["base"])[0]["qty"]   # 관망 무시는 두 배 크기
+    T = lambda k: at._open(ids[k])[0]
+    assert (T("base")["target_pct"], T("base")["stop_pct"]) == (3.0, 1.5) and (T("tight")["target_pct"], T("tight")["stop_pct"]) == (1.5, 0.75)   # 짧게·길게는 AI가 낸 폭 자체를 바꾼다
+    assert (T("wide")["target_pct"], T("wide")["stop_pct"]) == (4.5, 2.25)
+    B = at.labs()["labs"][0]
+    g = next(x for x in B["positions"] if x["sym"] == "005930")
+    assert len(g["plans"]) == len([k for k in held if "005930" in held[k]]) and g["why"]["reasons"] == ["거래량 돌파"] and g["why"]["risks"] == ["지수 약세"] and "장 마감 전" in g["hold"]
+    pb = next(x for x in g["plans"] if x["label"] == "기본")
+    assert pb["target"] == round(pb["price"] * 1.03, 2) and pb["stop"] == round(pb["price"] * 0.985, 2) and B["last"]["stance"] == "관망"
+    lp = {x["sym"]: x for x in B["last"]["picks"]}
+    assert lp["005930"]["bought"] == len(g["plans"]) and any(k["why"] == "AI가 관망 권함" for k in lp["005930"]["skips"])
     usd = [json.loads(r["data"])["usd"] for r in at.rt.db.q("SELECT data FROM at_log WHERE kind='cycle' AND data IS NOT NULL AND run_id!=?", (solo,))]
     assert len(usd) == 9 and all(u == 0.1 for u in usd)                  # 비용은 똑같이 나눠 적는다
     # 다음 추천도 묶음 전체에서 한 번: 한 종목 집중은 자리가 없어 건너뛰고, 나머지는 각자 판단

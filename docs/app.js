@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1232";
+const UI_VERSION = "261119.1238";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1874,7 +1874,8 @@ pages.invest = {
             <span><b>${esc(p.label)}</b><small>${hm(p.ts)} · ${p.qty}주 × ${M(p.price)}</small></span>
             <span class="lab-ts"><em class="up">익절 ${M(p.target)}<small>+${p.target_pct}%</small></em><em class="down">손절 ${M(p.stop)}<small>-${p.stop_pct}%</small></em></span>
             <span class="${tone(p.pct)}">${pct(p.pct, 2)}</span></button>`).join("")}
-          ${g.why ? `<div class="tiny">AI가 고른 이유: ${esc(g.why)}</div>` : ""}
+          ${g.why && g.why.reasons.length ? `<div class="lab-why"><b>AI가 고른 이유</b><ul>${g.why.reasons.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+          ${g.why && g.why.risks.length ? `<div class="lab-why risk"><b>AI가 본 위험</b><ul>${g.why.risks.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
         </div></details>`).join("")}</div>` : `<div class="empty sm">아직 들고 있는 종목이 없어요</div>`}
       ${last ? `<div class="sec-title in">가장 최근 추천 · ${hm(last.ts)}${last.stance ? ` · ${esc(last.stance)}` : ""}</div>
         ${last.view ? `<div class="tiny">${esc(last.view)}</div>` : ""}

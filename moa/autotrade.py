@@ -70,6 +70,7 @@ PLAN_KEYS = {
     "skip_watch": (None, None, bool, "관망이면 매수 안 함"),
     "watch_mult": (0.1, 1.0, float, "관망일 때 매수 크기(배)"),
     "idx_floor": (-5.0, 0.0, float, "지수가 이만큼 내리면 AI를 부르지 않음(%, 0=끔)"),
+    "exit_mult": (0.3, 3.0, float, "AI가 낸 익절·손절 폭에 곱하는 배수"),
 }
 
 
@@ -125,8 +126,8 @@ VARIANTS = {
     "strict": ("엄격한 기준", "승률 60 · 점수 70 · 손익비 1.8 이상만 매수", {"min_win_prob": 60, "min_score": 70, "min_rr": 1.8}),
     "watch_skip": ("관망엔 쉬기", "AI가 관망이면 사지 않음(실전 기본)", {"skip_watch": True}),
     "watch_full": ("관망 무시", "관망이어도 평소 크기로 매수", {"skip_watch": False, "watch_mult": 1.0}),
-    "tight": ("짧게 끊기", "익절·손절 폭을 절반으로", {"tp_cap": "*0.5", "sl_cap": "*0.5"}),
-    "wide": ("길게 끌기", "익절·손절 폭을 1.5배로", {"tp_cap": "*1.5", "sl_cap": "*1.5"}),
+    "tight": ("짧게 끊기", "AI가 낸 익절·손절 폭의 절반에서 팔기", {"exit_mult": 0.5}),
+    "wide": ("길게 끌기", "AI가 낸 익절·손절 폭의 1.5배까지 기다리기", {"exit_mult": 1.5, "tp_cap": "*1.5", "sl_cap": "*1.5"}),
     "focus": ("한 종목 집중", "1종목에 절반씩", {"max_positions": 1, "per_trade_pct": 50}),
     "spread": ("여러 종목 분산", "5종목에 20%씩", {"max_positions": 5, "per_trade_pct": 20}),
 }
@@ -165,6 +166,17 @@ def plan_text(run):
         {"t": "개선", "d": f"매매 {p['review_every']}건 또는 {p.get('review_days', 5)}거래일마다 성적을 분석해 개선안을 내요. 매수가 너무 적으면 건너뛴 종목이 그 뒤 실제로 어땠는지 보고 "
                            "기준을 낮추는 안도 내요. " + ("모의라서 개선안을 스스로 반영해요(플랜에서 끌 수 있어요)." if p.get("auto_apply") and run.get("mode") != "real" else "승인해야 반영돼요.")},
     ]
+
+
+def _why(raw):
+    """거래에 적어 둔 AI의 근거(JSON)를 화면용으로: {"reasons": [...], "risks": [...]}"""
+    try:
+        d = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except ValueError:
+        return {"reasons": [str(raw)[:200]] if raw else [], "risks": []}
+    if not isinstance(d, dict):
+        return {"reasons": [str(x)[:200] for x in d][:4] if isinstance(d, list) else [], "risks": []}
+    return {"reasons": [str(x)[:200] for x in (d.get("reasons") or [])][:4], "risks": [str(x)[:200] for x in (d.get("risks") or [])][:3]}
 
 
 def _median(xs):
@@ -1195,7 +1207,8 @@ class AutoTrade:
             if (x.get("score") or 0) < p["min_score"]:
                 skip("score", f"점수 {x.get('score') or 0:g} < 기준 {p['min_score']:g}")
                 continue
-            tp, sl = min(float(x.get("target_pct") or 0), p["tp_cap"]), min(float(x.get("stop_pct") or 0), p["sl_cap"])
+            em = float(p.get("exit_mult") or 1.0)        # 플랜이 AI의 익절·손절 폭을 좁히거나 넓힌다(손익비는 그대로)
+            tp, sl = min(round(float(x.get("target_pct") or 0) * em, 2), p["tp_cap"]), min(round(float(x.get("stop_pct") or 0) * em, 2), p["sl_cap"])
             if tp <= 0 or sl <= 0 or tp / sl < p["min_rr"]:
                 skip("rr", f"손익비 {tp / sl if sl else 0:.2f} < 기준 {p['min_rr']:g}")
                 continue
@@ -1879,6 +1892,9 @@ class AutoTrade:
         for r in self._runs("WHERE lab_id IS NOT NULL AND status IN ('running','paused')"):
             if float(r["params"].get("idx_floor") or 0) < 0:
                 self.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.idx_floor',0.0) WHERE id=?", (r["id"],))
+            em = VARIANTS.get(r["variant"] or "", ("", "", {}))[2].get("exit_mult")
+            if em and r["params"].get("exit_mult") != em:      # 예전 '짧게·길게'는 상한만 바꿔 차이가 없었다 → 폭 자체를 바꾼다
+                self.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.exit_mult',?) WHERE id=?", (em, r["id"]))
         rd = self.ready()
         if not (rd["ai"] and rd["data"]):
             return
@@ -1993,9 +2009,14 @@ class AutoTrade:
         q = ",".join("?" * len(ids))
         hold = {"day": "오늘 장 마감 전에 모두 팔아요", "swing": "늦어도 5거래일 안에 팔아요", "month": "늦어도 20거래일 안에 팔아요"}[L["style"]]
         pos = {}
-        for t in self.rt.db.q(f"SELECT * FROM at_trades WHERE run_id IN ({q}) AND status='open' ORDER BY entry_ts", ids):
-            last = t["last"] or t["entry_price"]
-            g = pos.setdefault(t["sym"], {"sym": t["sym"], "name": t["name"], "last": last, "first_ts": t["entry_ts"], "qty": 0, "cost": 0.0, "value": 0.0, "plans": [], "why": t.get("why") or ""})
+        rows = self.rt.db.q(f"SELECT * FROM at_trades WHERE run_id IN ({q}) AND status='open' ORDER BY entry_ts", ids)
+        now_px = {}
+        for t in sorted(rows, key=lambda t: -t["run_id"]):       # 번호가 작은 플랜이 한 바퀴의 맨 끝에 시세를 받는다 → 가장 새 값
+            if t["last"]:
+                now_px[t["sym"]] = t["last"]
+        for t in rows:
+            last = now_px.get(t["sym"]) or t["last"] or t["entry_price"]
+            g = pos.setdefault(t["sym"], {"sym": t["sym"], "name": t["name"], "last": last, "first_ts": t["entry_ts"], "qty": 0, "cost": 0.0, "value": 0.0, "plans": [], "why": _why(t.get("why"))})
             g["qty"] += t["qty"]; g["cost"] += t["qty"] * t["entry_price"]; g["value"] += t["qty"] * last; g["last"] = last
             g["plans"].append({"run": t["run_id"], "label": lab.get(t["run_id"], ""), "ts": t["entry_ts"], "qty": t["qty"], "price": t["entry_price"],
                                "pct": round((last / t["entry_price"] - 1) * 100, 2), "target": round(t["entry_price"] * (1 + t["target_pct"] / 100), 2),

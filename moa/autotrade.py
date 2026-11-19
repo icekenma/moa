@@ -977,7 +977,6 @@ class AutoTrade:
                 return (False,) + r
         elif not any(self._room(x) is None for x in sibs):
             return False, "full", "모든 실험이 자리가 없거나 오늘은 쉬는 중이에요"
-        day = AP.mkt_date(mkt)
         D = self._due(run)
         cycles, since = D["rows"], D["since"]
         if not D["kind"]:

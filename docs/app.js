@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.0924";
+const UI_VERSION = "261119.0926";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1764,7 +1764,9 @@ pages.invest = {
   // 현황 맨 위: 오늘 시간표, 오늘 한 일과 한도, 다음 매수 규모, 최근 추천
   atNowHtml(d) {
     const r = d.run, N = d.now, mkt = r.mkt, M = (v, s) => this.atM(mkt, v, s), T = N.today, Z = N.size, P = N.period;
+    // 시간표: 지나간 마지막 단계가 '지금'(진행 중인 구간), 그다음이 '다음'. 아직 아무것도 안 지났으면 첫 단계가 '다음'
     const rows = N.steps.rows, nextIdx = N.steps.today ? rows.findIndex((x) => !x.done) : 0;
+    const curIdx = N.steps.today ? (nextIdx < 0 ? rows.length - 1 : nextIdx - 1) : -1, hotIdx = curIdx >= 0 ? curIdx : nextIdx;
     const dayPnl = T.pnl + T.unreal, dayUsed = Math.min(100, Math.max(0, -dayPnl) / (T.limit || 1) * 100), totUsed = Math.min(100, N.risk.loss / (N.risk.limit || 1) * 100);
     const gauge = (label, used, left, cls) => `<div class="at-g ${cls || ""}"><div class="at-g-t"><span>${label}</span><b>${left}</b></div><div class="at-g-b" role="img" aria-label="${label} ${Math.round(used)}% 사용"><i style="width:${Math.max(used, used > 0 ? 3 : 0)}%"></i></div></div>`;
     const warn = [];
@@ -1774,8 +1776,8 @@ pages.invest = {
       <section class="card at-sched">
         <div class="card-head"><h2>${N.steps.today ? "오늘" : esc(N.steps.label)} 시간표</h2><span class="tiny">지금 ${esc(N.clock.kst)}${N.clock.local ? ` · 뉴욕 ${esc(N.clock.local)}` : ""}${N.phase === "open" ? ` · 마감까지 ${N.clock.left_min}분` : ""}</span></div>
         ${N.steps.note ? `<div class="notice">${esc(N.steps.note)}. 시간표와 매수 시각을 그만큼 미뤘어요.</div>` : ""}
-        <ol class="at-steps">${rows.map((x, i) => `<li class="${x.done ? "done" : ""} ${i === nextIdx ? "next" : ""}"><time>${esc(x.hm)}${x.local ? `<small>뉴욕 ${esc(x.local)}</small>` : ""}</time>
-          <div><b>${esc(x.name)}${i === nextIdx && N.steps.today ? ` <em>다음</em>` : ""}</b><span>${esc(x.sub)}</span></div></li>`).join("")}</ol>
+        <ol class="at-steps">${rows.map((x, i) => `<li class="${x.done && i !== curIdx ? "done" : ""} ${i === hotIdx ? "next" : ""}"${i === curIdx ? ' aria-current="step"' : ""}><time>${esc(x.hm)}${x.local ? `<small>뉴욕 ${esc(x.local)}</small>` : ""}</time>
+          <div><b>${esc(x.name)}${i === curIdx ? ` <em>지금</em>` : i === nextIdx && N.steps.today ? ` <em class="soon">다음</em>` : ""}</b><span>${esc(x.sub)}</span></div></li>`).join("")}</ol>
         ${N.steps.today ? "" : `<div class="tiny">${N.phase === "off" ? "오늘은 장이 쉬는 날이라" : "오늘 장은 끝나서"} 다음 거래일 시간표를 보여 드려요.</div>`}
         ${mkt === "us" ? `<div class="tiny">시각은 한국 시간이에요.</div>` : ""}
       </section>

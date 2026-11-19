@@ -2204,3 +2204,7 @@ html.dark-theme .at-notes li::before{background:var(--n1)}
 .ip-step{font-size:11px;line-height:1.6;color:var(--ink2)}
 .ip-help .btn{align-self:flex-start;text-decoration:none}
 html:not(.dark-theme) .ip-help{background:rgba(255,255,255,.6)}
+
+/* ---------- v4.45 시간표: '지금' 단계를 강조하고 '다음'은 옅게 ---------- */
+.at-steps li div b em.soon{background:color-mix(in srgb,var(--ink) 8%,transparent);color:var(--ink3)}
+html.dark-theme .at-steps li div b em.soon{background:rgba(255,255,255,.08);color:rgba(255,255,255,.6)}

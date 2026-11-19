@@ -1264,6 +1264,20 @@ def create_app(rt, updater=None):
         with rt._lock:
             return jsonify(rt.autotrade.edit(rid, body()))
 
+    @app.get("/api/auto/lab")
+    def auto_labs():
+        return jsonify(rt.autotrade.labs())
+
+    @app.post("/api/auto/lab")
+    def auto_lab_create():
+        with rt._lock:
+            return jsonify(rt.autotrade.lab_create(body()))
+
+    @app.post("/api/auto/lab/<int:lab>/control")
+    def auto_lab_control(lab):
+        with rt._lock:
+            return jsonify(rt.autotrade.lab_control(lab, body().get("action")))
+
     @app.post("/api/auto/runs/<int:rid>/budget")
     def auto_budget(rid):
         with rt._lock:

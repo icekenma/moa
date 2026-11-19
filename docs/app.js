@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1130";
+const UI_VERSION = "261119.1200";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -796,7 +796,7 @@ pages.home = {
           ${A.history.length >= 2 ? lineChart([{ values: A.history.map((h) => h.net) }], { h: 72, label: "월별 순자산 추이" }) : ""}`
         : `<div class="small muted">계좌를 등록하면 순자산을 매달 기록해요</div>`}
       </a>
-      <div id="hmAuto" class="hm-auto">${pages.invest.atHomeGroup((d.auto || {}).runs)}</div>
+      <div id="hmAuto" class="hm-auto">${pages.invest.atHomeGroup((d.auto || {}).runs, (d.auto || {}).labs)}</div>
       <a class="card dark dom-night" href="#invest/ai" style="text-decoration:none">
         <div class="card-head"><h2>오늘의 투자</h2><span class="tiny" style="color:#C5CCD6">AI 추천 ›</span></div>
         <div class="grid2">
@@ -1520,16 +1520,16 @@ pages.invest = {
   atBriefHtml() {
     const B = this._atB;
     if (!B) return "";
-    return B.runs.length ? this.atHomeGroup(B.runs)
+    return B.runs.length || (B.labs || []).length ? this.atHomeGroup(B.runs, B.labs)
       : `<a class="card at-home-empty" href="#invest/auto"><span><b>AI 자동매매</b><small>${B.ended ? `끝난 자동매매 ${B.ended}개 · 돌고 있는 것은 없어요` : "쓸 돈만 정하면 AI가 플랜을 짜서 사고팔아요. 모의로 먼저 해 볼 수 있어요"}</small></span><em>›</em></a>`;
   },
   async atBrief() {   // 15초마다만 새로 받는다. AI 추천을 받는 중이거나 곧 받을 때는 3초마다
-    const hot = ((this._atB || {}).runs || []).some((r) => r.now && (r.now.busy || r.now.next.kind === "soon" || (r.now.next.in_sec != null && r.now.next.in_sec < 20)));
+    const hot = ((this._atB || {}).labs || []).some((L) => L.now && L.now.busy) || ((this._atB || {}).runs || []).some((r) => r.now && (r.now.busy || r.now.next.kind === "soon" || (r.now.next.in_sec != null && r.now.next.in_sec < 20)));
     if (this._atBT && Date.now() - this._atBT < (hot ? 3000 : 15000)) return;
     this._atBT = Date.now();
     try { this._atB = await GET("/api/auto/brief"); } catch (e) { return; }
     if ($("#ihAuto")) $("#ihAuto").innerHTML = this.atBriefHtml();
-    if ($("#hmAuto")) $("#hmAuto").innerHTML = this.atHomeGroup(this._atB.runs);
+    if ($("#hmAuto")) $("#hmAuto").innerHTML = this.atHomeGroup(this._atB.runs, this._atB.labs);
   },
   async home(box) {
     if (!box.children.length) { const c = memo.get("ihome"); if (c) this.homeRender(box, c); }
@@ -1613,7 +1613,7 @@ pages.invest = {
   atNextLine(n) {
     const x = n.next;
     if (x.kind === "at") return `다음 추천 <b>${esc(x.text)}</b>${x.local ? ` (${esc(x.local)})` : ""} · ${x.in_sec != null && x.in_sec > 0 && x.in_sec < 3 * 3600 ? `${tickHtml("cd", x.in_sec)} 뒤` : this.atDur(x.in_min)}`;
-    return { soon: "곧 AI 추천을 받아요", busy: "AI 추천을 받는 중", slot: "자리가 나면 다시 추천", hold: "새 매수 없음 · 보유만 정리", paused: "새 매수 멈춤 · 보유만 지켜봄", closing: "보유 종목 정리 중", blocked: "확인이 필요해요" }[x.kind] || "";
+    return { soon: "곧 AI 추천을 받아요", busy: "AI 추천을 받는 중", slot: "자리가 나면 다시 추천", hold: "새 매수 없음 · 보유만 정리", paused: "새 매수 멈춤 · 보유만 지켜봄", closing: "보유 종목 정리 중", blocked: "확인이 필요해요", wait: "AI를 부르지 않고 지켜보는 중 · 비용 없음" }[x.kind] || "";
   },
   // AI 추천을 받는 동안: 네 단계 중 어디인지, 얼마나 지났는지를 움직이는 표시로 보여 준다
   atScanHtml(n, mini) {
@@ -1649,13 +1649,20 @@ pages.invest = {
       <dl class="bot-kpi">${kpi.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl></a>`;
   },
   // 홈·투자 홈: 자동매매는 잔고 카드와 성격이 달라(스스로 사고파는 '일') 한 묶음의 판으로 따로 보여 준다
-  atHomeGroup(runs) {
-    if (!runs || !runs.length) return "";
-    const live = runs.filter((r) => r.status === "running" && r.now.engine.ok).length, busy = runs.some((r) => r.now.busy);
+  atHomeGroup(runs, labs) {
+    runs = runs || []; labs = labs || [];
+    if (!runs.length && !labs.length) return "";
+    const live = runs.filter((r) => r.status === "running" && r.now.engine.ok).length + labs.filter((L) => L.status === "running").length;
+    const busy = runs.some((r) => r.now.busy) || labs.some((L) => L.now && L.now.busy);
     return `<section class="bot ${live ? "live" : ""}" style="--sync:-${Date.now() % 2400}ms" aria-label="AI 자동매매">
       <header class="bot-head"><span class="bot-ico" aria-hidden="true"><i></i><i></i><i></i></span><h2>AI 자동매매</h2>
-        <span class="bot-sub">${busy ? "AI 추천 받는 중" : live ? `${live}개 가동 중` : `${runs.length}개 · 쉬는 중`}</span><a href="#invest/auto">전체 ›</a></header>
-      ${runs.map((r) => this.atHomeCard(r)).join("")}</section>`;
+        <span class="bot-sub">${busy ? "AI 추천 받는 중" : live ? `${live}개 가동 중` : `${runs.length + labs.length}개 · 쉬는 중`}</span><a href="#invest/auto">전체 ›</a></header>
+      ${runs.map((r) => this.atHomeCard(r)).join("")}
+      ${labs.map((L) => `<a class="bot-run lab" href="#invest/auto">
+        <div class="bot-top"><span class="bot-mode">실험</span><b class="bot-name">${L.mkt === "kr" ? "국내" : "미국"} ${esc(L.style_label)} · 플랜 ${L.n}개</b>
+          <span class="bot-st live-dot ${L.status === "running" ? "on" : ""}">${L.status === "running" ? "가동 중" : "멈춤"}</span></div>
+        ${L.now ? (L.now.busy ? this.atScanHtml(L.now, true) : `<div class="bot-now"><b>${esc(L.now.next.label)}</b><span>${this.atNextLine(L.now)}</span></div>`) : ""}
+        <div class="bot-note">${esc(L.note)} 끝난 거래 ${L.closed}건 · AI 비용 $${Number(L.usd).toFixed(2)}</div></a>`).join("")}</section>`;
   },
   atReadyHtml(R) {
     const rows = [];
@@ -1674,7 +1681,8 @@ pages.invest = {
     </button>`;
   },
   async atList(box) {
-    const A = this.atState(), O = (A.o = await GET("/api/auto"));
+    const A = this.atState(), [O, LB] = await Promise.all([GET("/api/auto"), GET("/api/auto/lab")]);
+    A.o = O; A.lab = LB;
     if (investState.tab !== "auto" || A.view !== "list") return;
     const live = O.runs.filter((r) => r.status !== "ended"), done = O.runs.filter((r) => r.status === "ended");
     box.innerHTML = `<section class="ap-hero">
@@ -1684,17 +1692,89 @@ pages.invest = {
       ${this.atReadyHtml(O.ready)}
       ${live.length ? `<div class="sec-title">돌고 있는 자동매매</div>${live.map((r) => this.atCard(r)).join("")}` : `<section class="card"><div class="empty">아직 돌고 있는 자동매매가 없어요.<br>모의로 먼저 돌려 기록을 쌓아 보는 걸 권해요.</div></section>`}
       <button type="button" class="btn dark wide" id="atNewBtn">새 자동매매 만들기</button>
+      <div class="sec-title">모의 실험실</div>
+      ${this.atLabHtml(LB)}
       ${done.length ? `<div class="sec-title">끝난 자동매매</div>${done.map((r) => this.atCard(r)).join("")}` : ""}
       <div class="tiny" style="padding:0 3px">자동매매는 수익을 보장하지 않아요. 손실 한도에 닿으면 스스로 멈추지만, 급변할 때는 한도보다 더 잃을 수 있어요.</div>`;
     $("#atNewBtn").onclick = () => { A.view = "new"; A.pv = null; this.auto(box); };
-    box.onclick = (e) => { const b = e.target.closest("[data-run]"); if (b) { A.view = Number(b.dataset.run); A.tab = "now"; A.d = null; box.onclick = null; this.auto(box); } };
+    box.onclick = async (e) => {
+      const b = e.target.closest("[data-run]"), lc = e.target.closest("[data-labctl]");
+      if (e.target.closest("#labNew")) return this.atLabNew();
+      if (lc) {
+        const [id, act] = lc.dataset.labctl.split(":");
+        if (act === "end" && !confirmTap(lc, "모두 끝내요. 한 번 더 누르기")) return;
+        try { await run(() => api("POST", `/api/auto/lab/${id}/control`, { action: act }), act === "end" ? "실험을 끝냈어요" : act === "pause" ? "새 매수를 멈췄어요" : "다시 시작했어요"); } catch (err) { return; }
+        return this.auto(box);
+      }
+      if (b) { A.view = Number(b.dataset.run); A.tab = "now"; A.d = null; box.onclick = null; this.auto(box); }
+    };
+  },
+  // 모의 실험실: 같은 AI 추천을 플랜 여러 개에 동시에 흘려, AI 비용까지 뺀 수익률로 줄 세운다
+  atLabHtml(LB) {
+    const labs = (LB || {}).labs || [], act = labs.filter((L) => L.status !== "ended"), old = labs.filter((L) => L.status === "ended").slice(0, 1);
+    const one = (L) => {
+      const kr = L.mkt === "kr", N = L.now;
+      return `<section class="card lab ${L.status}">
+        <div class="card-head"><div><h2>${kr ? "국내" : "미국"} ${esc(L.style_label)} · 플랜 ${L.runs.length}개</h2>
+          <div class="tiny">${esc(L.start_date.slice(5))}~${esc(L.end_date.slice(5))} · 추천 ${L.cycles}번 · 끝난 거래 ${L.closed}건 · AI 비용 $${L.usd.toFixed(2)}(모두 합쳐)</div></div>
+          <span class="tag ${{ running: "y", paused: "g", ended: "" }[L.status]}">${{ running: "가동 중", paused: "멈춤", ended: "끝남" }[L.status]}</span></div>
+        ${N ? (N.busy ? this.atScanHtml(N, true) : `<div class="lab-now"><b>${esc(N.next.label)}</b><span>${this.atNextLine(N)}</span></div>`) : ""}
+        <div class="notice">${esc(L.note)}</div>
+        <div class="lab-tbl" role="table" aria-label="플랜별 성적">
+          <div class="lab-tr lab-th" role="row"><span>플랜</span><span>거래</span><span>승률</span><span>비용 뺀 수익률</span></div>
+          ${L.runs.map((x, i) => `<button type="button" class="lab-tr" role="row" data-run="${x.id}">
+            <span class="lab-nm"><i class="${x.closed >= 10 ? "" : "few"}">${x.closed >= 10 ? i + 1 : "·"}</i><span><b>${esc(x.label)}</b><small>${esc(x.desc)}</small></span></span>
+            <span>${x.closed}${x.open ? `<small>+${x.open}</small>` : ""}</span>
+            <span>${x.win_rate == null ? "-" : `${x.win_rate}%`}</span>
+            <span class="${tone(x.net_ret_pct)}">${pct(x.net_ret_pct, 2)}<small>비용 전 ${pct(x.ret_pct, 2)}</small></span></button>`).join("")}
+        </div>
+        <div class="tiny">같은 추천을 받아 플랜만 다르게 사고판 결과예요. 순위는 거래가 10건 넘은 플랜끼리만 매겨요. 추천 비용은 한 번만 들고 플랜 수로 나눠 적어요. 플랜을 누르면 그 매매 기록이 열려요. 한 플랜에 30건이 쌓이고 비용을 빼고도 플러스면 실전 후보예요.</div>
+        ${L.status === "ended" ? "" : `<div class="grid2"><button type="button" class="btn" data-labctl="${L.id}:${L.status === "paused" ? "resume" : "pause"}">${L.status === "paused" ? "다시 시작" : "새 매수 멈춤"}</button>
+          <button type="button" class="btn" data-labctl="${L.id}:end">실험 끝내기</button></div>`}
+      </section>`;
+    };
+    return `${act.map(one).join("")}
+      ${act.length ? "" : `<section class="card lab-cta"><div><b>플랜 여러 개를 한꺼번에 시험해요</b>
+        <span>느슨한 기준·엄격한 기준·관망 무시·짧게 끊기·분산 같은 플랜 ${((LB || {}).presets || []).length}가지를 같은 AI 추천으로 동시에 돌려요. 추천은 한 번만 받아 비용이 늘지 않아요.</span></div>
+        <button type="button" class="btn dark" id="labNew">실험 시작</button></section>`}
+      ${old.length ? `<div class="sec-title">지난 실험</div>${old.map(one).join("")}` : ""}`;
+  },
+  atLabNew() {
+    const A = this.at, P = (A.lab || {}).presets || [], F = { mkt: "kr", style: "day", budget: "1,000,000", days: 20 };
+    openSheet("모의 실험 시작", `<div class="at-bud">
+        <div class="field">시장${seg("실험시장", [["kr", "국내장"], ["us", "미국장"]], F.mkt, "on-card")}</div>
+        <div class="field">방식${seg("실험방식", (A.o.styles || []).map((x) => [x.id, x.label]), F.style, "on-card")}</div>
+        <div class="fields"><label class="field">플랜마다 쓸 돈(가상)<input id="lbB" class="r" inputmode="decimal" autocomplete="off" value="${F.budget}"></label>
+          <label class="field">기간(일)<input id="lbD" class="r" inputmode="numeric" autocomplete="off" value="${F.days}"></label></div>
+        <div class="field">시험할 플랜<div class="lab-pick">${P.map((x) => `<label><input type="checkbox" data-var="${x.key}" checked ${x.key === "base" ? "disabled" : ""}><span><b>${esc(x.label)}</b><small>${esc(x.desc)}</small></span></label>`).join("")}</div></div>
+        <div id="lbPv" aria-live="polite"></div>
+        <button type="button" class="btn dark wide" id="lbGo">실험 시작</button></div>`, (box) => {
+      const body = () => ({ mkt: F.mkt, style: F.style, budget: num($("#lbB", box).value), days: Number($("#lbD", box).value) || 0, model: "auto",
+        variants: $$("[data-var]", box).filter((i) => i.checked).map((i) => i.dataset.var) });
+      let seq = 0;
+      const pv = async () => {
+        const my = ++seq, el = $("#lbPv", box);
+        try {
+          const v = await api("POST", "/api/auto/plan", Object.assign(body(), { mode: "paper" }));
+          if (my === seq) el.innerHTML = this.atCostHtml(v) + `<div class="tiny">기간은 20거래일 이상을 권해요. 거래가 쌓여야 플랜 사이의 차이를 믿을 수 있어요.</div>`;
+        } catch (e) { if (my === seq) el.innerHTML = `<div class="notice warn">${esc(e.message)}</div>`; }
+      };
+      bindSeg(box, "실험시장", (v) => { F.mkt = v; $("#lbB", box).value = v === "us" ? "1,000" : "1,000,000"; pv(); });
+      bindSeg(box, "실험방식", (v) => { F.style = v; pv(); });
+      $("#lbB", box).addEventListener("change", pv); $("#lbD", box).addEventListener("change", pv);
+      $("#lbGo", box).onclick = async () => {
+        try { await run(() => api("POST", "/api/auto/lab", body()), "실험을 시작했어요"); } catch (e) { return; }
+        closeSheet(); this.auto($("#iv"));
+      };
+      pv();
+    });
   },
 
   // ----- 새로 만들기
   async atNew(box) {
     const A = this.atState(), F = A.form;
     const O = A.o || (A.o = await GET("/api/auto"));
-    if (!F.model) F.model = O.default_model;
+    if (!F.model) F.model = "auto";
     const cur = () => (F.mkt === "us" ? "달러" : "원");
     box.onclick = null;
     box.innerHTML = `<section class="ap-hero">
@@ -1717,7 +1797,7 @@ pages.invest = {
       </section>
       <section class="card">
         <div class="card-head"><h2>엔진</h2><span class="tiny">종목을 고르는 Claude 모델</span></div>
-        <div class="ap-models">${O.models.map((x) => `<button type="button" class="ap-model" data-model="${esc(x.id)}" aria-pressed="${x.id === F.model}"><span class="ap-radio" aria-hidden="true"></span><span><b>${esc(x.label.split(" · ")[0])}</b> <span class="tiny">${esc(x.label.split(" · ")[1] || "")}</span></span></button>`).join("")}</div>
+        <div class="ap-models">${[{ id: "auto", label: "자동 · 쓸 돈에 맞춰 모델·횟수를 골라요(권장)" }].concat(O.models).map((x) => `<button type="button" class="ap-model" data-model="${esc(x.id)}" aria-pressed="${x.id === F.model}"><span class="ap-radio" aria-hidden="true"></span><span><b>${esc(x.label.split(" · ")[0])}</b> <span class="tiny">${esc(x.label.split(" · ")[1] || "")}</span></span></button>`).join("")}</div>
       </section>
       <div id="atPlan"></div>`;
     const save = () => { F.budget = $("#atBudget").value; F.days = $("#atDays").value; };
@@ -1744,6 +1824,17 @@ pages.invest = {
     };
     this.atPlan();
   },
+  // 플랜 미리보기의 AI 비용 칸: 어떤 엔진으로 하루 몇 번, 한 달에 얼마(쓸 돈의 몇 %), 실전이면 모의 검증 결과
+  atCostHtml(pv) {
+    const c = pv.cost, kr = pv.mkt === "kr", real = pv.mode === "real";
+    if (!c) return "";
+    return `<div class="at-cost ${c.ok ? "" : "over"}">
+        <div class="at-cost-top"><span>AI 엔진${c.auto ? "(자동)" : ""}</span><b>${esc(c.label.split(" · ")[0])} · 하루 ${c.cycles}번${c.web ? "" : " · 웹 검색 없이"}</b></div>
+        <div class="at-cost-top"><span>한 달 AI 비용</span><b>약 ${kr ? `${won(c.month_cur)}원` : `$${c.month_usd}`}${real ? ` · 쓸 돈의 ${c.pct}%` : ""}</b></div>
+        ${c.warn ? `<div class="notice warn">${esc(c.warn)}</div>` : `<div class="tiny">${real ? "한 달 비용이 쓸 돈의 1%를 넘지 않게 맞췄어요." : "모의도 AI 비용은 실제로 나가요. 하루 $0.6 안에서 맞췄어요."}${c.auto && !c.web ? " 비용에 맞추느라 웹 검색(뉴스)을 뺐어요." : ""}</div>`}
+        ${pv.ready ? `<div class="notice ${pv.ready.ok ? "" : "warn"}"><b>모의 검증</b> ${esc(pv.ready.text)}</div>` : ""}
+      </div>`;
+  },
   atBody() {
     const F = this.at.form;
     return { mode: F.mode, mkt: F.mkt, style: F.style, budget: num(F.budget), days: Number(F.days) || 0, model: F.model, daily_loss_pct: F.daily, total_loss_pct: F.total, confirm: F.confirm };
@@ -1765,6 +1856,7 @@ pages.invest = {
           <label class="field">하루 손실 한도(%)<input id="atDaily" class="r" inputmode="decimal" value="${p.daily_loss_pct}"></label>
           <label class="field">전체 손실 한도(%)<input id="atTotal" class="r" inputmode="decimal" value="${p.total_loss_pct}"></label>
         </div>
+        ${this.atCostHtml(pv)}
         <div class="tiny">AI 추천 비용: 한 번에 약 ${won(c.per_usd * (c.fx || 1400))}원, 하루 최대 약 ${won(c.day_usd * (c.fx || 1400))}원. 이번 달 AI 예산 $${c.budget_usd ?? "-"} 가운데 $${Number(c.month_usd || 0).toFixed(2)} 사용.</div>
       </section>
       ${real ? `<section class="card"><label class="field"><span>실제 주문이 나가요. 시작하려면 <b>실전</b>이라고 적어 주세요</span><input id="atConfirm" autocomplete="off" placeholder="실전" value="${esc(F.confirm)}"></label></section>` : ""}
@@ -1796,6 +1888,7 @@ pages.invest = {
         <div class="at-run-top"><b>${esc(r.name)}</b><span class="tag ${cls}">${lbl}</span><span class="tag g">${r.mode === "real" ? esc(d.broker || "실전") : "모의"}</span></div>
         <div class="at-hero-eq">${M(m.equity)}</div>
         <div class="at-hero-ret ${tone(m.ret_pct)}">${M(m.equity - m.budget, true)} (${pct(m.ret_pct, 2)})</div>
+        ${m.ai_cost ? `<div class="at-hero-net">AI 비용 ${M(m.ai_cost)}을 빼면 <b class="${tone(m.net_pnl)}">${M(m.net_pnl, true)} (${pct(m.net_ret_pct, 2)})</b></div>` : ""}
         <div class="at-hero-kv">${["running", "paused"].includes(r.status) ? `<button type="button" id="atBud" aria-label="쓸 돈 바꾸기"><span>쓸 돈 <em>바꾸기 ›</em></span><b>${M(m.budget)}</b></button>` : `<div><span>쓸 돈</span><b>${M(m.budget)}</b></div>`}<div><span>남은 현금</span><b>${M(m.cash)}</b></div><div><span>확정 손익</span><b class="${tone(m.realized)}">${M(m.realized, true)}</b></div></div>
         ${N ? `${N.busy ? this.atScanHtml(N) : `<div class="at-nowline ${N.next.kind}"><span class="at-dot ${r.status === "running" && N.engine.ok ? "on" : ""}"></span>
           <div><b>${esc(next)}</b><span>${this.atNextLine(N)}</span>${N.next.code === "aicost" ? `<button type="button" class="btn yellow sm at-lim-go" data-ailim>AI 비용 한도 올리기</button>` : ""}${N.next.span_sec && N.next.in_sec != null ? `<i class="at-gap" data-gap="${N.next.in_sec}" data-span="${N.next.span_sec}" data-t0="${Date.now()}" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, (1 - N.next.in_sec / N.next.span_sec) * 100)).toFixed(1)}%"></i></i>` : ""}</div></div>`}
@@ -2048,7 +2141,7 @@ pages.invest = {
     const A = this.at, d = A.d, p = d.params;
     openSheet("플랜 직접 고치기", `<div class="fields">${Object.entries(d.keys).map(([k, l]) => typeof p[k] === "boolean"
       ? `<label class="field">${esc(l)}<select data-k="${k}"><option value="true" ${p[k] ? "selected" : ""}>예</option><option value="false" ${p[k] ? "" : "selected"}>아니오</option></select></label>`
-      : `<label class="field">${esc(l)}<input data-k="${k}" class="r" ${/^entry_/.test(k) ? 'type="time"' : 'inputmode="decimal"'} value="${esc(p[k])}"></label>`).join("")}</div>
+      : `<label class="field">${esc(l)}<input data-k="${k}" class="r" ${/^entry_/.test(k) ? 'type="time"' : 'inputmode="decimal"'} value="${esc(p[k] != null ? p[k] : "")}"></label>`).join("")}</div>
       <div class="fields" style="margin-top:8px"><label class="field">하루 AI 비용 한도($) · 추천 한 번에 보통 $0.5~0.9<input data-k="ai_daily_usd" class="r" inputmode="decimal" value="${esc(p.ai_daily_usd != null ? p.ai_daily_usd : 1)}"></label></div>
       <div class="tiny" style="margin:8px 0">고치면 플랜 판이 하나 올라가고 이력에 남아요. 범위를 벗어난 값은 가장 가까운 값으로 맞춰요.</div>
       <button type="button" class="btn dark wide" id="atSave">저장</button>`, (box) => {

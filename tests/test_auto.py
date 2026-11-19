@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import time
 from datetime import datetime, timedelta
 
 import pytest
@@ -10,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import moa.aipick as AP  # noqa: E402
 from moa.app import create_app  # noqa: E402
-from moa.autotrade import PLAN_KEYS, _clamp_key, make_plan  # noqa: E402
+from moa.autotrade import PLAN_KEYS, VARIANTS, _clamp_key, make_plan  # noqa: E402
 from moa.db import DB  # noqa: E402
 from moa.runtime import Runtime  # noqa: E402
 
@@ -40,11 +41,18 @@ class Env:
         mp.setattr(AP, "kst_now", lambda: datetime.fromisoformat(f"{self.day}T{self.hm}:00"))
         mp.setattr(rt, "notify", lambda msg: None)
         mp.setattr(rt.ai, "configured", lambda: True)
+        self.idx = None                                              # 지수 등락률(없으면 사전 점검을 하지 않는다)
+        mp.setattr(at, "index_pct", lambda mkt: self.idx)
+        mp.setattr(rt.ai, "fx", lambda: 1400.0)
 
     def run(self, **kw):
         d = {"budget": 3_000_000, "mkt": "kr", "style": "day", "days": 30, "mode": "paper"}
+        new = kw.pop("new_defaults", False)
         d.update(kw)
-        return self.at.create(d)["run"]["id"]
+        rid = self.at.create(d)["run"]["id"]
+        if not new:      # 예전 테스트는 '관망이면 쉰다 · 하루 3번 · $1'을 전제로 쓰였다
+            self.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.skip_watch',json('true'),'$.cycles_per_day',3,'$.cycle_gap_min',60,'$.ai_daily_usd',1.0,'$.web_search',json('true')) WHERE id=?", (rid,))
+        return rid
 
     def pick(self, sym="005930", **kw):
         x = {"sym": sym, "name": sym, "score": 75, "win_prob": 62, "cal_prob": None, "cal_n": 0, "entry_type": "market",
@@ -579,7 +587,7 @@ def test_now_tells_what_happens_next_and_what_happened_today(env):
     at.tick(force=True)
     assert at._run(rid)["status"] == "ended"
     d = c.get(f"/api/auto/runs/{rid}").get_json()
-    assert d["now"] is None and c.get("/api/auto/brief").get_json() == {"runs": [], "ended": 1} and "now" not in c.get("/api/auto").get_json()["runs"][0]
+    assert d["now"] is None and c.get("/api/auto/brief").get_json() == {"runs": [], "labs": [], "ended": 1} and "now" not in c.get("/api/auto").get_json()["runs"][0]
 
 
 def test_now_us_shows_korean_time(env, monkeypatch):
@@ -1009,3 +1017,158 @@ def test_same_setup_runs_share_one_recommendation_and_cost_limit_is_clear(env, m
     # 한도를 올리면 바로 다시 받는다. AI 개선안으로는 못 바꾸는 값이다
     assert at.edit(paid, {"ai_daily_usd": "3"})["params"]["ai_daily_usd"] == 3.0 and "ai_daily_usd" not in PLAN_KEYS
     assert at.gate_code(at._run(paid))[1] != "aicost" and at.edit(paid, {"ai_daily_usd": 999})["params"]["ai_daily_usd"] == 20.0
+
+
+def test_free_precheck_watch_backoff_and_paper_buys_small_on_watch(env, monkeypatch):
+    """돈을 내고 AI에게 묻기 전에 앱이 먼저 장을 본다. 관망 뒤에는 회복될 때까지 다시 묻지 않는다. 모의는 관망에도 작게 산다."""
+    at = env.at
+    rid = env.run(new_defaults=True)
+    run = lambda: at._run(rid)
+    p = run()["params"]
+    assert p["skip_watch"] is False and p["watch_mult"] == 0.5 and p["idx_floor"] == -1.0
+    assert make_plan(3_000_000, "kr", "day", 30)["skip_watch"] is True and make_plan(3_000_000, "kr", "swing", 30)["idx_floor"] == -1.5
+    calls = []
+
+    def stream(kind, d):
+        calls.append(1)
+        yield {"t": "picks", "id": 70 + len(calls), "stance": "관망", "view": "지수 약세", "picks": [env.pick("005930" if len(calls) == 1 else "000660")]}
+        yield {"t": "done", "usd": 0.2}
+    monkeypatch.setattr(env.rt.ai, "stream", stream)
+    # 1) 지수가 기준(-1%)보다 더 내렸으면 AI를 부르지 않는다(비용 0). 기록은 하루 한 번
+    env.idx = -1.46
+    assert at.gate_code(run())[1] == "market" and "비용 없음" in at.gate_code(run())[2]
+    at.tick(force=True)
+    at.tick(force=True)
+    assert calls == [] and [x["msg"] for x in at.rt.db.q("SELECT msg FROM at_log WHERE run_id=? AND kind='skip'", (rid,))] == ["지수가 -1.46%로 약해 AI를 부르지 않고 쉬어요 · 비용 없음"]
+    n = at.now(run())["next"]
+    assert n["kind"] == "wait" and n["code"] == "market"
+    # 2) 지수가 버티면 부른다. 관망이어도 모의는 절반 크기로 산다(검증 단계 50% × 관망 50%)
+    env.idx = -0.4
+    at.tick(force=True)
+    at._busy[rid].join(5)
+    t = at._open(rid)
+    assert len(calls) == 1 and len(t) == 1 and t[0]["qty"] == int(3_000_000 * 0.33 * 0.5 * 0.5 // (70000 * 1.002 * 1.0005))
+    d = json.loads(at.rt.db.one("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' AND data IS NOT NULL", (rid,))["data"])
+    assert d["stance"] == "관망" and d["idx"] == -0.4 and d["mult"] == 0.25
+    # 3) 관망 뒤: 간격(60분)이 지나도 지수가 그대로면 다시 묻지 않는다. 0.3%p 넘게 회복되거나 간격의 두 배가 지나면 묻는다
+    at.rt.db.x("UPDATE at_runs SET last_cycle=? WHERE id=?", (time.time() - 61 * 60, rid))
+    assert at.gate_code(run())[1] == "watchwait" and "120분" in at.gate_code(run())[2]
+    at.tick(force=True)
+    assert len(calls) == 1
+    env.idx = -0.05
+    assert at.gate_code(run())[0] is True
+    env.idx = -0.4
+    at.rt.db.x("UPDATE at_runs SET last_cycle=? WHERE id=?", (time.time() - 121 * 60, rid))
+    assert at.gate_code(run())[0] is True
+    # 4) 기준은 플랜에서 끌 수 있다(0 = 끔)
+    env.idx = -3.0
+    assert at.gate_code(run())[1] == "market"
+    at.edit(rid, {"idx_floor": 0})
+    assert at.gate_code(run())[1] != "market"
+
+
+def test_ai_cost_fits_the_budget_and_results_count_ai_cost(env, monkeypatch):
+    """AI 비용을 쓸 돈에 맞춘다(실전: 월 1% 이내). 넘으면 숨기지 않고 알린다. 손익은 AI 비용을 뺀 값도 보여 준다."""
+    at = env.at
+    per = {"claude-fable-5-2": 0.8, "claude-opus-5-5": 0.4, "claude-sonnet-5-5": 0.2, "claude-haiku-4-5": 0.1}
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (per[model] * (1 if web else 0.6), {"fx": 1400.0}))
+    monkeypatch.setattr(env.rt.ai, "conf", lambda: {"model": "claude-fable-5-2", "web_search": True})
+    # 실전 60만: 월 1% = 6,000원 = $4.29 → 하루 3번을 지키면서 맞는 조합은 가장 싼 모델 · 웹 검색 없이($3.78)
+    pv = at.preview({"budget": 600_000, "mkt": "kr", "style": "day", "days": 20, "mode": "real", "model": "auto"})
+    c = pv["cost"]
+    assert (pv["model"], pv["params"]["cycles_per_day"], pv["params"]["web_search"]) == ("claude-haiku-4-5", 3, False) and c["ok"] is True and c["auto"] is True
+    assert c["month_usd"] == 3.78 and c["pct"] == 0.88 and c["warn"] is None and pv["params"]["cycle_gap_min"] == 60 and pv["params"]["ai_daily_usd"] == 0.3
+    # 어떤 조합으로도 못 맞추면 가장 싼 조합으로 하고 숨기지 않고 알린다
+    monkeypatch.setitem(per, "claude-haiku-4-5", 0.5)
+    monkeypatch.setitem(per, "claude-sonnet-5-5", 0.6)
+    pv2 = at.preview({"budget": 600_000, "mkt": "kr", "style": "day", "days": 20, "mode": "real", "model": "auto"})
+    assert (pv2["model"], pv2["params"]["cycles_per_day"], pv2["params"]["web_search"]) == ("claude-haiku-4-5", 1, False) and pv2["cost"]["ok"] is False and "본전" in pv2["cost"]["warn"]
+    monkeypatch.setitem(per, "claude-haiku-4-5", 0.1)
+    monkeypatch.setitem(per, "claude-sonnet-5-5", 0.2)
+    assert pv["ready"]["ok"] is False and "아직 실전을 권하지 않아요" in pv["ready"]["text"] and pv["params"]["skip_watch"] is True
+    # 실전 3,000만: $214까지 → 가장 좋은 모델로 3번이 들어온다
+    pv = at.preview({"budget": 30_000_000, "mkt": "kr", "style": "day", "days": 20, "mode": "real", "model": "auto"})
+    assert (pv["model"], pv["params"]["cycles_per_day"], pv["cost"]["ok"], pv["cost"]["warn"]) == ("claude-fable-5-2", 3, True, None) and pv["params"]["ai_daily_usd"] == 3.4
+    # 실전 500만: $35.7 → 하루 3번을 지키는 가장 좋은 모델(Opus $25.2)
+    pv = at.preview({"budget": 5_000_000, "mkt": "kr", "style": "day", "days": 20, "mode": "real", "model": "auto"})
+    assert (pv["model"], pv["params"]["cycles_per_day"], pv["params"]["web_search"]) == ("claude-opus-5-5", 3, True)
+    # 모의: 하루 $0.6 목표 → Sonnet 3번
+    pv = at.preview({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 20, "mode": "paper", "model": "auto"})
+    assert (pv["model"], pv["params"]["cycles_per_day"], pv["cost"]["ok"]) == ("claude-sonnet-5-5", 3, True) and pv["ready"] is None
+    # 모델을 직접 고르면 바꾸지 않고 비용만 알려 준다(한도는 횟수에 맞춘다)
+    pv = at.preview({"budget": 600_000, "mkt": "kr", "style": "day", "days": 20, "mode": "real", "model": "claude-fable-5-2"})
+    assert pv["model"] == "claude-fable-5-2" and pv["params"]["cycles_per_day"] == 3 and pv["cost"]["auto"] is False and pv["cost"]["pct"] == 11.76 and pv["params"]["ai_daily_usd"] == 3.4
+    # 손익에 AI 비용을 뺀 값이 함께 나온다
+    rid = env.run()
+    at.log(rid, "cycle", "x", {"usd": 0.5})
+    at.log(rid, "cycle", "y", {"usd": 0.25})
+    m = at.detail(rid)["run"]["money"]
+    assert (m["ai_usd"], m["ai_cost"], m["net_pnl"], m["net_ret_pct"], m["ret_pct"]) == (0.75, 1050.0, -1050.0, -0.03, 0.0)
+    # 실전 준비도: 한 플랜에서 30건 이상 + AI 비용 빼고 플러스
+    _seed(env, rid, 30)
+    R = at.readiness("kr", "day")
+    pnl = at.rt.db.one("SELECT SUM(pnl) s FROM at_trades WHERE run_id=?", (rid,))["s"]
+    assert R["best"]["n"] == 30 and R["ok"] is (pnl - 1050 > 0) and R["best"]["net"] == round(pnl - 1050, 2)
+
+
+def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
+    """모의 실험실: 플랜만 다른 모의 여러 개가 같은 추천을 한 번만 받아 각자 기준으로 사고, 성적표로 비교한다."""
+    at = env.at
+    solo = env.run()                                                    # 보통 모의가 돌고 있어도 실험은 따로 시작할 수 있다
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (0.9, {"fx": 1400.0}))
+    with pytest.raises(ValueError, match="두 개 이상"):
+        at.lab_create({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 20, "variants": ["base"]})
+    L = at.lab_create({"budget": 3_000_000, "mkt": "kr", "style": "day", "days": 20, "model": "claude-sonnet-5-5"})["labs"][0]
+    assert len(L["runs"]) == 9 and L["status"] == "running" and {x["variant"] for x in L["runs"]} == set(VARIANTS)
+    with pytest.raises(ValueError, match="이미 돌고"):
+        at.lab_create({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 20})
+    ids = {x["variant"]: x["id"] for x in L["runs"]}
+    lab = L["id"]
+    P = lambda k: at._run(ids[k])["params"]
+    assert lab == ids["base"] and P("loose")["min_win_prob"] == 50 and P("strict")["min_score"] == 70 and P("watch_skip")["skip_watch"] is True
+    assert (P("tight")["tp_cap"], P("tight")["sl_cap"], P("wide")["tp_cap"]) == (2.0, 1.0, 6.0) and (P("focus")["max_positions"], P("spread")["per_trade_pct"]) == (1, 20)
+    at.rt.db.x("UPDATE at_runs SET status='paused' WHERE id=?", (solo,))
+    calls = []
+
+    def stream(kind, d):
+        calls.append(d)
+        yield {"t": "picks", "id": 80 + len(calls), "stance": "관망" if len(calls) == 1 else "보통", "view": "v",
+               "picks": [env.pick("005930", win_prob=57, score=65), env.pick("000660", win_prob=52, score=55, target_pct=2.0, stop_pct=1.5)]}
+        yield {"t": "done", "usd": 0.9}
+    monkeypatch.setattr(env.rt.ai, "stream", stream)
+    at.tick(force=True)
+    th = at._busy[lab]
+    assert all(at._busy[i] is th for i in ids.values()) and at.now(at._run(ids["spread"]))["busy"] is True     # 모두 같은 진행 상태를 본다
+    th.join(5)
+    assert len(calls) == 1                                               # 추천은 한 번만
+    held = {k: sorted(t["sym"] for t in at._open(i)) for k, i in ids.items()}
+    assert held["base"] == ["005930"] and held["loose"] == ["000660", "005930"] and held["strict"] == [] and held["watch_skip"] == []
+    assert held["watch_full"] == ["005930"] and at._open(ids["watch_full"])[0]["qty"] >= 2 * at._open(ids["base"])[0]["qty"]   # 관망 무시는 두 배 크기
+    usd = [json.loads(r["data"])["usd"] for r in at.rt.db.q("SELECT data FROM at_log WHERE kind='cycle' AND data IS NOT NULL AND run_id!=?", (solo,))]
+    assert len(usd) == 9 and all(u == 0.1 for u in usd)                  # 비용은 똑같이 나눠 적는다
+    # 다음 추천도 묶음 전체에서 한 번: 한 종목 집중은 자리가 없어 건너뛰고, 나머지는 각자 판단
+    at.rt.db.x("UPDATE at_runs SET last_cycle=? WHERE lab_id=?", (time.time() - 130 * 60, lab))
+    at.tick(force=True)
+    at._busy[lab].join(5)
+    assert len(calls) == 2 and len(at._open(ids["focus"])) == 1 and sorted(t["sym"] for t in at._open(ids["watch_skip"])) == ["005930"]
+    # 맨 앞 실험이 끝나도 다음 실험이 이어받는다
+    at.control(ids["base"], "end")
+    at._share.clear()                                                   # (10분 안에 받은 같은 조건의 추천은 다시 받지 않고 함께 쓴다)
+    at.rt.db.x("UPDATE at_runs SET last_cycle=? WHERE lab_id=?", (time.time() - 61 * 60, lab))
+    at.tick(force=True)
+    nxt = min(i for k, i in ids.items() if k != "base")
+    at._busy[nxt].join(5)
+    assert len(calls) == 3
+    # 성적표: 끝난 거래가 있는 것부터, AI 비용 뺀 수익률 순. 10건 전에는 순위를 말하지 않는다
+    L = at.labs()["labs"][0]
+    assert L["cycles"] >= 2 and L["usd"] == round(sum(x["ai_usd"] for x in L["runs"]), 2) and "비교하기 일러요" in L["note"] and L["lead"] is None
+    _seed(env, ids["loose"], 12)
+    L = at.labs()["labs"][0]
+    assert L["runs"][0]["variant"] == "loose" and L["lead"] == "느슨한 기준" and "30건이 쌓여야" in L["note"] and L["runs"][0]["net_ret_pct"] < L["runs"][0]["ret_pct"]
+    # 홈 요약과 목록에서는 묶음 하나로 보인다
+    b = at.brief()
+    assert [r["id"] for r in b["runs"]] == [solo] and b["labs"][0]["n"] == 9 and b["labs"][0]["lead"] == "느슨한 기준"
+    assert [r["id"] for r in at.overview()["runs"]] == [solo]
+    # 한꺼번에 멈추고 끝낸다
+    assert at.lab_control(lab, "pause")["labs"][0]["status"] == "paused"
+    assert at.lab_control(lab, "end")["labs"][0]["status"] in ("ended", "paused", "running")

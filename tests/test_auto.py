@@ -1709,3 +1709,41 @@ def test_engine_moves_up_when_results_are_poor_and_back_if_worse(env, monkeypatc
     # 다른 설정(비용 한도 다시 맞추기)이 돌아도 올린 엔진을 지킨다
     m, patch, _ = at.fit_cost(3_000_000, "kr", "day", "paper", at._run(rid)["params"], "auto", ceil=at._run(rid)["params"]["engine_ceil"])
     assert m == "claude-opus-5-5"
+
+
+def test_flow_shows_whole_pipeline_and_where_it_is(env):
+    """흐름도: 점검(앞에서부터 처음 막힌 곳) → AI 추천 → 거르기(기준별로 몇 개가 빠졌나) → 크기 → 주문 → 보유(손절~익절 사이) → 팔기 → 배우기."""
+    at = env.at
+    rid = env.run()
+    picks = [env.pick("005930"), env.pick("000660", win_prob=40), env.pick("035420", score=50)]
+    assert env.enter(rid, picks) == 1
+    F = at.flow(rid)
+    assert F["ok"] and all(g["st"] == "pass" for g in F["gates"]) and F["gates"][0]["code"] == "closed"
+    fu = F["funnel"]
+    assert (fu["picks"], fu["buy"]) == (3, 1)
+    st = {x["code"]: x for x in fu["steps"]}
+    assert st["winprob"]["out"] == 1 and st["score"]["out"] == 1 and st["score"]["in"] == 2 and "이상" in st["winprob"]["rule"]
+    assert F["ai"]["full"] == 1 and F["ai"]["exclude"] == 1 and F["ai"]["engine"]["ladder"][0]["label"]
+    assert len(F["hold"]) == 1 and F["hold"][0]["tp"] == 3.0 and F["hold"][0]["sl"] == 1.5
+    assert F["size"]["pct"] > 0 and F["learn"]["review"]["every"] == 30 and F["learn"]["engine"]["need"] > 0
+    # 막힌 곳: 그 앞은 통과, 막힌 곳 표시, 그 뒤는 아직
+    env.hm = "15:10"
+    F = at.flow(rid)
+    S = [g["st"] for g in F["gates"]]
+    i = next(k for k, g in enumerate(F["gates"]) if g["code"] == "time")
+    assert not F["ok"] and S[:i] == ["pass"] * i and S[i] == "stop" and set(S[i + 1:]) == {"wait"} and F["gates"][i]["why"]
+    # 팔면 그 사유로 묶어 보여 준다
+    env.hm = "10:40"
+    env.px["005930"] = 72_500.0
+    at._manage(at._run(rid))
+    F = at.flow(rid)
+    assert F["exits"] and F["exits"][0]["reason"] == "익절" and F["exits"][0]["win"] == 1 and not F["hold"]
+    # 멈춘 자동매매는 맨 앞에서 멈춤
+    at.control(rid, "pause")
+    assert at.flow(rid)["gates"][0]["st"] == "stop"
+
+
+def test_flow_route(rt):
+    from moa.app import create_app
+    c = create_app(rt).test_client()
+    assert c.get("/api/auto/runs/999/flow").status_code == 404

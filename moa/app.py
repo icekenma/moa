@@ -1267,6 +1267,13 @@ def create_app(rt, updater=None):
         with rt._lock:
             return jsonify(rt.autotrade.create(body()))
 
+    @app.get("/api/auto/runs/<int:rid>/flow")
+    def auto_flow(rid):
+        try:
+            return jsonify(rt.autotrade.flow(rid))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 404
+
     @app.get("/api/auto/runs/<int:rid>")
     def auto_detail(rid):
         return jsonify(rt.autotrade.detail(rid))

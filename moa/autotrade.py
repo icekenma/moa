@@ -2789,6 +2789,117 @@ class AutoTrade:
                 "styles": [{"id": k, **v} for k, v in STYLES.items()], "min_budget": MIN_BUDGET,
                 "sessions": {"kr": self._session("kr"), "us": self._session("us")}}
 
+    # ------------------------------------------------------------------ 흐름도(지금 이 플랜이 어디까지 왔는지)
+    GATES = (("closed", "장이 열렸나"), ("over", "기간 안인가"), ("time", "매수 시간인가"), ("full", "자리가 있나"), ("dayloss", "오늘 손실 한도 안인가"),
+             ("streak", "연속 손절 아닌가"), ("cash", "현금이 있나"), ("turn", "추천 받을 차례인가"), ("aicost", "오늘 AI 비용 한도 안인가"),
+             ("market", "지수가 기준보다 강한가"), ("watchwait", "관망 뒤 쉬는 중이 아닌가"), ("nokey", "AI 키가 있나"), ("budget", "이번 달 AI 예산 안인가"))
+    FILTERS = (("full", "자리"), ("watch", "관망"), ("auto", "AI가 고른 종목"), ("winprob", "승률"), ("score", "점수"), ("rr", "손익비"), ("fee", "비용"), ("dup", "오늘 이미 거래"),
+               ("quote", "시세"), ("chase", "쫓지 않기"), ("qty", "1주 이상"), ("fail", "주문"), ("etc", "기타"))
+
+    def flow(self, rid):
+        """이 플랜이 한 바퀴 도는 전 과정(점검 → AI 추천 → 거르기 → 크기 → 주문 → 들고 있기 → 팔기 → 배우기)을
+        지금 값·오늘 숫자·현재 위치와 함께. 흐름도 화면용."""
+        run = self._run(rid)
+        p, mkt, today = run["params"], run["mkt"], AP.mkt_date(run["mkt"])
+        N = self.now(run) if run["status"] in ACTIVE else None
+        M = (lambda v: f"${v:,.2f}") if mkt == "us" else (lambda v: f"{v:,.0f}원")
+        # 1) 점검: 앞에서부터 처음 막힌 곳까지
+        if run["status"] == "running":
+            ok, code, why = self.gate_code(run)
+            code = "turn" if code in ("gap", "cycles") else code
+        else:
+            ok, code, why = False, "status", {"paused": "새 매수를 멈춰 두었어요", "closing": "정리 중이에요", "ended": "끝난 자동매매예요"}.get(run["status"], "")
+        es, ee = self._entry(run, self._local(mkt).date())
+        idx = self.index_pct(mkt)
+        D = self._due(run)
+        cond = {"closed": "그 시장 정규장 시간에만", "over": f"{run['start_date']} ~ {run['end_date']}", "time": f"{es}~{ee}({'한국' if mkt == 'kr' else '뉴욕'} 시간)",
+                "full": f"최대 {p['max_positions']}종목", "dayloss": f"하루 -{p['daily_loss_pct']:g}%({M(run['budget'] * p['daily_loss_pct'] / 100)})까지",
+                "streak": f"연속 {p['loss_streak']}번 손절이면 그날 쉼", "cash": "남은 현금이 있어야",
+                "turn": (f"정밀 하루 {p['cycles_per_day']}번 · {p['cycle_gap_min']}분 간격 + 빠른 재추천 {D['quick']}분마다" if D["quick"]
+                         else f"하루 {p['cycles_per_day']}번 · {p['cycle_gap_min']}분 간격"),
+                "aicost": f"하루 ${float(p.get('ai_daily_usd') or 1):g}까지", "market": (f"지수 {float(p.get('idx_floor') or 0):g}% 아래면 AI를 안 부름(무료 점검) · 지금 {idx:+.2f}%" if idx is not None else f"지수 {float(p.get('idx_floor') or 0):g}% 아래면 쉼")
+                if float(p.get("idx_floor") or 0) < 0 else "모의는 지수와 상관없이 물어요",
+                "watchwait": "관망이면 지수가 회복되거나 간격 두 배가 지날 때까지" if (p.get("skip_watch") or not D["quick"]) else "관망이어도 작게 사 보며 계속 물어요",
+                "nokey": "설정 → AI", "budget": "설정 → AI의 월 예산"}
+        order = [g for g, _ in self.GATES]
+        stop = order.index(code) if code in order else (-1 if ok else len(order))
+        gates = [{"code": g, "t": t, "d": cond.get(g, ""), "st": "pass" if (ok or i < stop) else "stop" if i == stop else "wait",
+                  "why": why if i == stop else ""} for i, (g, t) in enumerate(self.GATES)]
+        if code == "status":
+            gates.insert(0, {"code": "status", "t": "가동 중인가", "d": "", "st": "stop", "why": why})
+        # 2) AI 추천
+        rows = self.rt.db.q("SELECT ts, data FROM at_log WHERE run_id=? AND kind='cycle' AND day=? AND data IS NOT NULL ORDER BY id", (rid, today))
+        decs, n_full, n_quick, usd = [], 0, 0, 0.0
+        for r in rows:
+            d = json.loads(r["data"])
+            usd += float(d.get("usd") or 0)
+            if d.get("pick_id") or d.get("decisions") is not None:
+                n_quick += 1 if d.get("lite") else 0
+                n_full += 0 if d.get("lite") else 1
+            for x in d.get("decisions") or []:
+                decs.append(dict(x, ts=r["ts"], lite=bool(d.get("lite"))))
+        busy = bool(N and N.get("busy"))
+        ai = {"model": run["model"], "model_label": _short_model(run["model"]), "web": bool(p.get("web_search", True)), "quick_gap": D["quick"],
+              "quick_model": "Haiku 4.5", "full": n_full, "full_max": p["cycles_per_day"], "quick": n_quick, "usd": round(usd, 3), "cap": float(p.get("ai_daily_usd") or 1),
+              "exclude": len(self._seen([rid], mkt)), "price_cap": self._price_cap(run), "next_kind": D.get("next") or D.get("kind") or "full",
+              "busy": busy, "engine": {"lock": bool(p.get("engine_lock")), "ceil": p.get("engine_ceil"),
+              "ladder": [{"model": m, "label": _short_model(m), "on": m == run["model"]} for m in ENGINE_LADDER]}}
+        # 3) 거르기: 오늘 받은 종목이 어디서 걸렸나
+        fee = AP.FEE[mkt]
+        rule = {"full": f"보유 {p['max_positions']}종목 미만", "auto": "앱이 고른 예비 종목은 사지 않음", "winprob": f"AI 승률 {p['min_win_prob']:g}% 이상",
+                "score": f"점수 {p['min_score']:g} 이상", "rr": f"익절÷손절 {p['min_rr']:g} 이상", "fee": f"목표가 비용({fee:g}%)의 3배 이상", "dup": "같은 종목은 하루 한 번",
+                "quote": "지금 시세가 있어야", "chase": f"추천가보다 {p['chase_pct']:g}% 넘게 오르면 안 쫓음", "qty": "배정 금액으로 1주 이상" + (" (모의는 현금이 되면 1주)" if run["mode"] == "paper" and p.get("min_one", True) else ""),
+                "fail": "주문이 들어가야", "watch": "AI가 관망을 권하면 " + ("사지 않음" if p.get("skip_watch") else f"×{float(p.get('watch_mult') or 0.5):g}로 작게"),
+                "etc": "그 밖의 이유"}
+        cnt = {}
+        for x in decs:
+            if x.get("act") == "skip":
+                c = skip_code(x)
+                cnt[c] = cnt.get(c, 0) + 1
+        left, steps = len(decs), []
+        for c, t in self.FILTERS:
+            n = cnt.get(c, 0)
+            steps.append({"code": c, "t": t, "rule": rule[c], "out": n, "in": left})
+            left -= n
+        funnel = {"picks": len(decs), "buy": sum(1 for x in decs if x.get("act") == "buy"), "steps": steps, "etc": cnt.get("etc", 0),
+                  "recent": [{k: x.get(k) for k in ("name", "sym", "act", "why", "win_prob", "score", "lite")} | {"ts": x["ts"][11:16], "code": skip_code(x) if x.get("act") == "skip" else ""}
+                             for x in decs[-8:]][::-1]}
+        # 4) 크기
+        m = self.money(run)
+        n_closed = self.rt.db.one("SELECT COUNT(*) n FROM at_trades WHERE run_id=? AND status='closed'", (rid,))["n"]
+        warm = n_closed < int(p.get("warmup_trades") or 0)
+        size = {"base": round(m["base"], 2), "cash": round(m["cash"], 2), "pct": p["per_trade_pct"], "alloc": round(m["base"] * p["per_trade_pct"] / 100, 2),
+                "warm": warm, "warm_mult": float(p.get("warmup_mult") or 1), "warm_left": max(0, int(p.get("warmup_trades") or 0) - n_closed),
+                "watch_mult": float(p.get("watch_mult") or 0.5), "skip_watch": bool(p.get("skip_watch")), "min_one": run["mode"] == "paper" and bool(p.get("min_one", True)),
+                "exit_mult": float(p.get("exit_mult") or 1), "tp_cap": p["tp_cap"], "sl_cap": p["sl_cap"]}
+        # 5) 주문 · 6) 들고 있기
+        buys = self.rt.db.one("SELECT COUNT(*) n FROM at_trades WHERE run_id=? AND entry_day=? AND status!='cancelled'", (rid, today))["n"]
+        hold = [{"sym": t["sym"], "name": t["name"], "qty": t["qty"], "pct": round(((t["last"] or t["entry_price"]) / t["entry_price"] - 1) * 100, 2),
+                 "tp": t["target_pct"], "sl": t["stop_pct"], "trail": t["trail_pct"] or 0, "high": round(((t["high"] or t["entry_price"]) / t["entry_price"] - 1) * 100, 2),
+                 "exit": t["exit_by"] if run["style"] == "day" else t["exit_date"], "fill_ok": bool(t["fill_ok"])} for t in self._open(rid)]
+        # 7) 팔기: 오늘 판 것
+        ex = {}
+        for t in self.rt.db.q("SELECT pnl, reason FROM at_trades WHERE run_id=? AND status='closed' AND exit_day=?", (rid, today)):
+            e = ex.setdefault(t["reason"] or "기타", {"reason": t["reason"] or "기타", "n": 0, "pnl": 0.0, "win": 0})
+            e["n"] += 1
+            e["pnl"] += t["pnl"] or 0
+            e["win"] += 1 if (t["pnl"] or 0) > 0 else 0
+        # 8) 배우기
+        since = p.get("engine_since") or run["created_at"]
+        est = self.engine_stats([run], since)
+        rv_days = len({r["day"] for r in self.rt.db.q("SELECT day FROM at_log WHERE run_id=? AND kind='cycle' AND data IS NOT NULL AND day>?", (rid, run.get("last_review_day") or ""))})
+        learn = {"review": {"n": n_closed - (run.get("last_review_n") or 0), "every": int(p.get("review_every") or 30), "days": rv_days, "every_days": int(p.get("review_days") or 5),
+                            "auto": bool(p.get("auto_apply")) and run["mode"] == "paper", "ai": bool(p.get("ai_review", True))},
+                 "engine": {"n": est["n"], "need": ESC_N, "avg": est["avg"], "win": est["win"], "rule": f"평균 0% 이하 또는 이익 {ESC_WIN}% 미만이면 한 칸 올림", "lock": bool(p.get("engine_lock"))},
+                 "pending": self.rt.db.one("SELECT COUNT(*) n FROM at_proposals WHERE run_id=? AND status='pending'", (rid,))["n"]}
+        where = ("ai" if busy else "hold" if (not ok and hold and code in ("full",)) else "gate")
+        return {"now": N, "run": {"id": rid, "name": run["name"], "mode": run["mode"], "mkt": mkt, "style": run["style"], "status": run["status"], "ver": run["ver"],
+                        "budget": run["budget"], "lab": bool(run.get("lab_id"))},
+                "where": where, "ok": ok, "code": code, "why": why, "gates": gates, "ai": ai, "funnel": funnel, "size": size,
+                "order": {"mode": run["mode"], "today": buys, "slip": "가상 체결(호가 미끄러짐 반영)" if run["mode"] == "paper" else "키움 실주문(체결 확인 후 보유로)"},
+                "hold": hold, "exits": sorted(ex.values(), key=lambda e: -e["n"]), "learn": learn,
+                "money": {"equity": round(m.get("equity", 0), 2), "cash": round(m["cash"], 2), "ret_pct": m.get("ret_pct")}}
+
     def detail(self, rid):
         run = self._run(rid)
         opens = self._open(rid)

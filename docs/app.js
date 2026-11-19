@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.2015";
+const UI_VERSION = "261119.2034";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1918,6 +1918,7 @@ pages.invest = {
         <div class="g-stadium-h"><i class="mk-tag ${L.mkt}">${kr ? "국내장" : "미국장"}</i><b>${esc(L.style_label)} 경기장</b>
           <span class="tag ${{ running: "y", paused: "g", ended: "" }[L.status]}">${{ running: "가동 중", paused: "멈춤", ended: "끝남" }[L.status]}</span></div>
         ${N ? (N.busy ? this.atScanHtml(N) : `<div class="at-nowline ${N.next.kind}"><span class="at-dot ${L.status === "running" ? "on" : ""}"></span><div><b>${esc(N.next.label)}</b><span>${this.atNextLine(N)}</span></div></div>`) : ""}
+        ${this.atFlowBtn(rs)}
         <div class="g-st-k big"><span>${G.ico.bag}<small>보유</small><b>${L.stocks ?? L.open}종목</b></span><span>${G.ico.flag}<small>끝난 거래</small><b>${L.closed}</b></span>
           <span>${G.ico.radar}<small>추천${L.plan && L.plan.quick_gap_min ? ` · ${L.plan.quick_gap_min}분마다` : ""}</small><b>${L.cycles}번</b></span><span>${G.ico.bolt}<small>AI 비용</small><b>$${Number(L.usd).toFixed(2)}</b></span></div>
         <div class="g-field" role="list" aria-label="플랜 경주">
@@ -2135,6 +2136,7 @@ pages.invest = {
         <div class="at-hero-top"><b><span class="mk-tag ${L.mkt}">${kr ? "국내장" : "미국장"}</span>${esc(L.style_label)} 실험 · 플랜 ${L.runs.length}개</b>
           <span class="tag ${{ running: "y", paused: "g", ended: "" }[L.status]}">${{ running: "가동 중", paused: "멈춤", ended: "끝남" }[L.status]}</span></div>
         ${N ? (N.busy ? this.atScanHtml(N) : `<div class="at-nowline ${N.next.kind}"><span class="at-dot ${L.status === "running" ? "on" : ""}"></span><div><b>${esc(N.next.label)}</b><span>${this.atNextLine(N)}</span></div></div>`) : ""}
+        ${this.atFlowBtn(L.runs)}
         <div class="at-hero-kv k4"><div><span>보유</span><b>${L.stocks ?? L.open}종목</b></div><div><span>끝난 거래</span><b>${L.closed}건</b></div><div><span>추천${L.plan && L.plan.quick_gap_min ? ` · ${L.plan.quick_gap_min}분마다` : ""}</span><b>${L.cycles}번</b></div><div><span>AI 비용</span><b>$${L.usd.toFixed(2)}</b></div></div>
         ${seg("실험탭", [["hold", `보유 ${L.positions.length}`], ["last", "추천"], ["rank", "성적"], ["sold", `판 기록 ${L.trades.length}`]], tab, "ap-mkt")}
       </section>
@@ -2151,7 +2153,7 @@ pages.invest = {
         try { await run(() => api("POST", `/api/auto/lab/${id}/control`, { action: act }), act === "end" ? "실험을 끝냈어요" : act === "pause" ? "새 매수를 멈췄어요" : "다시 시작했어요"); } catch (err) { return; }
         return this.auto(box);
       }
-      if (b) { A.view = Number(b.dataset.run); A.tab = "now"; A.d = null; A.back = "lab"; box.onclick = null; this.auto(box); }
+      if (b) { A.view = Number(b.dataset.run); A.tab = b.dataset.attab || "now"; A.d = null; A.back = "lab"; box.onclick = null; this.auto(box); }
     };
   },
   // 실험 화면의 탭 내용: 보유(언제·몇 주·얼마에 샀고 지금 얼마이고 어떻게 파는지) · 추천(방금 판단) · 성적(플랜 순위) · 판 기록
@@ -2353,7 +2355,7 @@ pages.invest = {
         ${r.status === "ended" ? "" : `<div class="at-ctl">
           ${r.status === "running" ? `<button type="button" class="btn line-w" data-ctl="pause">새 매수 멈춤</button>` : r.status === "paused" ? `<button type="button" class="btn yellow" data-ctl="resume">다시 시작</button>` : ""}
           ${r.status === "closing" ? "" : `<button type="button" class="btn line-w" data-ctl="end">전부 팔고 종료</button>`}</div>`}
-        ${seg("자동탭", [["now", "현황"], ["log", "기록"], ["stat", "분석"], ["plan", "플랜"]], A.tab, "ap-mkt")}
+        ${seg("자동탭", [["now", "현황"], ["flow", "흐름도"], ["log", "기록"], ["stat", "분석"], ["plan", "플랜"]], A.tab, "ap-mkt")}
       </section><div id="atBody" class="at-body"></div>`;
     $("#atBack").onclick = () => { A.view = A.back === "lab" && d.run.lab_id ? "lab" : "list"; A.back = null; A.o = null; this.auto(box); };
     bindSeg(box, "자동탭", (v) => { A.tab = v; this.atTab(); });
@@ -2450,11 +2452,100 @@ pages.invest = {
       note: [w.view ? `시장: ${w.view}` : "", (w.reasons || []).length ? "산 이유\n- " + w.reasons.join("\n- ") : "", (w.risks || []).length ? "위험\n- " + w.risks.join("\n- ") : ""].filter(Boolean).join("\n\n"),
       links: [["종목 보기", stockHref(t.sym, mkt)]] });
   },
+  atFlowBtn(rs) {
+    const b = (rs || []).find((r) => r.variant === "base") || (rs || [])[0];
+    return b ? `<button type="button" class="fl-go" data-run="${b.id}" data-attab="flow"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M5 7.5v9M7.3 6l9.4 4.8M7.3 18l9.4-4.8"/></svg><span><b>전 과정 흐름도</b><small>기본 플랜이 지금 어느 단계인지</small></span><i aria-hidden="true">›</i></button>` : "";
+  },
+  // ===== 흐름도: 이 플랜이 한 바퀴 도는 전 과정과 지금 위치 =====
+  async atFlow(el, rid) {
+    const A = this.at;
+    if (A.flow && A.flow.run.id === rid) el.innerHTML = this.atFlowHtml(A.flow);
+    else el.innerHTML = `<div class="empty loading">흐름도를 그리는 중</div>`;
+    let F;
+    try { F = await GET(`/api/auto/runs/${rid}/flow`); } catch (e) { if (!A.flow) el.innerHTML = `<div class="notice warn">${esc(e.message)}</div>`; return; }
+    if (A.tab !== "flow" || !document.body.contains(el)) return;
+    A.flow = F;
+    const open = [...el.querySelectorAll("details[open]")].map((x) => x.dataset.k);
+    el.innerHTML = this.atFlowHtml(F);
+    open.forEach((k) => { const x = el.querySelector(`details[data-k="${k}"]`); if (x) x.open = true; });
+  },
+  atFlowHtml(F) {
+    const r = F.run, mkt = r.mkt, M = (v) => this.atM(mkt, v), ai = F.ai, fu = F.funnel, sz = F.size, L = F.learn;
+    const stop = F.gates.find((g) => g.st === "stop");
+    const stage = F.where === "ai" ? 2 : stop ? 1 : 2;
+    const here = (n) => (stage === n ? `<em class="fl-here">지금 여기</em>` : "");
+    const ring = (v, max, lbl) => { const k = Math.max(0, Math.min(1, max ? v / max : 0)), C = 2 * Math.PI * 17;
+      return `<span class="fl-ring" role="img" aria-label="${lbl} ${v}/${max}"><svg viewBox="0 0 42 42"><circle cx="21" cy="21" r="17" class="t"/><circle cx="21" cy="21" r="17" class="v" stroke-dasharray="${(C * k).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 21 21)"/></svg><b>${v}</b><small>/${max}</small></span>`; };
+    const ICO = { pass: "✓", stop: "■", wait: "·" };
+    // ① 점검
+    const s1 = `<div class="fl-gates">${F.gates.map((g) => `<div class="fl-g ${g.st}"><i aria-hidden="true">${ICO[g.st]}</i><span><b>${esc(g.t)}</b><small>${esc(g.d)}</small>${g.why ? `<em>${esc(g.why)}</em>` : ""}</span></div>`).join("")}</div>`;
+    // ② AI 추천
+    const N = F.now;
+    const s2 = `${N ? (N.busy ? this.atScanHtml(N) : `<div class="fl-next"><b>${esc(N.next.label || "")}</b><span>${this.atNextLine(N)}</span></div>`) : ""}
+      <div class="fl-two">
+        <div class="fl-box ${ai.next_kind === "full" ? "on" : ""}"><span class="fl-k">정밀 추천</span><b>${esc(ai.model_label)}${ai.web ? " + 뉴스 검색" : ""}</b><small>오늘 ${ai.full}/${ai.full_max}번</small></div>
+        <div class="fl-box ${ai.next_kind === "quick" ? "on" : ""} ${ai.quick_gap ? "" : "off"}"><span class="fl-k">빠른 재추천</span><b>${ai.quick_gap ? `${ai.quick_gap}분마다 · ${ai.quick_model}` : "꺼짐"}</b><small>${ai.quick_gap ? `오늘 ${ai.quick}번 · 뉴스 없이 숫자만` : "플랜에서 켤 수 있어요"}</small></div></div>
+      <div class="fl-ladder" aria-label="추천 엔진 단계">${ai.engine.ladder.map((x, i) => `${i ? `<span class="fl-arr" aria-hidden="true">›</span>` : ""}<span class="${x.on ? "on" : ""}">${esc(x.label.replace(/ [\d.]+$/, ""))}</span>`).join("")}</div>
+      <div class="fl-meter"><span>오늘 AI 비용</span><span class="fl-bar"><i style="width:${Math.min(100, ai.usd / (ai.cap || 1) * 100).toFixed(1)}%"></i></span><b>$${ai.usd.toFixed(2)} / $${ai.cap}</b></div>
+      <div class="fl-facts"><span>이미 다룬 ${ai.exclude}종목은 빼고 물어요</span>${ai.price_cap ? `<span>${M(ai.price_cap)} 넘는 종목은 후보에서 빼요(1주를 못 사서)</span>` : ""}</div>`;
+    // ③ 거르기: 깔때기
+    const s3 = fu.picks ? `<div class="fl-fun">
+        <div class="fl-f top"><span><b>받은 종목</b><small>오늘 추천 ${ai.full + ai.quick}번</small></span><span class="fl-fb"><i style="width:100%"></i></span><b>${fu.picks}</b></div>
+        ${fu.steps.filter((x) => x.in > 0 && (x.out || !["watch", "etc"].includes(x.code))).map((x) => `<div class="fl-f ${x.out ? "cut" : ""}"><span><b>${esc(x.t)}</b><small>${esc(x.rule)}</small></span>
+          <span class="fl-fb"><i style="width:${((x.in - x.out) / fu.picks * 100).toFixed(1)}%"></i>${x.out ? `<u style="left:${((x.in - x.out) / fu.picks * 100).toFixed(1)}%;width:${(x.out / fu.picks * 100).toFixed(1)}%"></u>` : ""}</span>
+          <b>${x.out ? `−${x.out}` : "✓"}</b></div>`).join("")}
+        <div class="fl-f end"><span><b>산 종목</b><small>${fu.buy ? "아래 크기대로 주문" : "오늘은 아직 없어요"}</small></span><span class="fl-fb"><i style="width:${(fu.buy / fu.picks * 100).toFixed(1)}%"></i></span><b>${fu.buy}</b></div></div>
+      <details class="fl-det" data-k="recent"><summary>최근 판단 ${fu.recent.length}건 보기</summary><div class="fl-rec">${fu.recent.map((x) => `<div class="${x.act === "buy" ? "buy" : ""}"><time>${esc(x.ts)}</time>
+        <b>${esc(x.name || x.sym)}</b>${x.lite ? `<span class="tag y">빠른</span>` : ""}<span>${x.act === "buy" ? "샀어요" : esc(x.why || "")}</span></div>`).join("")}</div></details>`
+      : `<div class="fl-empty">오늘은 아직 받은 종목이 없어요. 추천을 받으면 여기서 기준을 하나씩 통과해요.</div>
+        <div class="fl-rules">${fu.steps.filter((x) => ["winprob", "score", "rr", "fee", "chase"].includes(x.code)).map((x) => `<span>${esc(x.rule)}</span>`).join("")}</div>`;
+    // ④ 크기
+    const s4 = `<div class="fl-size"><div class="fl-sb"><i style="width:${Math.min(100, sz.pct).toFixed(1)}%"></i><span>굴리는 돈 ${M(sz.base)}</span></div>
+        <div class="fl-sz"><b>한 번에 ${sz.pct}% ≈ ${M(sz.alloc)}</b>
+          ${sz.warm ? `<span class="tag">검증 단계 ×${sz.warm_mult} · ${sz.warm_left}건 남음</span>` : ""}
+          ${sz.skip_watch ? `<span class="tag">관망이면 안 삼</span>` : `<span class="tag">관망이면 ×${sz.watch_mult}</span>`}
+          ${sz.min_one ? `<span class="tag">모의: 모자라도 1주</span>` : ""}</div>
+        <div class="fl-facts"><span>익절·손절 폭 = AI가 정한 폭 × ${sz.exit_mult}(최대 +${sz.tp_cap}% / −${sz.sl_cap}%)</span><span>남은 현금 ${M(sz.cash)}</span></div></div>`;
+    // ⑤ 주문
+    const s5 = `<div class="fl-two"><div class="fl-box on"><span class="fl-k">${F.order.mode === "real" ? "실전" : "모의"}</span><b>${esc(F.order.slip)}</b><small>오늘 산 것 ${F.order.today}건</small></div></div>`;
+    // ⑥ 들고 있기
+    const s6 = F.hold.length ? `<div class="fl-hold">${F.hold.map((h) => { const lo = -h.sl, hi = h.tp, X = (v) => Math.max(0, Math.min(100, (v - lo) / (hi - lo) * 100));
+      return `<div class="fl-h"><div class="fl-hh"><b>${stockA(mkt, h.sym, h.name)}</b><span>${h.qty}주${h.fill_ok ? "" : " · 체결 확인 중"}</span><b class="${tone(h.pct)}">${pct(h.pct, 2)}</b></div>
+        <div class="fl-gauge" role="img" aria-label="손절 −${h.sl}%, 익절 +${h.tp}%, 지금 ${pct(h.pct, 2)}"><span class="z" style="left:${X(0).toFixed(1)}%"></span>
+          ${h.high > 0 ? `<span class="hw" style="left:${X(h.high).toFixed(1)}%" title="보유 중 최고"></span>` : ""}<span class="me ${h.pct >= 0 ? "pos" : "neg"}" style="left:${X(h.pct).toFixed(1)}%"></span></div>
+        <div class="fl-gl"><span class="down">손절 −${h.sl}%</span>${h.trail ? `<span>최고점에서 −${h.trail}% 빠지면 추적 익절</span>` : ""}${h.exit ? `<span>${esc(h.exit)} 정리</span>` : ""}<span class="up">익절 +${h.tp}%</span></div></div>`; }).join("")}</div>`
+      : `<div class="fl-empty">들고 있는 종목이 없어요. 사면 여기서 익절·손절선 사이 어디쯤인지 보여요.</div>`;
+    // ⑦ 팔기: 길 다섯 개
+    const ways = [["익절", "목표에 닿음", "up"], ["손절", "손절선에 닿음", "down"], ["추적 익절", "최고점에서 밀림", "up"], [r.style === "day" ? "시간 정리" : "기간 정리", r.style === "day" ? "장 마감 전·정한 시각" : "보유 기간 끝", ""], ["종료 정리", "자동매매를 끝낼 때", ""]];
+    const exn = Object.fromEntries(F.exits.map((e) => [e.reason, e]));
+    const s7 = `<div class="fl-ways">${ways.map(([k, d, c]) => { const e = exn[k]; return `<div class="fl-w ${e ? "hit" : ""} ${c}"><b>${k}</b><small>${d}</small>${e ? `<em class="${tone(e.pnl)}">${e.n}건 · ${this.atM(mkt, e.pnl, true)}</em>` : `<em>오늘 0건</em>`}</div>`; }).join("")}</div>`;
+    // ⑧ 배우기
+    const s8 = `<div class="fl-learn">
+        <div>${ring(Math.min(L.review.n, L.review.every), L.review.every, "분석까지 거래")}<span><b>성적 분석</b><small>${L.review.every}건 또는 ${L.review.every_days}거래일마다(지금 ${L.review.days}일째) · ${L.review.auto ? "모의라 스스로 반영" : "개선안은 승인 후 반영"}</small></span></div>
+        <div>${ring(Math.min(L.engine.n, L.engine.need), L.engine.need, "엔진 판단까지 거래")}<span><b>엔진 점검</b><small>${L.engine.n ? `지금 엔진 평균 ${pct(L.engine.avg, 2)} · 이익 ${L.engine.win}% · ` : ""}${esc(L.engine.rule)}${L.engine.lock ? " · 더 올리지 않기로 함" : ""}</small></span></div>
+        ${L.pending ? `<div class="fl-pend">개선안 ${L.pending}건이 승인을 기다려요 → 현황 탭</div>` : ""}</div>
+      <div class="fl-loop" aria-hidden="true">↺ 다시 ① 점검으로</div>`;
+    const st = (n, t, sub, body, cls = "") => `<li class="fl-st ${cls} ${stage === n ? "now" : ""}"><span class="fl-n" aria-hidden="true">${n}</span>
+        <div class="fl-c"><div class="fl-t"><b>${t}</b>${here(n)}<small>${sub}</small></div>${body}</div></li>`;
+    return `<div class="fl-top ${stop ? "stop" : F.where === "ai" ? "ai" : "go"}"><span class="fl-dot"></span><div><b>${stop ? `① 점검에서 멈춤 · ${esc(stop.t)}` : F.where === "ai" ? "② AI 추천을 받는 중" : "② 다음 AI 추천을 기다리는 중"}</b>
+        <small>${esc(stop ? stop.why : (N && N.next.label) || "")}</small></div></div>
+      <ol class="fl">
+        ${st(1, "점검", "무료 · 엔진이 몇 초마다 위에서부터 차례로 봐요", s1)}
+        ${st(2, "AI 추천", "돈이 드는 단계 · 정밀과 빠른 재추천", s2)}
+        ${st(3, "거르기", "받은 종목이 기준을 하나씩 통과", s3)}
+        ${st(4, "크기 정하기", "한 번에 얼마나 살지", s4)}
+        ${st(5, "주문", r.mode === "real" ? "키움으로 실제 주문" : "앱 안의 가상 체결", s5)}
+        ${st(6, "들고 있기", F.hold.length ? `${F.hold.length}종목을 지키는 중` : "시세를 보며 팔 때를 기다림", s6, F.hold.length ? "busy" : "")}
+        ${st(7, "팔기", "다섯 가지 길 중 먼저 닿는 쪽", s7)}
+        ${st(8, "배우기", "쌓인 기록으로 스스로 고침", s8)}
+      </ol>`;
+  },
   atTab() {
     const A = this.at, d = A.d, el = $("#atBody");
     if (!el || !d) return;
     const r = d.run, mkt = r.mkt, M = (v, s) => this.atM(mkt, v, s), S = d.stats.all || { n: 0 };
     el.onclick = null;
+    if (A.tab === "flow") return this.atFlow(el, r.id);
     if (A.tab === "now") {
       const pend = d.proposals.filter((p) => p.status === "pending");
       const KIND = { buy: ["매수", "y"], sell: ["매도", ""], cycle: ["추천", ""], skip: ["쉼", ""], risk: ["한도", "warn"], review: ["분석", ""], control: ["조작", ""], start: ["시작", "y"], end: ["종료", ""] };
@@ -5358,7 +5449,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.
 // 홈·투자 홈의 자동매매 카드: 링크가 자동매매 화면으로 데려가기 전에, 그 자동매매의 현황이 바로 열리게 해 둔다
 document.addEventListener("click", (e) => {
   const g = e.target.closest && e.target.closest("[data-atgo]");
-  if (g) { const A = pages.invest.atState(); A.view = Number(g.dataset.atgo); A.tab = "now"; A.d = null; }
+  if (g) { const A = pages.invest.atState(); A.view = Number(g.dataset.atgo); A.tab = g.dataset.attab || "now"; A.d = null; }
   const lg = e.target.closest && e.target.closest("[data-labgo]");
   if (lg) { const A = pages.invest.atState(); A.view = "lab"; A.labId = Number(lg.dataset.labgo); A.labTab = "hold"; }
 }, true);

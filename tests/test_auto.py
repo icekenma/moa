@@ -1016,7 +1016,7 @@ def test_same_setup_runs_share_one_recommendation_and_cost_limit_is_clear(env, m
     assert n["kind"] == "at" and n["code"] == "aicost" and "한도를 올리면" in n["label"]
     # 한도를 올리면 바로 다시 받는다. AI 개선안으로는 못 바꾸는 값이다
     assert at.edit(paid, {"ai_daily_usd": "3"})["params"]["ai_daily_usd"] == 3.0 and "ai_daily_usd" not in PLAN_KEYS
-    assert at.gate_code(at._run(paid))[1] != "aicost" and at.edit(paid, {"ai_daily_usd": 999})["params"]["ai_daily_usd"] == 20.0
+    assert at.gate_code(at._run(paid))[1] != "aicost" and at.edit(paid, {"ai_daily_usd": 999})["params"]["ai_daily_usd"] == 200.0
 
 
 def test_free_precheck_watch_backoff_and_paper_buys_small_on_watch(env, monkeypatch):
@@ -1076,34 +1076,46 @@ def test_ai_cost_fits_the_budget_and_results_count_ai_cost(env, monkeypatch):
     per = {"claude-fable-5-2": 0.8, "claude-opus-5-5": 0.4, "claude-sonnet-5-5": 0.2, "claude-haiku-4-5": 0.1}
     monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (per[model] * (1 if web else 0.6), {"fx": 1400.0}))
     monkeypatch.setattr(env.rt.ai, "conf", lambda: {"model": "claude-fable-5-2", "web_search": True})
-    # 실전 60만: 월 1% = 6,000원 = $4.29 → 하루 3번을 지키면서 맞는 조합은 가장 싼 모델 · 웹 검색 없이($3.78)
+    # 하루 한도 = 시드에 비례(월 1%)하되 최소 $3. 실전 60만은 월 1%가 $4.29뿐이라 최소 $3/일 → 가장 좋은 모델 3번 · 웹 검색($2.4/일)
+    assert at.day_cap(600_000, "kr") == 3.0 and at.day_cap(30_000_000, "kr") == 10.2 and at.day_cap(100_000, "us") == 47.62
     pv = at.preview({"budget": 600_000, "mkt": "kr", "style": "day", "days": 20, "mode": "real", "model": "auto"})
     c = pv["cost"]
-    assert (pv["model"], pv["params"]["cycles_per_day"], pv["params"]["web_search"]) == ("claude-haiku-4-5", 3, False) and c["ok"] is True and c["auto"] is True
-    assert c["month_usd"] == 3.78 and c["pct"] == 0.88 and c["warn"] is None and pv["params"]["cycle_gap_min"] == 60 and pv["params"]["ai_daily_usd"] == 0.3
-    # 어떤 조합으로도 못 맞추면 가장 싼 조합으로 하고 숨기지 않고 알린다
-    monkeypatch.setitem(per, "claude-haiku-4-5", 0.5)
-    monkeypatch.setitem(per, "claude-sonnet-5-5", 0.6)
+    assert (pv["model"], pv["params"]["cycles_per_day"], pv["params"]["web_search"]) == ("claude-fable-5-2", 3, True) and c["ok"] is True and c["auto"] is True
+    assert c["month_usd"] == 50.4 and c["pct"] == 11.76 and c["cap_day"] == 3.0 and pv["params"]["ai_daily_usd"] == 3.0
+    assert "최소 $3" in c["warn"] and "본전" in c["warn"]                  # 시드 대비 비중이 크면 숨기지 않고 알린다
+    # 어떤 조합으로도 못 맞추면 가장 싼 조합으로 하고 알린다
+    for k in per:
+        monkeypatch.setitem(per, k, 6.0)
     pv2 = at.preview({"budget": 600_000, "mkt": "kr", "style": "day", "days": 20, "mode": "real", "model": "auto"})
     assert (pv2["model"], pv2["params"]["cycles_per_day"], pv2["params"]["web_search"]) == ("claude-haiku-4-5", 1, False) and pv2["cost"]["ok"] is False and "본전" in pv2["cost"]["warn"]
-    monkeypatch.setitem(per, "claude-haiku-4-5", 0.1)
-    monkeypatch.setitem(per, "claude-sonnet-5-5", 0.2)
+    per.update({"claude-fable-5-2": 0.8, "claude-opus-5-5": 0.4, "claude-sonnet-5-5": 0.2, "claude-haiku-4-5": 0.1})
     assert pv["ready"]["ok"] is False and "아직 실전을 권하지 않아요" in pv["ready"]["text"] and pv["params"]["skip_watch"] is True
-    # 실전 3,000만: $214까지 → 가장 좋은 모델로 3번이 들어온다
+    # 실전 3,000만: 월 1% = 하루 $10.2 → 한도도 $10.2
     pv = at.preview({"budget": 30_000_000, "mkt": "kr", "style": "day", "days": 20, "mode": "real", "model": "auto"})
-    assert (pv["model"], pv["params"]["cycles_per_day"], pv["cost"]["ok"], pv["cost"]["warn"]) == ("claude-fable-5-2", 3, True, None) and pv["params"]["ai_daily_usd"] == 3.4
-    # 실전 500만: $35.7 → 하루 3번을 지키는 가장 좋은 모델(Opus $25.2)
+    assert (pv["model"], pv["params"]["cycles_per_day"], pv["cost"]["ok"], pv["cost"]["warn"]) == ("claude-fable-5-2", 3, True, None) and pv["params"]["ai_daily_usd"] == 10.2
+    # 설정한 엔진이 Sonnet이면 거기까지만(성과가 나빠 올린 단계가 있으면 Opus·Fable까지)
+    monkeypatch.setattr(env.rt.ai, "conf", lambda: {"model": "claude-sonnet-5-5", "web_search": True})
     pv = at.preview({"budget": 5_000_000, "mkt": "kr", "style": "day", "days": 20, "mode": "real", "model": "auto"})
-    assert (pv["model"], pv["params"]["cycles_per_day"], pv["params"]["web_search"]) == ("claude-opus-5-5", 3, True)
-    # 모의: 하루 $0.6 목표 → 20분마다 빠른 재추천(14번) 몫을 먼저 떼고, 남은 돈으로 정밀 추천은 Sonnet 2번(시작할 때·한가운데)
+    assert (pv["model"], pv["params"]["cycles_per_day"], pv["params"]["web_search"]) == ("claude-sonnet-5-5", 3, True)
+    m, patch, cc = at.fit_cost(5_000_000, "kr", "day", "real", make_plan(5_000_000, "kr", "day", 20, "real"), "auto", ceil="claude-opus-5-5")
+    assert (m, patch["cycles_per_day"]) == ("claude-opus-5-5", 3)
+    m, patch, cc = at.fit_cost(5_000_000, "kr", "day", "real", make_plan(5_000_000, "kr", "day", 20, "real"), "auto", ceil="claude-fable-5-2")
+    assert (m, patch["cycles_per_day"]) == ("claude-fable-5-2", 3)
+    monkeypatch.setitem(per, "claude-fable-5-2", 2.0)                    # 3번이면 한도($3)를 넘는다 → 횟수·검색을 줄여서라도 Fable
+    m, patch, cc = at.fit_cost(5_000_000, "kr", "day", "real", make_plan(5_000_000, "kr", "day", 20, "real"), "auto", ceil="claude-fable-5-2")
+    assert (m, patch["cycles_per_day"], patch["web_search"]) == ("claude-fable-5-2", 2, False)
+    per["claude-fable-5-2"] = 0.8
+    monkeypatch.setattr(env.rt.ai, "conf", lambda: {"model": "claude-fable-5-2", "web_search": True})
+    # 직접 만든 모의도 최소 하루 $3 → 20분마다 빠른 재추천 + 정밀 추천 Fable 2번
     pv = at.preview({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 20, "mode": "paper", "model": "auto"})
     c = pv["cost"]
-    assert (pv["model"], pv["params"]["cycles_per_day"], c["ok"]) == ("claude-sonnet-5-5", 2, True) and pv["ready"] is None
+    assert (pv["model"], pv["params"]["cycles_per_day"], c["ok"]) == ("claude-fable-5-2", 2, True) and pv["ready"] is None and pv["params"]["ai_daily_usd"] == 3.0
     assert (pv["params"]["quick_gap_min"], c["quick_n"], pv["params"]["cycle_gap_min"], pv["params"]["web_search"]) == (20, 14, 160, True)
-    assert 0.5 < c["day_usd"] <= 0.6 and c["quick_usd"] < 0.02 and "빠른 재추천" in next(x["d"] for x in pv["plan"] if x["t"] == "추천 받기")
+    assert 1.6 < c["day_usd"] <= 3.0 and c["quick_usd"] < 0.02 and "빠른 재추천" in next(x["d"] for x in pv["plan"] if x["t"] == "추천 받기")
+    assert "Opus → Fable" in next(x["d"] for x in pv["plan"] if x["t"] == "추천 엔진")
     # 모델을 직접 고르면 바꾸지 않고 비용만 알려 준다(한도는 횟수에 맞춘다)
     pv = at.preview({"budget": 600_000, "mkt": "kr", "style": "day", "days": 20, "mode": "real", "model": "claude-fable-5-2"})
-    assert pv["model"] == "claude-fable-5-2" and pv["params"]["cycles_per_day"] == 3 and pv["cost"]["auto"] is False and pv["cost"]["pct"] == 11.76 and pv["params"]["ai_daily_usd"] == 3.4
+    assert pv["model"] == "claude-fable-5-2" and pv["params"]["cycles_per_day"] == 3 and pv["cost"]["auto"] is False and pv["cost"]["pct"] == 11.76 and pv["params"]["ai_daily_usd"] == 3.0
     # 손익에 AI 비용을 뺀 값이 함께 나온다
     rid = env.run()
     at.log(rid, "cycle", "x", {"usd": 0.5})
@@ -1621,3 +1633,79 @@ def test_learning_uses_full_scans_only(env):
     assert ap.stats(0, "", "", "day", "lite")["all"]["n"] == 3 and ap.stats(0, "", "", "day", "full")["all"]["n"] == 2
     c = create_app(env.rt).test_client()
     assert c.get("/api/ai/stats?h=day&kind=full").get_json()["all"]["n"] == 2
+
+
+# ---------- AI 비용 한도는 시드에 비례(최소 $3) · 성과가 나쁘면 엔진을 올린다 ----------
+def test_cost_cap_follows_seed_and_old_runs_get_it_once(env, monkeypatch):
+    at = env.at
+    per = {"claude-fable-5-2": 0.8, "claude-opus-5-5": 0.4, "claude-sonnet-5-5": 0.2, "claude-haiku-4-5": 0.1}
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (per[model] * (1 if web else 0.6), {"fx": 1400.0}))
+    monkeypatch.setattr(env.rt.ai, "conf", lambda: {"model": "claude-sonnet-5-5", "web_search": True})
+    rid = env.run(mode="paper")
+    env.rt.db.x("UPDATE at_runs SET model='claude-haiku-4-5', params=json_remove(json_set(params,'$.ai_daily_usd',0.4,'$.cycles_per_day',1),'$.cap_v') WHERE id=?", (rid,))
+    env.open = False
+    at.tick(force=True)
+    r = at._run(rid)
+    assert (r["params"]["ai_daily_usd"], r["params"]["cap_v"], r["model"]) == (3.0, 2, "claude-sonnet-5-5")
+    assert any("$0.4 → $3" in x["msg"] for x in env.rt.db.q("SELECT msg FROM at_log WHERE run_id=? AND kind='control'", (rid,)))
+    at.tick(force=True)
+    assert sum("$0.4 → $3" in x["msg"] for x in env.rt.db.q("SELECT msg FROM at_log WHERE run_id=? AND kind='control'", (rid,))) == 1
+    # 시드를 늘리면 한도도 따라 오른다(내리지는 않는다)
+    at.budget(rid, {"budget": 30_000_000})
+    assert at._run(rid)["params"]["ai_daily_usd"] == 10.2
+    at.budget(rid, {"budget": 3_000_000})
+    assert at._run(rid)["params"]["ai_daily_usd"] == 10.2
+
+
+def test_engine_moves_up_when_results_are_poor_and_back_if_worse(env, monkeypatch):
+    """정밀 추천으로 산 거래가 20건 쌓일 때마다 본다. 나쁘면 Sonnet → Opus → Fable, 올렸는데 더 나빠지면 되돌리고 멈춘다."""
+    at = env.at
+    per = {"claude-fable-5-2": 0.8, "claude-opus-5-5": 0.4, "claude-sonnet-5-5": 0.2, "claude-haiku-4-5": 0.1}
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (per[model] * (1 if web else 0.6), {"fx": 1400.0}))
+    monkeypatch.setattr(env.rt.ai, "conf", lambda: {"model": "claude-sonnet-5-5", "web_search": True})
+    notes = []
+    monkeypatch.setattr(env.rt, "notify", lambda m: notes.append(m))
+    rid = env.run(mode="paper")
+    env.rt.db.x("UPDATE at_runs SET model='claude-sonnet-5-5' WHERE id=?", (rid,))
+    env.open = False
+    day = [0]
+
+    def trades(n, pct, lite=False):
+        for i in range(n):
+            env.rt.db.x("INSERT INTO at_trades(run_id,ver,mkt,sym,name,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,exit_ts,exit_price,reason,pnl,pnl_pct,exit_day,why) "
+                        "VALUES(?,1,'kr','S','s',1,'closed',?, '2026-11-18','10:00',100,2,1,?,100,'손절',?,?,'2026-11-18',?)",
+                        (rid, "2099-01-01T10:00:00", "2099-01-01T11:00:00", pct, pct, json.dumps({"lite": lite})))
+
+    def check():
+        day[0] += 1
+        m0 = at._run(rid)["model"]
+        env.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.engine_day','x') WHERE id=?", (rid,))
+        at._engine_watch()
+        r = at._run(rid)
+        if r["model"] != m0:                                              # 바꾼 뒤부터 새로 센다: 앞 거래는 바꾸기 전 시각으로 옮겨 둔다
+            env.rt.db.x("UPDATE at_trades SET exit_ts='2000-01-01T00:00:00' WHERE run_id=?", (rid,))
+        return r
+    trades(19, -0.4)
+    trades(10, -2.0, lite=True)                                           # 빠른 재추천 거래는 엔진 판단에 넣지 않는다
+    assert check()["model"] == "claude-sonnet-5-5"
+    trades(1, -0.4)
+    r = check()
+    assert r["model"] == "claude-opus-5-5" and r["params"]["engine_ceil"] == "claude-opus-5-5" and r["params"]["engine_hist"][-1]["avg"] == -0.4
+    assert "Opus" in notes[-1] and "성과가 나빠" in notes[-1]
+    n = len(notes)
+    env.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.engine_day',?) WHERE id=?", (AP.mkt_date("kr"), rid))
+    at._engine_watch()
+    assert len(notes) == n                                                # 하루에 한 번만 본다
+    # Opus에서도 나쁘지만 덜 나쁨 → Fable
+    trades(20, -0.1)
+    r = check()
+    assert r["model"] == "claude-fable-5-2" and len(r["params"]["engine_hist"]) == 2
+    # Fable에서 더 나빠짐 → Opus로 되돌리고 멈춘다
+    trades(20, -0.9)
+    r = check()
+    assert r["model"] == "claude-opus-5-5" and r["params"]["engine_lock"] is True and "되돌렸어요" in notes[-1]
+    trades(20, -3.0)
+    assert check()["model"] == "claude-opus-5-5"
+    # 다른 설정(비용 한도 다시 맞추기)이 돌아도 올린 엔진을 지킨다
+    m, patch, _ = at.fit_cost(3_000_000, "kr", "day", "paper", at._run(rid)["params"], "auto", ceil=at._run(rid)["params"]["engine_ceil"])
+    assert m == "claude-opus-5-5"

@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261119.1813";
+const UI_VERSION = "261119.1831";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2037,7 +2037,7 @@ pages.invest = {
         <div class="at-cost-top"><span>AI 엔진${c.auto ? "(자동)" : ""}</span><b>${esc(c.label.split(" · ")[0])} · 하루 ${c.cycles}번${c.web ? "" : " · 웹 검색 없이"}</b></div>
         ${c.quick_gap ? `<div class="at-cost-top"><span>빠른 재추천</span><b>${c.quick_gap}분마다 · 하루 약 ${c.quick_n}번 · 한 번에 약 ${won(Math.max(1, Math.round(c.quick_usd * (c.fx || 1400))))}원</b></div>` : ""}
         <div class="at-cost-top"><span>한 달 AI 비용</span><b>약 ${kr ? `${won(c.month_cur)}원` : `$${c.month_usd}`}${real ? ` · 쓸 돈의 ${c.pct}%` : ""}</b></div>
-        ${c.warn ? `<div class="notice warn">${esc(c.warn)}</div>` : `<div class="tiny">${real ? "한 달 비용이 쓸 돈의 1%를 넘지 않게 맞췄어요." : "모의도 AI 비용은 실제로 나가요. 하루 $0.6 안에서 맞췄어요."}${c.auto && !c.web ? " 비용에 맞추느라 웹 검색(뉴스)을 뺐어요." : ""}${c.quick_gap ? " 빠른 재추천은 가장 싼 엔진으로 달라진 흐름만 다시 물어요(이미 다룬 종목은 빼고)." : ""}</div>`}
+        ${c.warn ? `<div class="notice warn">${esc(c.warn)}</div><div class="tiny">하루 AI 비용 한도 $${c.cap_day}(쓸 돈에 비례해 한 달 1%, 최소 하루 $3).</div>` : `<div class="tiny">하루 AI 비용 한도 $${c.cap_day}(쓸 돈에 비례해 한 달 1%, 최소 하루 $3) 안에서 맞췄어요.${real ? "" : " 모의도 AI 비용은 실제로 나가요."}${c.auto && !c.web ? " 비용에 맞추느라 웹 검색(뉴스)을 뺐어요." : ""}${c.quick_gap ? " 빠른 재추천은 가장 싼 엔진으로 달라진 흐름만 다시 물어요(이미 다룬 종목은 빼고)." : ""}</div>`}
         ${pv.ready ? `<div class="notice ${pv.ready.ok ? "" : "warn"}"><b>모의 검증</b> ${esc(pv.ready.text)}</div>` : ""}
       </div>`;
   },
@@ -2476,7 +2476,7 @@ pages.invest = {
         <b class="${tone(p)}">${p == null ? "-" : pct(p, 2)}</b></div>
       <div class="hx-tr-b"><span>산 때 ${esc(ts(t.entry_ts))} · ${P(t.entry_price)} × ${won(t.qty)}주</span>
         <span>${open ? `보유 중 · 지금 ${P(t.last)}` : `판 때 ${esc(ts(t.exit_ts))} · ${P(t.exit_price)} · ${esc(t.reason || "")}`}</span></div>
-      <div class="hx-tr-c">${t.mode === "real" ? `<span class="tag warn">실전</span>` : `<span class="tag">모의</span>`}${t.lite ? `<span class="tag y">빠른 재추천</span>` : ""}
+      <div class="hx-tr-c">${t.mode === "real" ? `<span class="tag warn">실전</span>` : `<span class="tag">모의</span>`}${t.lite ? `<span class="tag y">빠른 재추천</span>` : t.engine ? `<span class="tag">${esc(t.engine)}</span>` : ""}
         <span>목표 +${t.target_pct}% · 손절 −${t.stop_pct}%</span>${t.win_prob != null ? `<span>AI 승률 ${Math.round(t.win_prob)}%</span>` : ""}${t.score != null ? `<span>점수 ${Math.round(t.score)}</span>` : ""}
         ${t.stance ? `<span>${esc(t.stance)}</span>` : ""}${hold ? `<span>${hold} 보유</span>` : ""}${!open && t.pnl_krw ? `<span class="${tone(t.pnl_krw)}">${signed(t.pnl_krw)}원</span>` : ""}
         ${t.mfe_pct != null ? `<span>최대 +${Number(t.mfe_pct).toFixed(2)}% / −${Math.abs(Number(t.mae_pct || 0)).toFixed(2)}%</span>` : ""}</div>
@@ -2489,8 +2489,8 @@ pages.invest = {
     const per = qg ? 0.15 : N && N.ai.cycles_all ? N.ai.total_usd / N.ai.cycles_all : 0.8, need = Math.ceil((per * d.params.cycles_per_day + (qg ? 0.2 : 0)) * 2) / 2;
     openSheet("하루 AI 비용 한도", `<div class="at-bud">
         <div class="at-bud-now"><span>지금 한도 · 오늘 쓴 돈</span><b>$${cur} · $${N ? N.ai.today_usd.toFixed(2) : "0.00"}</b></div>
-        <label class="field">새 한도($, 0.2~20)<input id="alV" class="r big" inputmode="decimal" autocomplete="off" value="${Math.max(cur, need)}"></label>
-        <div class="chips">${[1, 2, 3, 5].map((v) => `<button type="button" class="chip" data-v="${v}">$${v}</button>`).join("")}</div>
+        <label class="field">새 한도($, 0.2~200)<input id="alV" class="r big" inputmode="decimal" autocomplete="off" value="${Math.max(cur, need)}"></label>
+        <div class="chips">${[3, 5, 10, 20].map((v) => `<button type="button" class="chip" data-v="${v}">$${v}</button>`).join("")}</div>
         <div class="tiny">${qg ? `정밀 추천은 한 번에 약 $0.1~0.2, ${qg}분마다 받는 빠른 재추천은 한 번에 약 $0.01이 들어요. 하루 일정을 다 받으려면 $${need} 정도면 돼요.` : `추천 한 번에 약 $${per.toFixed(2)}(약 ${won(Math.round(per * 1400 / 10) * 10)}원)가 들어요. 하루 ${d.params.cycles_per_day}번을 다 받으려면 $${need} 정도가 필요해요.`} 올리면 바로 다음 추천을 받아요. 조건이 같은 자동매매끼리는 추천을 한 번만 받아 함께 써요.</div>
         <button type="button" class="btn dark wide" id="alGo">한도 바꾸기</button></div>`, (box) => {
       box.addEventListener("click", (e) => { const c = e.target.closest("[data-v]"); if (c) $("#alV", box).value = c.dataset.v; });

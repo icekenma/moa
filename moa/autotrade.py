@@ -40,6 +40,10 @@ _SKIP_TEXT = (("승률", "winprob"), ("점수", "score"), ("손익비", "rr"), (
               ("꽉 참", "full"), ("이미 거래", "dup"), ("예비 종목", "auto"), ("시세", "quote"), ("매수 실패", "fail"))
 SHARE_SEC = 600        # 같은 조건의 추천을 함께 쓰는 시간(초)
 QUICK_MIN = 10         # 빠른 재추천의 가장 짧은 간격(분)
+# 정밀 추천 엔진 사다리. 성과가 나쁘면 한 칸씩 올린다(Sonnet → Opus → Fable). 하루 AI 비용 한도는 그대로 지킨다(필요하면 횟수를 줄여서)
+ENGINE_LADDER = ["claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2"]
+ESC_N = 20             # 엔진을 판단하는 데 필요한 정밀 추천 거래 수(지난번 바꾼 뒤부터)
+ESC_WIN = 45           # 이익 거래 비율이 이보다 낮거나, 한 번 평균이 0% 이하면 '성과가 나쁨'
 # 매매 기록에 함께 보여 주는 지수(시장마다 첫째가 대표 지수: '그날 지수' 기준별 성적에 쓴다)
 IDX = {"kr": (("코스피", "^KS11"), ("코스닥", "^KQ11")), "us": (("S&P 500", "^GSPC"), ("나스닥", "^IXIC"))}
 QUICK_GAP = {"day": 20, "swing": 60, "month": 90}   # 모의의 빠른 재추천 간격(분): 단타는 분봉이 바뀌는 속도, 스윙·장기는 하루 몇 번
@@ -77,6 +81,11 @@ PLAN_KEYS = {
     "idx_floor": (-5.0, 0.0, float, "지수가 이만큼 내리면 AI를 부르지 않음(%, 0=끔)"),
     "exit_mult": (0.3, 3.0, float, "AI가 낸 익절·손절 폭에 곱하는 배수"),
 }
+
+
+def _short_model(model):
+    from .ai import MODELS
+    return MODELS[model][0].split(" · ")[0] if model in MODELS else str(model or "")
 
 
 # 예전 판 자동매매에 없던 플랜 값 → 그 판의 동작과 같은 값
@@ -162,8 +171,9 @@ def apply_variant(p, key, keep=()):
 READY_DAYS = 10        # 그리고 그 거래가 이만큼의 거래일에 걸쳐 있어야 한다(하루 이틀의 운을 거른다)
 READY_N = 30           # 실전을 권하려면 모의에서 끝난 거래가 이만큼은 있어야 한다
 MONTH_DAYS = 21        # 한 달 거래일
-COST_PCT = 1.0         # 실전: 한 달 AI 비용이 쓸 돈의 이 비율(%)을 넘지 않게
-PAPER_DAY_USD = 0.6    # 모의·실험: 하루 AI 비용 목표(달러)
+COST_PCT = 1.0         # 직접 만든 자동매매: 한 달 AI 비용 한도 = 쓸 돈(시드머니)의 이 비율(%) …
+RUN_DAY_MIN_USD = 3.0  # … 다만 하루 이 금액(달러)보다는 적게 잡지 않는다(시드가 작아도 좋은 엔진·뉴스 검색을 쓰게)
+PAPER_DAY_USD = 0.6    # 실험 묶음을 직접 만들 때 하루 AI 비용 목표(달러). 자동 테스트는 AUTO_SET
 # 모의 자동 테스트: 사용자는 켜고 끄기만 한다. 시장·방식별 실험 묶음을 앱이 만들고, 끝나면 다시 만든다.
 # (시장, 방식) → (하루 AI 비용 상한 달러, 플랜마다 쓰는 가상 돈). 모두 합쳐 하루 AUTO_DAY_USD(3달러)
 # 가상 돈은 넉넉히 준다: 값이 비싼 종목도 플랜대로 살 수 있어야 '플랜'을 시험할 수 있다(돈이 모자라 못 사는 것은 시험이 아니다)
@@ -191,6 +201,9 @@ def plan_text(run):
         {"t": "비용 아끼기", "d": (f"지수가 {p['idx_floor']:g}% 넘게 내린 날은 AI를 부르지 않고 쉬어요(무료 점검). " if p.get("idx_floor") else "")
                                 + ("관망을 받으면 지수가 회복되거나 추천 간격의 두 배가 지날 때까지 다시 묻지 않아요." if p["skip_watch"] or not p.get("quick_gap_min")
                                    else "이미 보유했거나 오늘 거래한 종목은 후보에서 빼고 물어, 같은 답에 돈을 쓰지 않아요.")},
+        {"t": "추천 엔진", "d": (f"정밀 추천은 {_short_model(run.get('model'))}" if run.get("model") else "정밀 추천 엔진은 비용 한도 안에서 앱이 골라요")
+                               + f". 정밀 추천으로 산 거래가 {ESC_N}건 쌓일 때마다 성과를 보고, 나쁘면(평균 0% 이하·이익 {ESC_WIN}% 미만) Opus → Fable로 한 칸씩 올려요"
+                               + "(하루 AI 비용 한도 안에서, 나빠지면 되돌림)."},
         {"t": "파는 기준", "d": f"익절 최대 +{p['tp_cap']:g}%, 손절 최대 -{p['sl_cap']:g}% 안에서 AI가 종목마다 정해요."},
         {"t": "추천 받기", "d": (f"정밀 추천(뉴스 검색 포함) 하루 최대 {p['cycles_per_day']}번 + 그 사이 {p['quick_gap_min']}분마다 빠른 재추천(가장 싼 엔진, 이미 다룬 종목은 빼고 새 후보만). "
                                  if p.get("quick_gap_min") else f"하루 최대 {p['cycles_per_day']}번, ")
@@ -435,14 +448,22 @@ class AutoTrade:
         (h1, m1), (h2, m2) = (map(int, p[k].split(":")) for k in ("entry_start", "entry_end"))
         return max(0, (h2 * 60 + m2) - (h1 * 60 + m1))
 
-    def fit_cost(self, budget, mkt, style, mode, p, model, day_usd=None):
-        """AI 비용을 쓸 돈에 맞춘다. 실전은 한 달 비용이 쓸 돈의 1%를, 모의는 하루 0.6달러를 넘지 않게
-        모델·하루 횟수·웹 검색을 고른다(model이 'auto'일 때). 직접 고른 모델이면 계산만 해서 알려 준다.
+    def day_cap(self, budget, mkt):
+        """직접 만든 자동매매의 하루 AI 비용 한도(달러): 시드머니에 비례(한 달 COST_PCT%), 최소 하루 RUN_DAY_MIN_USD."""
+        usd = budget / (self.rt.ai.fx() if mkt == "kr" else 1.0)
+        return round(max(RUN_DAY_MIN_USD, usd * COST_PCT / 100 / MONTH_DAYS), 2)
+
+    def fit_cost(self, budget, mkt, style, mode, p, model, day_usd=None, ceil=None):
+        """AI 비용을 쓸 돈에 맞춘다. 직접 만든 자동매매(실전·모의)는 하루 한도 = 시드머니에 비례(한 달 1%), 최소 $3.
+        실험 묶음은 day_usd(자동 테스트가 정한 몫)를 넘지 않게. 모델·하루 횟수·웹 검색을 고른다(model이 'auto'일 때).
+        직접 고른 모델이면 계산만 해서 알려 준다.
         빠른 재추천이 켜져 있으면 그 몫을 먼저 떼고, 남은 돈으로 정밀 추천(좋은 엔진·뉴스 검색)을 맞춘다.
         반환: (모델, 바뀐 플랜 값, 안내)"""
         from .ai import MODELS
         fx = self.rt.ai.fx()
-        cap_month = (budget / (fx if mkt == "kr" else 1.0)) * COST_PCT / 100 if mode == "real" else (day_usd or PAPER_DAY_USD) * MONTH_DAYS
+        lab = day_usd is not None
+        cap_day = float(day_usd) if lab else self.day_cap(budget, mkt)
+        cap_month = cap_day * MONTH_DAYS
         conf = self.rt.ai.conf().get("model") or "claude-sonnet-5-5"
         win, q_per = self._window(p), self._quick_usd()
 
@@ -462,45 +483,41 @@ class AutoTrade:
         if model != "auto":
             c = info(model, p["cycles_per_day"], bool(p.get("web_search", True)), qg0)
             c["auto"] = False
-            return model, {"ai_daily_usd": max(1.0, limit(c))}, c
+            c["cap_day"] = cap_day
+            return model, {"ai_daily_usd": cap_day if not lab else max(1.0, limit(c))}, c
         order = sorted(MODELS, key=lambda k: -MODELS[k][1])                     # 비싼(좋은) 모델부터
-        order = [m for m in order if MODELS[m][1] <= MODELS.get(conf, MODELS["claude-sonnet-5-5"])[1]] or order[-1:]
-        best = None
-        if qg0:
-            # 자주 묻는 일은 빠른 재추천이 맡으니, 정밀 추천은 하루 2번(시작할 때·한가운데)까지만 받고
-            # 뉴스 검색 → 횟수 → 좋은 엔진 순으로 지킨다. 그래도 넘으면 빠른 재추천 간격을 넓힌다
-            for qg in [g for g in (qg0, 30, 45, 60, 90, 120) if g >= qg0]:
-                for web in (True, False):
-                    for cycles in range(min(p["cycles_per_day"], 2), 0, -1):
-                        for mdl in order:
-                            c = info(mdl, cycles, web, qg)
-                            if c["ok"]:
-                                best = c
-                                break
-                        if best:
-                            break
-                    if best:
-                        break
-                if best:
-                    break
-            if not best:
-                best = info(order[-1], 1, False, 120)
-        else:                                         # 하루 횟수 → 웹 검색(뉴스) → 좋은 모델 순으로 지킨다
-            for cycles in range(p["cycles_per_day"], 0, -1):
+        # 쓸 수 있는 가장 좋은 엔진: 설정한 엔진까지. 성과가 나빠 올린 단계(ceil)가 있으면 거기까지(Opus·Fable)
+        top = max(MODELS.get(conf, MODELS["claude-sonnet-5-5"])[1], MODELS[ceil][1] if ceil in MODELS else 0)
+        order = [m for m in order if MODELS[m][1] <= top] or order[-1:]
+
+        def search(order):
+            if qg0:
+                # 자주 묻는 일은 빠른 재추천이 맡으니, 정밀 추천은 하루 2번(시작할 때·한가운데)까지만 받고
+                # 뉴스 검색 → 횟수 → 좋은 엔진 순으로 지킨다. 그래도 넘으면 빠른 재추천 간격을 넓힌다
+                for qg in [g for g in (qg0, 30, 45, 60, 90, 120) if g >= qg0]:
+                    for web in (True, False):
+                        for cycles in range(min(p["cycles_per_day"], 2), 0, -1):
+                            for mdl in order:
+                                c = info(mdl, cycles, web, qg)
+                                if c["ok"]:
+                                    return c
+                return None
+            for cycles in range(p["cycles_per_day"], 0, -1):        # 하루 횟수 → 웹 검색(뉴스) → 좋은 모델 순으로 지킨다
                 for web in (True, False):
                     for mdl in order:
                         c = info(mdl, cycles, web)
                         if c["ok"]:
-                            best = c
-                            break
-                    if best:
-                        break
-                if best:
-                    break
-            if not best:
-                best = info(order[-1], 1, False)                                 # 가장 싼 조합으로도 넘는다 → 알리고 그 조합으로
+                            return c
+            return None
+        # 엔진을 올린 단계면 그 엔진을 먼저 지킨다(횟수를 줄여서라도). 한도 안에 못 들면 평소대로
+        up = ceil in MODELS and MODELS[ceil][1] > MODELS.get(conf, MODELS["claude-sonnet-5-5"])[1]
+        best = (search([ceil]) if up else None) or search(order)
+        if not best:
+            best = info(order[-1], 1, False, 120 if qg0 else 0)                  # 가장 싼 조합으로도 넘는다 → 알리고 그 조합으로
         best["auto"] = True
-        patch = {"cycles_per_day": best["cycles"], "web_search": best["web"], "ai_daily_usd": max(0.3, limit(best))}
+        best["cap_day"] = cap_day
+        # 하루 한도: 직접 만든 것은 시드에 비례한 한도 그대로(쓸 수 있는 만큼), 실험은 예상 비용의 1.4배
+        patch = {"cycles_per_day": best["cycles"], "web_search": best["web"], "ai_daily_usd": cap_day if not lab else max(0.3, limit(best))}
         if qg0:
             # 정밀 추천은 매수 시간에 고르게 편다(예: 2번이면 시작할 때와 한가운데)
             patch.update(quick_gap_min=best["quick_gap"], cycle_gap_min=int(min(240, max(60, win // best["cycles"]))))
@@ -545,9 +562,12 @@ class AutoTrade:
         var = d.get("variant") if d.get("variant") in VARIANTS else None
         if var:                                      # 모의 실험에서 검증한 플랜을 그대로 가져온다(실전은 관망에 쉬는 것을 지킨다)
             apply_variant(p, var, keep=("skip_watch", "watch_mult") if mode == "real" else ())
-        run = {"mkt": mkt, "style": style, "budget": budget, "params": p, "mode": mode}
+        run = {"mkt": mkt, "style": style, "budget": budget, "params": p, "mode": mode, "model": model}
         _, m = self._per_usd(style, model, p["web_search"])
         warn = None
+        if cost["ok"] and mode == "real" and cost["pct"] > COST_PCT * 1.5:
+            warn = (f"AI 비용이 한 달에 약 {cost['month_cur']:,.0f}{'원' if mkt == 'kr' else '달러'}로, 쓸 돈의 {cost['pct']:g}%예요. "
+                    f"하루 최소 ${RUN_DAY_MIN_USD:g}를 쓰게 해 두어서 쓸 돈이 적으면 비중이 커요. 매매로 이만큼을 더 벌어야 본전이에요.")
         if not cost["ok"]:
             warn = (f"AI 비용이 한 달에 약 {cost['month_cur']:,.0f}{'원' if mkt == 'kr' else '달러'}로, 쓸 돈의 {cost['pct']:g}%예요. 매매로 이만큼을 더 벌어야 본전이에요."
                     if mode == "real" else f"AI 비용이 한 달에 약 ${cost['month_usd']:g}예요(모의도 AI 비용은 실제로 나가요).")
@@ -579,7 +599,7 @@ class AutoTrade:
         rid = self.rt.db.x(
             "INSERT INTO at_runs(created_at,name,mode,mkt,style,model,budget,start_date,end_date,status,params) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (self._now(), name, mode, pv["mkt"], pv["style"], pv["model"], pv["budget"], today.isoformat(), end.isoformat(),
-             "running", json.dumps(pv["params"], ensure_ascii=False)))
+             "running", json.dumps(dict(pv["params"], cap_v=2), ensure_ascii=False)))
         self.rt.db.x("INSERT INTO at_changes(run_id,ts,ver,source,changes,stats) VALUES(?,?,?,?,?,?)",
                      (rid, self._now(), 1, "start", json.dumps([], ensure_ascii=False), None))
         self.log(rid, "start", f"자동매매를 시작했어요 · {name}", {"params": pv["params"]})
@@ -630,6 +650,8 @@ class AutoTrade:
         self._last = time.time()
         try:
             self._upgrade()
+            self._cap_upgrade()
+            self._engine_watch()
             self._autopilot()
         except Exception as e:
             self.rt.db.log("system", "error", f"모의 자동 테스트 오류: {type(e).__name__}: {e}", self._now())
@@ -1885,6 +1907,10 @@ class AutoTrade:
             raise ValueError("실전은 실제 주문이 나가요. 늘리려면 확인란에 '실전'을 적어 주세요")
         self.rt.db.x("UPDATE at_runs SET budget=? WHERE id=?", (new, rid))
         self.log(rid, "control", f"쓸 돈 {mon(old)} → {mon(new)}({'+' if new > old else '-'}{mon(abs(new - old))})", {"budget": {"from": old, "to": new}})
+        cap = self.day_cap(new, mkt)
+        if not run.get("lab_id") and cap > float(p.get("ai_daily_usd") or 0):     # 시드가 늘면 하루 AI 비용 한도도 따라 늘린다(줄이지는 않는다)
+            self.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.ai_daily_usd',?) WHERE id=?", (cap, rid))
+            self.log(rid, "control", f"쓸 돈에 맞춰 하루 AI 비용 한도를 ${cap:g}로 올렸어요", {"ai_daily_usd": cap})
         if fit and d.get("fit"):
             self.edit(rid, {"max_positions": fit["max_positions"][1], "per_trade_pct": fit["per_trade_pct"][1]})
         return self.detail(rid)
@@ -1902,7 +1928,7 @@ class AutoTrade:
                 raise ValueError("실전은 개선안을 직접 승인해야 반영돼요")
             opts["auto_apply"] = on
         if (patch or {}).get("ai_daily_usd") not in (None, ""):     # 하루 AI 비용 한도: 사용자만 바꾼다
-            opts["ai_daily_usd"] = round(min(max(float(patch["ai_daily_usd"]), 0.2), 20.0), 2)
+            opts["ai_daily_usd"] = round(min(max(float(patch["ai_daily_usd"]), 0.2), 200.0), 2)
         if (patch or {}).get("review_days") not in (None, ""):
             opts["review_days"] = int(min(max(float(patch["review_days"]), 2), 20))
         opts = {k: v for k, v in opts.items() if p.get(k) != v}
@@ -2022,6 +2048,100 @@ class AutoTrade:
             "style_label": STYLES[run["style"]]["label"], "lab_id": run.get("lab_id"), "variant": run.get("variant")}
 
     # ------------------------------------------------------------------ 모의 자동 테스트(켜고 끄기만)
+    @staticmethod
+    def _short(model):
+        from .ai import MODELS
+        return MODELS[model][0].split(" · ")[0] if model in MODELS else str(model)
+
+    def _engine_watch(self):
+        """정밀 추천 엔진의 성과를 하루 한 번 본다(자동매매마다, 실험은 묶음마다).
+        지난번 엔진을 바꾼 뒤 정밀 추천으로 산 거래가 ESC_N건 쌓였는데 성과가 나쁘면 엔진을 한 칸 올린다(Sonnet → Opus → Fable).
+        올렸는데 앞 엔진보다 더 나빠졌으면 앞 엔진으로 되돌리고 더는 올리지 않는다(비싼 엔진에 돈만 쓰지 않게).
+        하루 AI 비용 한도는 그대로 지킨다: 비싼 엔진은 정밀 추천 횟수를 줄여서라도 한도 안에 맞춘다."""
+        groups = {}
+        for r in self._runs("WHERE status='running'"):
+            groups.setdefault(("lab", r["lab_id"]) if r["lab_id"] else ("run", r["id"]), []).append(r)
+        for (kind, _), rs in groups.items():
+            b = next((x for x in rs if x["variant"] == "base"), rs[0])
+            day = AP.mkt_date(b["mkt"])
+            if b["params"].get("engine_day") == day:
+                continue
+            try:
+                self._engine_check(rs, b, day, kind == "lab")
+            except Exception as e:
+                self.rt.db.log("system", "error", f"추천 엔진 점검 실패({b['id']}): {type(e).__name__}: {e}", self._now())
+                for r in rs:
+                    self.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.engine_day',?) WHERE id=?", (day, r["id"]))
+
+    def engine_stats(self, rs, since):
+        """정밀 추천(빠른 재추천 제외)으로 산 끝난 거래의 성적. rs: 같은 엔진을 쓰는 자동매매들."""
+        ids = [r["id"] for r in rs]
+        rows = self.rt.db.q(f"SELECT pnl_pct, why FROM at_trades WHERE run_id IN ({','.join('?' * len(ids))}) AND status='closed' AND COALESCE(exit_ts,'')>=?", (*ids, since))
+        xs = [float(t["pnl_pct"] or 0) for t in rows if '"lite": true' not in (t["why"] or "")]
+        if not xs:
+            return {"n": 0, "avg": None, "win": None}
+        return {"n": len(xs), "avg": round(sum(xs) / len(xs), 2), "win": round(sum(1 for x in xs if x > 0) / len(xs) * 100)}
+
+    def _engine_check(self, rs, b, day, lab):
+        p = b["params"]
+        since = p.get("engine_since") or b["created_at"]
+        st = self.engine_stats([b] if lab else rs, since)        # 실험은 '기본' 플랜으로 본다(같은 추천을 열 플랜이 나눠 써서 건수만 부풀지 않게)
+        patch, ceil, up, lock, why = {"engine_day": day}, None, False, bool(p.get("engine_lock")), ""
+        cur = b["model"]
+        hist = list(p.get("engine_hist") or [])
+        if st["n"] >= ESC_N and not lock:
+            poor = st["avg"] <= 0 or st["win"] < ESC_WIN
+            prev = hist[-1] if hist else None
+            line = f"{self._short(cur)} {st['n']}건 · 한 번 평균 {st['avg']:+.2f}% · 이익 {st['win']}%"
+            if prev and prev.get("up") and st["avg"] < prev["avg"]:
+                ceil, lock = prev["model"], True
+                why = f"{line}로, 올리기 전 {self._short(prev['model'])}({prev['avg']:+.2f}%)보다 나빠 되돌렸어요. 더는 올리지 않아요"
+            elif poor:
+                i = ENGINE_LADDER.index(cur) if cur in ENGINE_LADDER else 1
+                if i + 1 < len(ENGINE_LADDER):
+                    ceil, up = ENGINE_LADDER[i + 1], True
+                    why = f"{line}로 성과가 나빠 정밀 추천 엔진을 {self._short(ceil)}로 올려요"
+            if ceil:
+                hist.append({"model": cur, "n": st["n"], "avg": st["avg"], "win": st["win"], "at": self._now(), "up": up})
+        if ceil:
+            p0 = dict(p, cycles_per_day=max(int(p.get("cycles_per_day") or 1), make_plan(b["budget"], b["mkt"], b["style"], 30, b["mode"])["cycles_per_day"]))
+            model, fit, c = self.fit_cost(b["budget"], b["mkt"], b["style"], b["mode"], p0, "auto", p.get("lab_day_usd") if lab else None, ceil=ceil)
+            if not lab:
+                fit["ai_daily_usd"] = max(float(p.get("ai_daily_usd") or 0), fit["ai_daily_usd"])     # 한도는 내리지 않는다
+            patch.update(fit, engine_ceil=ceil, engine_since=self._now(), engine_hist=hist[-8:], engine_lock=lock)
+            if up and model != ceil:
+                why += f" — 다만 하루 AI 비용 한도(${c.get('cap_day', 0):g}) 안에 들지 않아 {self._short(model)}로 두었어요"
+            why += f" · 정밀 추천 {self._short(model)} 하루 {fit.get('cycles_per_day')}번{'' if fit.get('web_search', True) else '(뉴스 검색 없이)'}"
+        else:
+            model = cur
+        for r in rs:
+            self.rt.db.x("UPDATE at_runs SET params=?, model=? WHERE id=?", (json.dumps(dict(r["params"], **patch), ensure_ascii=False), model, r["id"]))
+        if why:
+            self.log(b["id"], "control", f"추천 엔진 점검 · {why}", {"engine": {"from": cur, "to": model, "ceil": ceil, "stats": st, "lock": lock}})
+            self.rt.notify(f"[moa 자동매매] {'실험 ' if lab else ''}{b['name']}: {why}")
+
+    def _cap_upgrade(self):
+        """시드머니에 비례한 하루 AI 비용 한도(최소 $3)를 예전 판에서 시작한 직접 만든 자동매매에 한 번 적용한다.
+        한도는 내리지 않는다. 엔진·정밀 추천 횟수·뉴스 검색은 새 한도에 맞춰 다시 고른다(빠른 재추천 간격은 그대로)."""
+        from .ai import MODELS
+        for r in self._runs("WHERE lab_id IS NULL AND status IN ('running','paused')"):
+            p = r["params"]
+            if p.get("cap_v") == 2:
+                continue
+            cap = self.day_cap(r["budget"], r["mkt"])
+            try:
+                p0 = dict(p, cycles_per_day=max(int(p.get("cycles_per_day") or 1), make_plan(r["budget"], r["mkt"], r["style"], 30, r["mode"])["cycles_per_day"]))
+                model, patch, c = self.fit_cost(r["budget"], r["mkt"], r["style"], r["mode"], p0, "auto", ceil=p.get("engine_ceil"))
+            except Exception as e:
+                self.rt.db.log("system", "error", f"AI 비용 한도 맞추기 실패({r['id']}): {type(e).__name__}: {e}", self._now())
+                continue
+            patch["ai_daily_usd"] = max(float(p.get("ai_daily_usd") or 0), cap)
+            patch["cap_v"] = 2
+            self.rt.db.x("UPDATE at_runs SET params=?, model=? WHERE id=?", (json.dumps(dict(p, **patch), ensure_ascii=False), model, r["id"]))
+            self.log(r["id"], "control", f"하루 AI 비용 한도를 ${float(p.get('ai_daily_usd') or 1):g} → ${patch['ai_daily_usd']:g}로 올렸어요(시드머니에 비례, 최소 ${RUN_DAY_MIN_USD:g}) · "
+                                         f"정밀 추천 {MODELS[model][0].split(' · ')[0]} 하루 {patch.get('cycles_per_day', p.get('cycles_per_day'))}번"
+                                         f"{'' if patch.get('web_search', True) else '(뉴스 검색 없이)'}", {"patch": patch, "model": model})
+
     def _upgrade(self):
         """예전 판에서 시작한 자동매매에 '빠른 재추천'을 붙인다(자동매매마다 한 번).
         모의·실험은 켠다(실험은 하루 비용 상한 안에서 정밀 추천 횟수까지 다시 맞춘다). 실전은 꺼 둔 채로 두고, 사용자가 플랜에서 켠다."""
@@ -2041,7 +2161,8 @@ class AutoTrade:
             patch, model = {"quick_gap_min": qg}, b["model"]
             try:
                 p0 = dict(b["params"], quick_gap_min=qg, cycles_per_day=make_plan(b["budget"], b["mkt"], b["style"], 30, "paper")["cycles_per_day"])
-                model, patch, _ = self.fit_cost(b["budget"], b["mkt"], b["style"], "paper", p0, "auto", AUTO_SET.get((b["mkt"], b["style"]), (PAPER_DAY_USD,))[0])
+                model, patch, _ = self.fit_cost(b["budget"], b["mkt"], b["style"], "paper", p0, "auto", AUTO_SET.get((b["mkt"], b["style"]), (PAPER_DAY_USD,))[0],
+                                                ceil=b["params"].get("engine_ceil"))
             except Exception as e:
                 self.rt.db.log("system", "error", f"실험 추천 주기 맞추기 실패: {type(e).__name__}: {e}", self._now())
             patch["lab_day_usd"] = AUTO_SET.get((b["mkt"], b["style"]), (PAPER_DAY_USD,))[0]
@@ -2135,7 +2256,7 @@ class AutoTrade:
             was = b["params"].get("lab_day_usd")
             p0 = dict(b["params"], quick_gap_min=QUICK_GAP[b["style"]], cycles_per_day=make_plan(b["budget"], b["mkt"], b["style"], 30, "paper")["cycles_per_day"])
             try:
-                model, patch, c = self.fit_cost(b["budget"], b["mkt"], b["style"], "paper", p0, "auto", want)
+                model, patch, c = self.fit_cost(b["budget"], b["mkt"], b["style"], "paper", p0, "auto", want, ceil=b["params"].get("engine_ceil"))
             except Exception as e:
                 self.rt.db.log("system", "error", f"실험 비용 다시 맞추기 실패: {type(e).__name__}: {e}", self._now())
                 continue
@@ -2331,6 +2452,13 @@ class AutoTrade:
             t.update(strat=key_of[t["run_id"]], mode=r["mode"], style=r["style"], lite=bool(why.get("lite")), pnl_krw=round(krw(t["pnl"], t["mkt"]), 2),
                      hour=(t["entry_hm"] or "")[:2], dow="월화수목금토일"[datetime.strptime(t["entry_day"], "%Y-%m-%d").weekday()],
                      catalyst=why.get("catalyst") or "", reasons=(why.get("reasons") or [])[:2])
+        pids = sorted({t["pick_id"] for t in trades if t.get("pick_id")})
+        eng = {}
+        for i in range(0, len(pids), 500):
+            ch = pids[i:i + 500]
+            eng.update({r["id"]: r["model"] for r in self.rt.db.q(f"SELECT id, model FROM ai_picks WHERE id IN ({','.join('?' * len(ch))})", ch)})
+        for t in trades:
+            t["engine"] = _short_model(eng.get(t.get("pick_id"))) if eng.get(t.get("pick_id")) else None
         closed = [t for t in trades if t["status"] == "closed" and (t["exit_day"] or t["entry_day"]) >= since]
 
         def agg(rows):
@@ -2431,6 +2559,7 @@ class AutoTrade:
             return None if t["score"] is None else "70 미만" if t["score"] < 70 else "70~80" if t["score"] < 80 else "80 이상"
         groups = [group("파는 사유", lambda t: t["reason"] or "기타"),
                   group("추천 종류", lambda t: "빠른 재추천" if t["lite"] else "정밀 추천", ["정밀 추천", "빠른 재추천"]),
+                  group("정밀 추천 엔진", lambda t: None if t["lite"] else t["engine"], ["Haiku 4.5", "Sonnet 5.5", "Opus 5.5", "Fable 5.2"]),
                   group("시장 · 방식", lambda t: f"{'국내' if t['mkt'] == 'kr' else '미국'} {STYLES[t['style']]['label']}"),
                   group("실전 · 모의", lambda t: "실전" if t["mode"] == "real" else "모의", ["실전", "모의"]),
                   group("산 시각(그 시장 기준)", lambda t: f"{t['hour']}시" if t["hour"] else None, [f"{h:02d}시" for h in range(24)]),
@@ -2453,7 +2582,7 @@ class AutoTrade:
                    buys=sum(1 for t in trades if t["entry_day"] >= since), days=len(out_d))
         keep = ("id", "strat", "mode", "mkt", "style", "sym", "name", "qty", "status", "entry_ts", "entry_day", "entry_hm", "entry_price", "exit_ts", "exit_day",
                 "exit_price", "last", "reason", "pnl", "pnl_krw", "pnl_pct", "hold_min", "mfe_pct", "mae_pct", "target_pct", "stop_pct", "score", "win_prob", "stance",
-                "lite", "catalyst", "reasons", "idx_pct")
+                "lite", "catalyst", "reasons", "idx_pct", "engine")
         sel = [t for t in trades if (not one or t["entry_day"] == one or t.get("exit_day") == one)]
         sel.sort(key=lambda t: t.get("exit_ts") or t["entry_ts"], reverse=True)
         out = dict(empty, strategies=out_s, days=out_d, groups=groups, symbols=syms, total=tot,

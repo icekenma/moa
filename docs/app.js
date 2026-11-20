@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261121.0738";
+const UI_VERSION = "261121.0748";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -673,26 +673,30 @@ const pgSheet = {
     const d = document.createElement("div");
     d.className = "pgs"; d.id = "pgs"; d.hidden = true;
     d.innerHTML = `<div class="pgs-bd"></div><section class="pgs-in" role="dialog" aria-modal="true" aria-label="자세히 보기" tabindex="-1">
-      <div class="pgs-head"><i class="pgs-grab" aria-hidden="true"></i><button type="button" class="pgs-x" id="pgsClose" aria-label="닫기">${CLOSE_ICO}</button></div>
+      <div class="pgs-head"><i class="pgs-grab" aria-hidden="true"></i><b class="pgs-tt" id="pgsTitle"></b><span class="pgs-rt" id="pgsRight"></span><button type="button" class="pgs-x" id="pgsClose" aria-label="닫기">${CLOSE_ICO}</button></div>
       <div class="pgs-body" id="pgsBody"></div></section>`;
     document.body.appendChild(d);
     $(".pgs-bd", d).onclick = () => this.close();
     $("#pgsClose", d).onclick = () => this.close();
     dragDismiss($(".pgs-in", d), () => $("#pgsBody"), () => this.close(false, true));
     document.addEventListener("keydown", (e) => { if (e.key === "Escape" && this.open && !sheet.open && !$(".cz")) this.close(); });
-    window.addEventListener("popstate", () => { if (this.skipPop) { this.skipPop = false; return; } if (this.open) this.close(false, false, true); });
+    window.addEventListener("popstate", () => { if (this.skipPop) { this.skipPop = false; return; } if (this.open && !this.noHist && location.hash === this.hashAt) this.close(false, false, true); });   // 주소가 바뀐 이동은 화면 전환 쪽에서 처리한다
     return (this.el = d);
   },
   // key가 바뀔 때만 맨 위로 올린다(같은 화면을 다시 그릴 때는 보던 자리 그대로)
-  show(key, onClose) {
-    const d = this.el || this.make(), was = this.open;
-    this.onClose = onClose;
+  // o.noHist: 주소(해시)로 여닫는 창이라 따로 뒤로 가기 기록을 만들지 않는다 · o.title/o.right: 머리의 제목과 버튼
+  show(key, onClose, o = {}) {
+    const d = this.el || this.make(), was = this.open, old = this.onClose, oldKey = this.key;
+    this.onClose = onClose; this.noHist = !!o.noHist; this.hashAt = location.hash;
+    if (was && oldKey !== key && old && old !== onClose) old(true, oldKey);      // 다른 화면이 이 창을 이어받음
     if (!was) {
       d.hidden = false; d.classList.remove("out"); void d.offsetWidth; d.classList.add("in");
       document.documentElement.classList.add("pgs-open");
-      try { history.pushState({ pgs: 1 }, ""); } catch (e) { /* 기록을 못 쓰는 환경 */ }
+      if (!o.noHist && !(history.state && history.state.pgs)) { try { history.pushState({ pgs: 1 }, ""); } catch (e) { /* 기록을 못 쓰는 환경 */ } }
       setTimeout(() => $(".pgs-in", d).focus({ preventScroll: true }), 30);
     }
+    $("#pgsTitle").textContent = o.title || ""; $("#pgsRight").innerHTML = o.right || "";
+    $(".pgs-head", d).classList.toggle("has-tt", !!(o.title || o.right));
     if (this.key !== key) { this.key = key; this.body().scrollTop = 0; }
     return this.body();
   },
@@ -704,7 +708,8 @@ const pgSheet = {
     document.documentElement.classList.remove("pgs-open");
     const done = () => { d.hidden = true; d.classList.remove("in", "out"); this.body().innerHTML = ""; };
     if (silent || dragged) done(); else { d.classList.add("out"); setTimeout(() => { if (!this.onClose) done(); }, 230); }
-    if (!popped && history.state && history.state.pgs && !silent) { try { this.skipPop = true; history.back(); } catch (e) { this.skipPop = false; } }
+    if (!popped && !this.noHist && history.state && history.state.pgs && !silent) { try { this.skipPop = true; history.back(); } catch (e) { this.skipPop = false; } }
+    this.noHist = false;
     if (cb) cb(!!silent, key);
   },
 };
@@ -831,6 +836,8 @@ async function route() {
   if (!pages[h.name]) h.name = "home";
   h.sub = resolveSub(h);
   if (MENU[h.name]) lastSub[h.name] = (MENU[h.name].extra && MENU[h.name].extra[h.sub]) ? lastSub[h.name] || h.sub : h.sub;
+  if (h.name === "invest" && h.sub === "stock" && current && view.childElementCount && !$("#mkD", view) && (stockSheet.stack.length || nav.prev)) return stockSheet.open(h);
+  stockSheet.stack = []; stockSheet.resume = null;
   const page = pages[h.name];
   const tabName = h.name;
   document.documentElement.dataset.sec = h.name;
@@ -866,7 +873,53 @@ async function route() {
 // 뒤로 가기: 직전에 보던 화면으로(스크롤 위치도 되살린다)
 const nav = { cur: location.hash, prev: "", scroll: {}, restore: "" };
 function navBack(fallback) { return nav.prev && nav.prev !== location.hash && !nav.prev.startsWith("#invest/stock") ? nav.prev : nav.prevNonStock || fallback; }
+// 종목 상세는 보던 화면 위로 올라오는 창으로 연다(주소는 #invest/stock 그대로라 링크·뒤로 가기가 그대로 동작한다).
+// 닫으면 주소만 되돌리고 아래 화면은 다시 그리지 않는다. 주소로 바로 들어온 경우(새로 고침·바로 가기)에는 예전처럼 한 화면으로 보여 준다
+const stockSheet = {
+  stack: [], base: "", closing: "", timer: 0, resume: null,
+  open(h) {
+    const S = this, hash = location.hash, A = pages.invest.at;
+    if (!S.stack.length) {
+      S.base = nav.prev || "#home";
+      S.resume = pgSheet.open && String(pgSheet.key).startsWith("auto:") && A ? { view: A.view, tab: A.tab, back: A.back, labId: A.labId, labTab: A.labTab } : null;   // 자동매매 창에서 종목을 눌렀으면 닫을 때 그 창으로
+      S.stack = [hash];
+    } else if (S.stack[S.stack.length - 2] === hash) S.stack.pop();
+    else if (S.stack[S.stack.length - 1] !== hash) S.stack.push(hash);
+    closeSheet();
+    const host = pgSheet.show("stock:" + hash, (silent) => S.closed(silent), { noHist: true, title: "시세",
+      right: `<button type="button" class="star" id="mkBell" aria-label="가격 알림">${BELL}</button><button type="button" class="star" id="mkStar" aria-pressed="false" aria-label="관심종목">${STAR}</button>` });
+    clearInterval(S.timer);
+    S.timer = setInterval(() => { if (pgSheet.open && !document.hidden && !sheet.open && !$(".pgs-in.dragging")) mkt.refreshDetail().catch(() => {}); }, 2500);
+    return mkt.detail(h, host).catch((e) => { host.innerHTML = `<div class="notice warn">${esc(e.message)}</div>`; });
+  },
+  back() {            // 자동매매 창에서 왔으면 그 창을 다시 연다
+    const r = this.resume, A = pages.invest.at;
+    this.resume = null;
+    if (r && A && investState.tab === "auto" && $("#iv")) { Object.assign(A, r); A.d = null; setTimeout(() => pages.invest.auto($("#iv")), 40); }
+  },
+  closed(silent) {
+    const n = this.stack.length, base = this.base;
+    clearInterval(this.timer); this.stack = [];
+    if (silent || !n) return;                  // 다른 화면으로 넘어가거나 뒤로 가기로 닫힌 것: 주소는 이미 바뀌었다
+    this.closing = base;
+    pgSheet.skipPop = true;                    // 우리가 되돌린 것: 다시 연 창을 뒤로 가기로 착각해 닫지 않게
+    history.go(-n);
+    this.back();
+  },
+};
 window.addEventListener("hashchange", () => {
+  if (stockSheet.closing) {                    // 창을 닫으며 주소만 되돌리는 중: 아래 화면은 그대로 둔다
+    const ok = location.hash === stockSheet.closing;
+    stockSheet.closing = "";
+    if (ok) { nav.cur = location.hash; return; }
+  }
+  if (stockSheet.stack.length && location.hash === stockSheet.base) {      // 뒤로 가기로 창을 닫음
+    nav.cur = location.hash;
+    const r = stockSheet.resume;
+    pgSheet.close(true);
+    stockSheet.resume = r; stockSheet.back();
+    return;
+  }
   nav.scroll[nav.cur] = window.scrollY;
   nav.prev = nav.cur; nav.cur = location.hash;
   if (!nav.prev.startsWith("#invest/stock")) nav.prevNonStock = nav.prev;
@@ -5028,14 +5081,17 @@ const mkt = {
   },
 
   // ---------- 종목 상세 ----------
-  async detail(h) {
+  async detail(h, host) {
     const m = h.params.get("m") === "us" ? "us" : "kr", sym = (h.params.get("s") || "").toUpperCase();
     const pk = h.params.get("pk"), ph = h.params.get("ph"), fromAt = h.params.get("at") === "1";
     this.d = { m, sym, at: null, range: pk ? (ph && ph !== "day" ? "d" : "m5") : fromAt ? "m5" : this.lastRange || "1d", tab: "chart", q: null, chart: null, cd: null, pk, markFell: !!(ph && ph !== "day") };
     if (pk) this.loadMark(this.d);
     this.loadAt(this.d);
-    setTop("시세", { back: navBack("#invest/home"), menu: "invest", sub: pk ? "aistat" : "stock", right: `<button type="button" class="star on-deep" id="mkBell" aria-label="가격 알림">${BELL}</button><button type="button" class="star on-deep" id="mkStar" aria-pressed="false" aria-label="관심종목">${STAR}</button>` });
-    view.innerHTML = `<div class="mk-d" id="mkD"><div class="empty loading">불러오는 중</div></div>`;
+    if (host) host.innerHTML = `<div class="mk-d" id="mkD"><div class="empty loading">불러오는 중</div></div>`;
+    else {
+      setTop("시세", { back: navBack("#invest/home"), menu: "invest", sub: pk ? "aistat" : "stock", right: `<button type="button" class="star on-deep" id="mkBell" aria-label="가격 알림">${BELL}</button><button type="button" class="star on-deep" id="mkStar" aria-pressed="false" aria-label="관심종목">${STAR}</button>` });
+      view.innerHTML = `<div class="mk-d" id="mkD"><div class="empty loading">불러오는 중</div></div>`;
+    }
     // 목록에서 이미 받은 값이 있으면 먼저 그려 둔다
     const pre = this.qmemo[m + sym] || ((this.snap[m] || {}).items || []).find((x) => x.sym === sym);
     const D = this.d;

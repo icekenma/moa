@@ -3615,3 +3615,12 @@ html.pgs-open .fab{display:none}
 .nf-log b{display:block;font-size:12px}
 .nf-log p{margin:1px 0 0;font-size:12px;color:var(--ink2);line-height:1.45;white-space:pre-line}
 .nf-log small{font-size:10px;color:var(--ink3)}
+/* v4.93 올라오는 창의 머리(제목·버튼) */
+.pgs-tt{position:absolute;left:16px;top:13px;font-size:15px;font-weight:800;letter-spacing:-.02em}
+.pgs-rt{position:absolute;right:46px;top:3px;display:flex;gap:2px}
+.pgs-head.has-tt{height:42px}
+.pgs-head.has-tt .pgs-x{top:6px}
+.pgs-head.has-tt .pgs-rt{top:3px}
+.pgs-rt .star{color:var(--ink2)}
+.pgs-body .mk-act{bottom:calc(10px + var(--safe-b))}
+.pgs-body .mk-d{padding-bottom:6px}

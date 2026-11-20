@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261120.1027";
+const UI_VERSION = "261120.1332";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -11,6 +11,19 @@ const view = $("#view");
 const store = {
   get(k) { try { return localStorage.getItem("moa." + k) || ""; } catch (e) { return ""; } },
   set(k, v) { try { v ? localStorage.setItem("moa." + k, v) : localStorage.removeItem("moa." + k); } catch (e) { /* 저장 불가 */ } },
+};
+// 최근에 찾아서 고른 종목(이 기기에만 저장, 시장마다 12개). 종목 검색·주문·적립·배당의 종목 고르기가 함께 쓴다
+const recentStock = {
+  all() { try { const d = JSON.parse(store.get("recentStocks") || "{}"); return d && typeof d === "object" ? d : {}; } catch (e) { return {}; } },
+  list(m) { return (this.all()[m] || []).filter((x) => x && x.sym); },
+  add(m, sym, name, exchange) {
+    if (!sym) return;
+    const d = this.all(), sy = String(sym);
+    d[m] = [{ sym: sy, name: name || sy, exchange: exchange || "" }, ...(d[m] || []).filter((x) => x.sym !== sy)].slice(0, 12);
+    store.set("recentStocks", JSON.stringify(d));
+  },
+  remove(m, sym) { const d = this.all(); d[m] = (d[m] || []).filter((x) => x.sym !== sym); store.set("recentStocks", JSON.stringify(d)); },
+  clear(m) { const d = this.all(); delete d[m]; store.set("recentStocks", Object.keys(d).length ? JSON.stringify(d) : ""); },
 };
 const FONT_SIZES = [["s", "작게", 1], ["m", "보통", 1.15], ["l", "크게", 1.3]];
 function applyFontSize(id) {
@@ -4850,32 +4863,44 @@ const mkt = {
     const m = this.m;
     openSheet(m === "kr" ? "국내 종목 검색" : "미국 종목 검색", `
       <label class="field">${m === "kr" ? "종목명 또는 6자리 코드" : "회사 이름 또는 기호(AAPL)"}<input id="mkQ" type="search" autocomplete="off" enterkeyhint="search" placeholder="${m === "kr" ? "삼성전자" : "apple"}"></label>
-      <div class="list" id="mkRes"><div class="empty small">${m === "kr" ? "이름 일부만 넣어도 찾아요" : "영문으로 넣어 주세요"}</div></div>`, (box) => {
+      <div id="mkRes"></div>`, (box) => {
       const q = $("#mkQ", box);
       let t = null, seq = 0;
+      const hint = `<div class="empty small">${m === "kr" ? "이름 일부만 넣어도 찾아요" : "영문으로 넣어 주세요"}</div>`;
+      const recent = () => {
+        const R = recentStock.list(m);
+        $("#mkRes").innerHTML = R.length ? `<div class="op-h rc-h">최근 찾은 종목<button type="button" class="rc-clr" data-rcclr>모두 지우기</button></div><div class="list">${R.map((x) => `<div class="item">
+            <a class="main" href="#invest/stock?m=${m}&s=${encodeURIComponent(x.sym)}" data-rs="${esc(x.sym)}" data-name="${esc(x.name)}" data-exch="${esc(x.exchange || "")}" style="text-decoration:none"><b>${esc(x.name)}</b><span class="sub">${esc(x.sym)}${x.exchange ? " · " + esc(x.exchange) : ""}</span></a>
+            <button type="button" class="rc-x" data-rcx="${esc(x.sym)}" aria-label="${esc(x.name)} 최근 목록에서 지우기">${CLOSE_ICO}</button></div>`).join("")}</div>` : hint;
+      };
       const go = async () => {
         const v = q.value.trim(), my = ++seq;
-        if (!v) { $("#mkRes").innerHTML = ""; return; }
+        if (!v) return recent();
         $("#mkRes").innerHTML = `<div class="empty small">찾는 중</div>`;
         try {
           const [res, w] = await Promise.all([GET(`/api/market/search?mkt=${m}&q=${encodeURIComponent(v)}`), GET(`/api/market/overview?mkt=${m}`).catch(() => ({ items: [] }))]);
           if (my !== seq) return;
           const on = new Set((w.items || []).map((x) => x.sym));
-          $("#mkRes").innerHTML = res.length ? res.map((x) => `<div class="item">
-            <a class="main" href="#invest/stock?m=${m}&s=${encodeURIComponent(x.sym)}" style="text-decoration:none"><b>${esc(x.name)}</b><span class="sub">${esc(x.sym)}${x.exchange ? " · " + esc(x.exchange) : ""}</span></a>
-            <button type="button" class="star" data-star="${esc(x.sym)}" aria-pressed="${on.has(x.sym)}" aria-label="${esc(x.name)} 관심종목">${STAR}</button></div>`).join("")
+          $("#mkRes").innerHTML = res.length ? `<div class="list">${res.map((x) => `<div class="item">
+            <a class="main" href="#invest/stock?m=${m}&s=${encodeURIComponent(x.sym)}" data-rs="${esc(x.sym)}" data-name="${esc(x.name)}" data-exch="${esc(x.exchange || "")}" style="text-decoration:none"><b>${esc(x.name)}</b><span class="sub">${esc(x.sym)}${x.exchange ? " · " + esc(x.exchange) : ""}</span></a>
+            <button type="button" class="star" data-star="${esc(x.sym)}" data-name="${esc(x.name)}" data-exch="${esc(x.exchange || "")}" aria-pressed="${on.has(x.sym)}" aria-label="${esc(x.name)} 관심종목">${STAR}</button></div>`).join("")}</div>`
             : `<div class="empty small">찾는 종목이 없어요</div>`;
         } catch (e) { if (my === seq) $("#mkRes").innerHTML = `<div class="notice warn">${esc(e.message)}</div>`; }
       };
       q.oninput = () => { clearTimeout(t); t = setTimeout(go, 300); };
       $("#mkRes").onclick = async (e) => {
+        if (e.target.closest("[data-rcclr]")) { recentStock.clear(m); return recent(); }
+        const x = e.target.closest("[data-rcx]");
+        if (x) { recentStock.remove(m, x.dataset.rcx); return recent(); }
         const b = e.target.closest("[data-star]");
-        if (!b) { if (e.target.closest("a")) closeSheet(); return; }
+        if (!b) { const a = e.target.closest("a[data-rs]"); if (a) { recentStock.add(m, a.dataset.rs, a.dataset.name, a.dataset.exch); closeSheet(); } return; }
+        recentStock.add(m, b.dataset.star, b.dataset.name, b.dataset.exch);
         const on = b.getAttribute("aria-pressed") !== "true";
         await run(() => api("POST", "/api/market/watch", { mkt: m, sym: b.dataset.star, on }), on ? "관심종목에 넣었어요" : "관심종목에서 뺐어요");
         b.setAttribute("aria-pressed", String(on));
         if ($("#mkList")) this.board($("#iv"));
       };
+      recent();
       setTimeout(() => q.focus(), 50);
     });
   },
@@ -5946,7 +5971,9 @@ function orderSheet(o) {
     const rank = (K.rank || []).slice(0, 8).map((x) => ({ sym: x.sym, name: x.name, price: x.price, pct: x.change_pct, badge: String(x.rank), cls: x.rank <= 3 ? "h-pink" : "h-slate" }));
     const seen = new Set(), recent = ((S.ctx && S.ctx.orders) || []).filter((r) => isUsCode(r.code) === US && !seen.has(r.code) && seen.add(r.code)).slice(0, 5)
       .map((r) => ({ sym: r.code, name: r.name, sub: `${r.code} · ${(r.ts || "").slice(5, 10)} ${r.side === "buy" ? "매수" : "매도"}` }));
-    el.innerHTML = (hold.length ? sec("내 보유 종목", pickRows(hold, ""), "더 사기") : "")
+    const found = recentStock.list(m).slice(0, 6).map((x) => ({ sym: x.sym, name: x.name, sub: `${x.sym}${x.exchange ? " · " + x.exchange : ""}` }));
+    el.innerHTML = (found.length ? sec("최근 찾은 종목", pickRows(found, "")) : "")
+      + (hold.length ? sec("내 보유 종목", pickRows(hold, ""), "더 사기") : "")
       + sec("관심종목", K.watch ? pickRows(watch, "관심종목이 없어요. 검색해서 골라 보세요") : `<div class="empty small loading">불러오는 중</div>`)
       + (K.rank && K.rank.length ? sec(US ? "지금 많이 찾는 종목" : "지금 거래대금 많은 종목", pickRows(rank, ""), "실시간 순위") : "")
       + (recent.length ? sec("최근 주문한 종목", pickRows(recent, "")) : "");
@@ -5991,7 +6018,7 @@ function orderSheet(o) {
       q.oninput = () => { clearTimeout(t); t = setTimeout(go, 300); };
       box.onclick = (e) => {
         const r = e.target.closest(".op-row");
-        if (r) return choose(r.dataset.sym, r.dataset.name, r.dataset.exch);
+        if (r) { if (S.side === "buy") recentStock.add(S.market, r.dataset.sym, r.dataset.name); return choose(r.dataset.sym, r.dataset.name, r.dataset.exch); }
         if (e.target.closest("#opBack")) { S.pick = false; draw(); }
       };
       pickLists(); loadPick(S.market);
@@ -6163,7 +6190,10 @@ function stockPick(host, opts = {}) {
   const suggest = async () => {
     const my = S.seq;
     if (S.sug == null) { S.sug = []; try { S.sug = (await GET(`/api/market/picks?mkt=${S.mkt}`)).picks || []; } catch (e) { /* 바로 고르기만 생략 */ } }
-    if (my === S.seq && !q.value.trim() && host.isConnected && !bar.hidden) res.innerHTML = rows(S.sug.filter((x) => !S.items.some((y) => y.sym === x.sym)).slice(0, 8), "바로 고르기");
+    if (my === S.seq && !q.value.trim() && host.isConnected && !bar.hidden) {
+      const R = recentStock.list(S.mkt).slice(0, 6), rs = new Set(R.map((x) => x.sym));
+      res.innerHTML = rows(R, "최근 찾은 종목") + rows(S.sug.filter((x) => !rs.has(x.sym) && !S.items.some((y) => y.sym === x.sym)).slice(0, 8), "바로 고르기");
+    }
   };
   const go = async () => {
     const v = q.value.trim(), my = ++S.seq;
@@ -6187,6 +6217,7 @@ function stockPick(host, opts = {}) {
       if (b.disabled) return;
       if (S.multi && S.items.length >= S.max) return toast(`${S.max}개까지 넣을 수 있어요`, true);
       const it = { sym: b.dataset.spk, name: b.dataset.name || b.dataset.spk };
+      recentStock.add(S.mkt, it.sym, it.name);
       S.items = S.multi ? [...S.items, it] : [it];
       q.value = ""; res.innerHTML = ""; S.seq++; chipDraw(); fire();
       if (S.multi) q.focus();

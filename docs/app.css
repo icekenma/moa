@@ -3524,3 +3524,9 @@ html.dark-theme .ax-ch{stroke:var(--nbg)}
 .cd-pt text,.cd-tt text{font-size:7.5px;font-weight:800;fill:var(--card)}
 html.dark-theme .cd-pt text,html.dark-theme .cd-tt text{fill:var(--nbg)}
 
+/* v4.87 최근 찾은 종목 */
+.rc-h{align-items:center;padding:6px 2px 2px}
+.rc-clr{border:0;background:none;color:var(--ink3);font:inherit;font-size:11px;font-weight:700;padding:8px 2px;margin:-8px 0;cursor:pointer}
+.rc-x{flex:none;width:36px;height:36px;border:0;background:none;color:var(--ink3);display:grid;place-items:center;cursor:pointer;border-radius:50%}
+.rc-x svg{width:14px;height:14px}
+.rc-x:active{background:var(--press)}

@@ -3572,3 +3572,29 @@ html.dark-theme .cd-pt text,html.dark-theme .cd-tt text{fill:var(--nbg)}
 .ev-pr:not(.plain) li:first-child{padding-bottom:9px;border-bottom:1px dashed var(--line2)}
 html.gm-on .ev-core{background:var(--g-panel);border-color:var(--g-gold)}
 html.gm-on .ev-core b{font-family:var(--g-font);font-weight:400}
+
+/* ===== v4.91 올라오는 전체 창(목록 위의 자세히 보기) · 아래로 끌어 닫기 ===== */
+.pgs{position:fixed;inset:0;z-index:50}
+.pgs[hidden]{display:none}
+.pgs-bd{position:absolute;inset:0;background:rgba(8,10,18,.5);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+.pgs-in{position:absolute;left:0;right:0;bottom:0;top:calc(var(--safe-t) + 12px);margin:0 auto;max-width:var(--w);display:flex;flex-direction:column;
+  border-radius:24px 24px 0 0;background:var(--bg);box-shadow:0 -18px 50px -12px rgba(0,0,0,.45);outline:none;will-change:transform;overflow:hidden}
+html.dark-theme .pgs-in{background:var(--nbg);box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 -24px 60px -18px rgba(var(--n-rgb),.3)}
+html.gm-on .pgs-in{background:var(--g-field);color:var(--g-ink)}
+.pgs.in .pgs-in{animation:sheetIn .36s var(--spring,cubic-bezier(.2,.9,.3,1))}
+.pgs.in .pgs-bd{animation:fadeIn .25s ease}
+.pgs.out .pgs-in{animation:pgsOut .22s ease-in forwards}
+.pgs.out .pgs-bd{animation:pgsFade .22s ease forwards}
+@keyframes pgsOut{to{transform:translateY(104%)}}
+@keyframes pgsFade{to{opacity:0}}
+.pgs-head{position:relative;flex:none;height:34px;touch-action:none}
+.pgs-grab{position:absolute;left:50%;top:9px;width:40px;height:5px;border-radius:3px;background:var(--line2);transform:translateX(-50%);opacity:.8}
+.pgs-x{position:absolute;right:8px;top:3px;width:30px;height:30px;border:0;border-radius:50%;background:var(--press);color:var(--ink2);display:grid;place-items:center;cursor:pointer}
+.pgs-x svg{width:14px;height:14px}
+.pgs-x:focus-visible{outline:2px solid var(--hl);outline-offset:2px}
+.pgs-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:2px 12px calc(28px + var(--safe-b));display:flex;flex-direction:column;gap:8.5px}
+.pgs-body>*{flex-shrink:0}
+.pgs-in.dragging,dialog.sheet.dragging{animation:none!important}
+html.pgs-open,html.pgs-open body{overflow:hidden}
+html.pgs-open .fab{display:none}
+@media (prefers-reduced-motion:reduce){.pgs.in .pgs-in,.pgs.out .pgs-in,.pgs.in .pgs-bd,.pgs.out .pgs-bd{animation:none}}

@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261120.1450";
+const UI_VERSION = "261120.1515";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -621,6 +621,94 @@ sheet.addEventListener("close", () => document.documentElement.classList.remove(
 [sheet, $("#updDlg")].forEach((d) => d && d.addEventListener("close", () => document.body.appendChild($("#toast"))));
 sheet.addEventListener("click", (e) => { if (e.target === sheet) closeSheet(); });
 
+// 아래에서 올라온 창은 아래로 끌어내려 닫는다(머리 부분은 언제나, 내용은 맨 위까지 올라와 있을 때).
+// panel: 움직일 요소, scroller(): 안에서 스크롤되는 요소, close(): 다 내려갔을 때 닫기
+function dragDismiss(panel, scroller, close) {
+  let g = null;
+  const reset = () => { panel.style.transition = ""; panel.style.transform = ""; panel.classList.remove("dragging"); };
+  panel.addEventListener("touchstart", (e) => {
+    g = null;
+    if (e.touches.length !== 1) return;
+    const sc = scroller(), t = e.touches[0], inBody = sc && sc.contains(e.target);
+    if (inBody) {
+      if (e.target.closest("input,textarea,select,[contenteditable],.cz-hit,.mk-chart,[data-nodrag]")) return;
+      for (let n = e.target; n && n !== sc; n = n.parentElement) {      // 안쪽에 따로 스크롤되는 칸이 내려가 있으면 그 칸이 먼저
+        if (n.scrollTop > 0 || (n.scrollWidth > n.clientWidth + 4 && /auto|scroll/.test(getComputedStyle(n).overflowX))) return;
+      }
+    }
+    g = { x: t.clientX, y: t.clientY, top: inBody ? sc.scrollTop : 0, on: false, t: Date.now(), dy: 0 };
+  }, { passive: true });
+  panel.addEventListener("touchmove", (e) => {
+    if (!g) return;
+    const t = e.touches[0], dx = t.clientX - g.x, dy = t.clientY - g.y;
+    if (!g.on) {
+      if (g.top > 0 || dy < -8 || Math.abs(dx) > Math.max(10, dy)) { g = null; return; }
+      if (dy < 10) return;
+      g.on = true; panel.classList.add("dragging"); panel.style.transition = "none";
+    }
+    e.preventDefault();
+    g.dy = Math.max(0, dy - 10);
+    panel.style.transform = `translateY(${g.dy}px)`;
+  }, { passive: false });
+  const end = () => {
+    if (!g || !g.on) { g = null; return; }
+    const v = g.dy / Math.max(1, Date.now() - g.t), go = g.dy > Math.min(160, panel.offsetHeight * 0.28) || (v > 0.55 && g.dy > 36);
+    g = null;
+    panel.style.transition = "transform .2s cubic-bezier(.3,.7,.3,1)";
+    if (!go) { panel.style.transform = ""; setTimeout(reset, 210); return; }
+    panel.style.transform = "translateY(105%)";
+    setTimeout(() => { close(); reset(); }, 190);
+  };
+  panel.addEventListener("touchend", end); panel.addEventListener("touchcancel", end);
+}
+dragDismiss(sheet, () => $("#sheetBody"), closeSheet);
+
+// 올라오는 전체 창: 목록에서 고른 것의 자세한 화면을, 화면을 바꾸지 않고 목록 위에 아래에서 올려 보여 준다.
+// 닫기: 아래로 끌기 · × · 뒤로 가기 · Esc. 창 안에서 여는 작은 창(dialog)은 이 위에 뜬다
+const pgSheet = {
+  el: null, key: null, onClose: null,
+  get open() { return !!this.el && !this.el.hidden && !this.el.classList.contains("out"); },
+  body() { return $("#pgsBody"); },
+  make() {
+    const d = document.createElement("div");
+    d.className = "pgs"; d.id = "pgs"; d.hidden = true;
+    d.innerHTML = `<div class="pgs-bd"></div><section class="pgs-in" role="dialog" aria-modal="true" aria-label="자세히 보기" tabindex="-1">
+      <div class="pgs-head"><i class="pgs-grab" aria-hidden="true"></i><button type="button" class="pgs-x" id="pgsClose" aria-label="닫기">${CLOSE_ICO}</button></div>
+      <div class="pgs-body" id="pgsBody"></div></section>`;
+    document.body.appendChild(d);
+    $(".pgs-bd", d).onclick = () => this.close();
+    $("#pgsClose", d).onclick = () => this.close();
+    dragDismiss($(".pgs-in", d), () => $("#pgsBody"), () => this.close(false, true));
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && this.open && !sheet.open && !$(".cz")) this.close(); });
+    window.addEventListener("popstate", () => { if (this.skipPop) { this.skipPop = false; return; } if (this.open) this.close(false, false, true); });
+    return (this.el = d);
+  },
+  // key가 바뀔 때만 맨 위로 올린다(같은 화면을 다시 그릴 때는 보던 자리 그대로)
+  show(key, onClose) {
+    const d = this.el || this.make(), was = this.open;
+    this.onClose = onClose;
+    if (!was) {
+      d.hidden = false; d.classList.remove("out"); void d.offsetWidth; d.classList.add("in");
+      document.documentElement.classList.add("pgs-open");
+      try { history.pushState({ pgs: 1 }, ""); } catch (e) { /* 기록을 못 쓰는 환경 */ }
+      setTimeout(() => $(".pgs-in", d).focus({ preventScroll: true }), 30);
+    }
+    if (this.key !== key) { this.key = key; this.body().scrollTop = 0; }
+    return this.body();
+  },
+  // silent: 다른 화면으로 넘어가며 닫음(목록을 다시 그리지 않음) · dragged: 끌어내려 닫음(내려가는 움직임은 이미 끝남) · popped: 뒤로 가기로 닫음
+  close(silent, dragged, popped) {
+    if (!this.open) return;
+    const d = this.el, cb = this.onClose, key = this.key;
+    this.onClose = null; this.key = null;
+    document.documentElement.classList.remove("pgs-open");
+    const done = () => { d.hidden = true; d.classList.remove("in", "out"); this.body().innerHTML = ""; };
+    if (silent || dragged) done(); else { d.classList.add("out"); setTimeout(() => { if (!this.onClose) done(); }, 230); }
+    if (!popped && history.state && history.state.pgs && !silent) { try { this.skipPop = true; history.back(); } catch (e) { this.skipPop = false; } }
+    if (cb) cb(!!silent, key);
+  },
+};
+
 // ---------- 차트 ----------
 function lineChart(series, opt = {}) {
   const W = 600, H = opt.h || 120, P = 6;
@@ -659,7 +747,7 @@ const MENU = {
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
   // 투자는 성격이 같은 화면을 묶는다(AI 추천·자동매매 / 관심·발견·주문 / 적립·배당). 묶음 안은 화면 위 탭으로 오간다
   invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "종목"], ["dca", "적립·배당"], ["evo", "엔진 노트"]],
-    groups: { ai: [["ai", "AI 추천"], ["auto", "자동매매"], ["atlog", "매매 기록"]], market: [["market", "관심"], ["discover", "발견"], ["trade", "주문"]], dca: [["dca", "적립"], ["dividend", "배당"]] }, extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
+    groups: { ai: [["auto", "자동매매"], ["ai", "AI 추천"], ["atlog", "매매 기록"]], market: [["market", "관심"], ["discover", "발견"], ["trade", "주문"]], dca: [["dca", "적립"], ["dividend", "배당"]] }, extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
   // 설정: 자주 바꾸는 것부터. 한 번만 맞추면 되는 서버 연결은 뒤로.
   settings: { title: "설정", subs: [["all", "전체"], ["theme", "화면"], ["ai", "AI"], ["accounts", "계좌"], ["trading", "주문·알림"], ["security", "보안"], ["backup", "백업"], ["connect", "서버"], ["app", "앱 정보"]] },
 };
@@ -755,6 +843,7 @@ async function route() {
   });
   clearInterval(timer);
   closeSheet();
+  pgSheet.close(true);
   $(".fab")?.remove();
   current = page;
   view.innerHTML = `<div class="empty loading">불러오는 중</div>`;
@@ -1704,7 +1793,7 @@ pages.invest = {
     if (investState.tab === "auto") {  // 자세히 보는 화면만 6초마다 새로(입력 화면·펼쳐 읽는 중에는 그대로)
       const A = this.at;
       const lab = A && A.view === "lab";
-      if (A && (typeof A.view === "number" || lab || A.view === "list") && (lab || A.tab !== "plan") && !$("#atBody details[open]:not([data-keep])") && !$(".at-more[open], .at-old[open]")
+      if (A && (typeof A.view === "number" || lab || A.view === "list") && (lab || A.tab !== "plan") && !$(".pgs-in.dragging") && !$("#atBody details[open]:not([data-keep])") && !$(".at-more[open], .at-old[open]")
         && (!this._atT || Date.now() - this._atT > (A.view === "list" ? 12000 : 6000))) { this._atT = Date.now(); await this.auto($("#iv")); }
       return;
     }
@@ -1958,11 +2047,20 @@ pages.invest = {
   async auto(box) {
     const A = this.atState();
     $(".fab")?.remove();
+    const iv = $("#iv") || box;
     try {
-      if (A.view === "new") return await this.atNew(box);
-      if (A.view === "lab") return await this.atLab(box);
-      if (A.view !== "list") return await this.atRun(box);
-      return await this.atList(box);
+      if (A.view === "list") { pgSheet.close(); return await this.atList(iv); }
+      if (iv && !$("#atNewBtn", iv)) { try { await this.atList(iv); } catch (e) { if (e instanceof Locked || e instanceof NeedConnect) throw e; } }   // 창 아래에 목록이 깔려 있게
+      if (A.view === "list") return;                // 목록을 그리는 사이에 닫았으면 그만
+      const key = A.view;
+      box = pgSheet.show("auto:" + key, (silent, k) => {
+        if (k !== "auto:" + A.view) return;           // 이미 다른 화면으로 넘어갔으면(목록으로 돌아가기 등) 그쪽이 그린다
+        A.view = "list"; A.back = null; A.o = null;
+        if (!silent && investState.tab === "auto" && $("#iv")) { this._atT = Date.now(); this.atList($("#iv")).catch(() => {}); }
+      });
+      if (key === "new") return await this.atNew(box);
+      if (key === "lab") return await this.atLab(box);
+      return await this.atRun(box);
     } catch (e) {
       if (e instanceof Locked || e instanceof NeedConnect) throw e;
       if (e.code === "old_server") return oldServerBox(box, () => this.auto(box));

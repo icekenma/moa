@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261120.1332";
+const UI_VERSION = "261120.1358";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2622,19 +2622,21 @@ pages.invest = {
         <div class="fl-sz"><b>한 번에 ${sz.pct}% ≈ ${M(sz.alloc)}</b>
           ${sz.warm ? `<span class="tag">검증 단계 ×${sz.warm_mult} · ${sz.warm_left}건 남음</span>` : ""}
           ${sz.skip_watch ? `<span class="tag">관망이면 안 삼</span>` : `<span class="tag">관망이면 ×${sz.watch_mult}</span>`}
-          ${sz.min_one ? `<span class="tag">모의: 모자라도 1주</span>` : ""}</div>
+          ${sz.min_one ? `<span class="tag">모의: 모자라도 1주</span>` : ""}
+          ${sz.scale_in ? `<span class="tag y">분할 매수: 절반 먼저, 오르면 나머지</span>` : ""}${sz.vol_stop ? `<span class="tag y">흔들림 맞춤 손절</span>` : ""}</div>
         <div class="fl-facts"><span>익절·손절 폭 = AI가 정한 폭 × ${sz.exit_mult}(최대 +${sz.tp_cap}% / −${sz.sl_cap}%)</span><span>남은 현금 ${M(sz.cash)}</span></div></div>`;
     // ⑤ 주문
     const s5 = `<div class="fl-two"><div class="fl-box on"><span class="fl-k">${F.order.mode === "real" ? "실전" : "모의"}</span><b>${esc(F.order.slip)}</b><small>오늘 산 것 ${F.order.today}건</small></div></div>`;
     // ⑥ 들고 있기
     const s6 = F.hold.length ? `<div class="fl-hold">${F.hold.map((h) => { const lo = -h.sl, hi = h.tp, X = (v) => Math.max(0, Math.min(100, (v - lo) / (hi - lo) * 100));
-      return `<div class="fl-h"><div class="fl-hh"><b>${stockA(mkt, h.sym, h.name)}</b><span>${h.qty}주${h.fill_ok ? "" : " · 체결 확인 중"}</span><b class="${tone(h.pct)}">${pct(h.pct, 2)}</b></div>
+      return `<div class="fl-h"><div class="fl-hh"><b>${stockA(mkt, h.sym, h.name)}</b><span>${h.qty}주${h.fill_ok ? "" : " · 체결 확인 중"}${h.add ? ` · 오르면 ${h.add}주 더` : ""}${h.part === 2 ? " · 절반 팔고 남긴 몫" : h.part === 3 ? " · 더 산 몫" : ""}</span><b class="${tone(h.pct)}">${pct(h.pct, 2)}</b></div>
         <div class="fl-gauge" role="img" aria-label="손절 −${h.sl}%, 익절 +${h.tp}%, 지금 ${pct(h.pct, 2)}"><span class="z" style="left:${X(0).toFixed(1)}%"></span>
           ${h.high > 0 ? `<span class="hw" style="left:${X(h.high).toFixed(1)}%" title="보유 중 최고"></span>` : ""}<span class="me ${h.pct >= 0 ? "pos" : "neg"}" style="left:${X(h.pct).toFixed(1)}%"></span></div>
         <div class="fl-gl"><span class="down">손절 −${h.sl}%</span>${h.trail ? `<span>최고점에서 −${h.trail}% 빠지면 추적 익절</span>` : ""}${h.exit ? `<span>${esc(h.exit)} 정리</span>` : ""}<span class="up">익절 +${h.tp}%</span></div></div>`; }).join("")}</div>`
       : `<div class="fl-empty">들고 있는 종목이 없어요. 사면 여기서 익절·손절선 사이 어디쯤인지 보여요.</div>`;
-    // ⑦ 팔기: 길 다섯 개
+    // ⑦ 팔기
     const ways = [["익절", "목표에 닿음", "up"], ["손절", "손절선에 닿음", "down"], ["추적 익절", "최고점에서 밀림", "up"], [r.style === "day" ? "시간 정리" : "기간 정리", r.style === "day" ? "장 마감 전·정한 시각" : "보유 기간 끝", ""], ["종료 정리", "자동매매를 끝낼 때", ""]];
+    if (sz.scale_out) ways.splice(0, 0, ["분할 익절", "목표 절반에서 절반 먼저", "up"], ["본전 정리", "남긴 몫이 본전으로", ""]);
     const exn = Object.fromEntries(F.exits.map((e) => [e.reason, e]));
     const s7 = `<div class="fl-ways">${ways.map(([k, d, c]) => { const e = exn[k]; return `<div class="fl-w ${e ? "hit" : ""} ${c}"><b>${k}</b><small>${d}</small>${e ? `<em class="${tone(e.pnl)}">${e.n}건 · ${this.atM(mkt, e.pnl, true)}</em>` : `<em>오늘 0건</em>`}</div>`; }).join("")}</div>`;
     // ⑧ 배우기

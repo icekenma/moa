@@ -81,6 +81,8 @@ PLAN_KEYS = {
     "idx_floor": (-5.0, 0.0, float, "지수가 이만큼 내리면 AI를 부르지 않음(%, 0=끔)"),
     "exit_mult": (0.3, 3.0, float, "AI가 낸 익절·손절 폭에 곱하는 배수"),
     "vol_stop": (None, None, bool, "흔들림(ATR)에 맞춰 손절을 넓히고 수량을 줄임"),
+    "scale_out": (None, None, bool, "분할 매도: 목표의 절반에서 절반을 먼저 팔고 나머지는 본전 손절"),
+    "scale_in": (None, None, bool, "분할 매수: 절반만 먼저 사고 오르기 시작하면 나머지"),
 }
 
 
@@ -90,7 +92,7 @@ def _short_model(model):
 
 
 # 예전 판 자동매매에 없던 플랜 값 → 그 판의 동작과 같은 값
-PARAM_OLD = {"exit_mult": 1.0, "watch_mult": 0.5, "idx_floor": 0.0, "chase_pct": 0.5, "loss_streak": 3, "vol_stop": False}
+PARAM_OLD = {"exit_mult": 1.0, "watch_mult": 0.5, "idx_floor": 0.0, "chase_pct": 0.5, "loss_streak": 3, "vol_stop": False, "scale_out": False, "scale_in": False}
 
 
 def _clamp_key(key, val):
@@ -156,8 +158,13 @@ VARIANTS = {
     "focus": ("한 종목 집중", "1종목에 절반씩", {"max_positions": 1, "per_trade_pct": 50}),
     "spread": ("여러 종목 분산", "5종목에 20%씩", {"max_positions": 5, "per_trade_pct": 20}),
     "calm": ("약한 날 쉬기", "지수가 -1% 아래면 사지 않음(실전 기본과 같은 지수 기준)", {"idx_floor": -1.0}),
+    "out": ("분할 매도", "목표의 절반에 닿으면 절반을 먼저 팔고, 나머지는 손절선을 본전으로 올려 목표까지", {"scale_out": True}),
+    "in": ("분할 매수", "절반만 먼저 사고, 오르기 시작하면(손절폭의 30%만큼) 나머지를 삼. 바로 밀리면 절반만 잃음", {"scale_in": True}),
     "vol": ("흔들림 맞춤 손절", "최근 봉의 평균 흔들림(ATR)에 맞춰 손절을 넓히고, 잃는 돈은 같도록 수량을 줄임", {"vol_stop": True}),
 }
+SCALE_OUT_AT = 0.5     # 분할 매도: 목표의 이 비율에 닿으면 절반을 판다
+SCALE_IN_AT = 0.3      # 분할 매수: 손절폭의 이 비율만큼 오르면 나머지를 산다
+SCALE_IN_MIN = {"day": 30, "swing": 360, "month": 360}   # 분할 매수: 이 시간(분) 안에 오르지 않으면 나머지는 사지 않는다
 VOL_K = {"day": 2.0, "swing": 1.5, "month": 1.5}   # 손절 = 최근 봉 평균 흔들림(ATR, 단타는 5분봉·스윙은 일봉) × 이 배수보다 좁게는 잡지 않는다
 def apply_variant(p, key, keep=()):
     """플랜 값에 실험 플랜의 차이를 입힌다. '*1.5'는 곱하기, '+5'·'-7'은 더하기·빼기, 그 밖은 그 값으로."""
@@ -293,6 +300,8 @@ class AutoTrade:
         db.x("""CREATE TABLE IF NOT EXISTS at_changes(
             id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL, ts TEXT NOT NULL, ver INTEGER NOT NULL, source TEXT NOT NULL,
             changes TEXT NOT NULL, stats TEXT)""")
+        # part: 1=분할 매도로 먼저 판 몫, 2=남긴 몫(본전 손절), 3=분할 매수로 더 산 몫 · add_qty: 아직 안 산 나머지 수량
+        AP._col(db, "at_trades", (("part", "INTEGER NOT NULL DEFAULT 0"), ("parent", "INTEGER"), ("add_qty", "INTEGER NOT NULL DEFAULT 0"), ("add_until", "TEXT")))
         AP._col(db, "at_runs", (("last_review_day", "TEXT"), ("lab_id", "INTEGER"), ("variant", "TEXT"), ("last_full", "REAL NOT NULL DEFAULT 0")))
         self._idx = {}        # 시장 → (받은 시각, 지수 등락률)
         self._idx_at = {}     # 지수 기호 → 날짜별 등락을 마지막으로 받은 시각
@@ -700,7 +709,7 @@ class AutoTrade:
                 elif chg >= t["target_pct"]:
                     reason = "익절"
                 elif chg <= -t["stop_pct"]:
-                    reason = "손절"
+                    reason = "본전 정리" if t["part"] == 2 and not t["stop_pct"] else "손절"
                 elif t["trail_pct"] and high > t["entry_price"] * (1 + t["trail_pct"] / 100) \
                         and price <= high * (1 - t["trail_pct"] / 100) and price > t["entry_price"]:
                     reason = "추적 익절"
@@ -711,6 +720,10 @@ class AutoTrade:
                     reason = "기간 정리"
                 if reason:
                     self._sell(run, t, price, reason)
+                elif p.get("scale_out") and not t["part"] and t["qty"] >= 2 and chg >= t["target_pct"] * SCALE_OUT_AT:
+                    self._scale_out(run, t, price)
+                elif t["add_qty"]:
+                    self._scale_in(run, t, price, chg)
         opens = self._open(run["id"])
         if run["status"] == "closing" and not opens:
             msg = run["status_msg"] or ""
@@ -744,6 +757,50 @@ class AutoTrade:
     def _snap(self, run, day=None):
         self.rt.db.x("INSERT INTO at_equity(run_id,day,equity) VALUES(?,?,?) ON CONFLICT(run_id,day) DO UPDATE SET equity=excluded.equity",
                      (run["id"], day or AP.mkt_date(run["mkt"]), self.money(run)["equity"]))
+
+    def _scale_out(self, run, t, price):
+        """분할 매도: 절반을 지금 팔아 이익을 챙기고, 남긴 몫은 손절선을 본전으로 올려 목표(또는 추적 익절)까지 둔다.
+        기록은 두 줄로 나눈다(먼저 판 몫 = 새 줄, 남긴 몫 = 원래 줄) — 실전 주문·체결 확인도 줄마다 그대로 쓴다."""
+        half = t["qty"] // 2
+        cols = [k for k in t if k != "id"]
+        row = dict(t, qty=half, part=1, parent=t["id"], add_qty=0, add_until=None)
+        cid = self.rt.db.x(f"INSERT INTO at_trades({','.join(cols)}) VALUES({','.join('?' * len(cols))})", tuple(row[k] for k in cols))
+        self.rt.db.x("UPDATE at_trades SET qty=?, part=2, stop_pct=0, add_qty=0 WHERE id=?", (t["qty"] - half, t["id"]))
+        self.log(run["id"], "control", f"{t['name']} 분할 매도 · 목표의 절반(+{t['target_pct'] * SCALE_OUT_AT:g}%)에 닿아 {half}주를 먼저 팔고, 남은 {t['qty'] - half}주는 손절선을 본전으로 올렸어요",
+                 {"trade": t["id"], "part": cid})
+        self._sell(run, dict(row, id=cid), price, "분할 익절")
+
+    def _scale_in(self, run, t, price, chg):
+        """분할 매수의 나머지: 산 뒤 손절폭의 30%만큼 오르면(방향이 맞다는 확인) 나머지를 산다. 제때 오르지 않으면 사지 않는다."""
+        def drop(why):
+            self.rt.db.x("UPDATE at_trades SET add_qty=0 WHERE id=?", (t["id"],))
+            self.log(run["id"], "skip", f"{t['name']} 나머지 {t['add_qty']}주는 사지 않아요 · {why}", {"trade": t["id"]})
+        if run["status"] != "running":
+            return
+        if t["add_until"] and self._now() > t["add_until"]:
+            return drop("정한 시간 안에 오르지 않음")
+        if chg >= t["target_pct"] * SCALE_OUT_AT:
+            return drop("이미 많이 올라 쫓지 않음")
+        if chg < t["stop_pct"] * SCALE_IN_AT:
+            return
+        mkt = run["mkt"]
+        buy_px = C.buy_fill(price, self.rt.settings.get("costs")) if mkt == "kr" else round(price * (1 + US_SLIP), 4)
+        qty = min(t["add_qty"], int(max(0.0, self.money(run)["cash"]) // (buy_px * 1.002)))
+        if qty < 1:
+            return drop("현금이 모자람")
+        why = json.loads(t["why"] or "{}")
+        x = {"exit_by": t["exit_by"], "trail_pct": t["trail_pct"], "score": t["score"], "win_prob": t["win_prob"], "cal_prob": t["cal_prob"],
+             "feat": json.loads(t["feat"] or "null"), "exch": t["exch"], "reasons": why.get("reasons"), "risks": why.get("risks"), "catalyst": why.get("catalyst"),
+             "theme": why.get("theme"), "entry_type": why.get("entry_type"), "entry_price": why.get("ref_price"), "target_pct": why.get("ai_target"), "stop_pct": why.get("ai_stop")}
+        self.rt.db.x("UPDATE at_trades SET add_qty=0 WHERE id=?", (t["id"],))       # 주문이 실패해도 되풀이하지 않는다
+        try:
+            tid = self._buy(run, x, t["sym"], t["name"], {"exch": t["exch"]}, qty, price, buy_px, t["target_pct"], t["stop_pct"],
+                            {"id": t["pick_id"], "stance": t["stance"], "view": why.get("view"), "lite": why.get("lite")})
+        except Exception as e:
+            self.log(run["id"], "skip", f"{t['name']} 나머지 매수 실패: {e}", {"trade": t["id"]})
+            return
+        self.rt.db.x("UPDATE at_trades SET part=3, parent=?, exit_date=? WHERE id=?", (t["id"], t["exit_date"], tid))
+        self.log(run["id"], "control", f"{t['name']} 분할 매수 · {chg:+.2f}% 올라 나머지 {qty}주를 샀어요", {"trade": tid, "parent": t["id"]})
 
     def _sell(self, run, t, price, reason):
         mkt, now = run["mkt"], self._now()
@@ -893,7 +950,7 @@ class AutoTrade:
         """이 자동매매가 지금 새로 살 수 없는 자기 사정(자리·손실 한도·연속 손절·현금). 없으면 None."""
         p, mkt = run["params"], run["mkt"]
         opens = self._open(run["id"])
-        if len(opens) >= p["max_positions"]:
+        if len({t["sym"] for t in opens}) >= p["max_positions"]:
             return "full", "보유 종목 수가 꽉 찼어요"
         closed = self._today_closed(run)
         day_pnl = sum(c["pnl"] or 0 for c in closed) + sum(t["qty"] * ((t["last"] or t["entry_price"]) - t["entry_price"]) for t in opens)
@@ -1193,7 +1250,7 @@ class AutoTrade:
                       "limit": round(run["budget"] * p["daily_loss_pct"] / 100, 2), "streak": streak, "streak_max": int(p["loss_streak"])},
             "risk": {"loss": round(max(0.0, run["budget"] - m["equity"]), 2), "limit": round(run["budget"] * p["total_loss_pct"] / 100, 2)},
             "size": {"alloc": round(min(m["base"] * p["per_trade_pct"] / 100 * mult, max(0.0, m["cash"])), 2), "pct": p["per_trade_pct"], "mult": mult,
-                     "warm_done": min(n_closed, warm), "warm_need": warm, "slots_used": len(opens), "slots": p["max_positions"]},
+                     "warm_done": min(n_closed, warm), "warm_need": warm, "slots_used": len({t["sym"] for t in opens}), "slots": p["max_positions"]},
             "period": {"day": min(max((today - start).days + 1, 1), total_days), "days": total_days, "left": max(0, (end - today).days), "end": run["end_date"]},
             "ai": {"today_usd": round(usd_day, 3), "limit_usd": float(p.get("ai_daily_usd") or 1), "total_usd": round(usd_all, 3), "cycles_all": len(logs)},
             "last_cycle": last_cycle,
@@ -1397,7 +1454,7 @@ class AutoTrade:
             def skip(code, why):
                 dec.update(act="skip", code=code, why=why)
             opens = self._open(rid)
-            if len(opens) >= p["max_positions"]:
+            if len({t["sym"] for t in opens}) >= p["max_positions"]:
                 skip("full", "보유 종목 수가 꽉 참")
                 continue
             if x.get("auto"):
@@ -1453,11 +1510,18 @@ class AutoTrade:
                 dec["alloc"], dec["px"] = round(alloc), price
                 skip("qty", f"배정 금액({alloc:,.0f})으로 1주를 못 삼")
                 continue
+            add = 0
+            if p.get("scale_in") and qty >= 2:
+                add, qty = qty // 2, qty - qty // 2          # 절반(홀수면 한 주 더)만 먼저
             try:
                 tid = self._buy(run, x, sym, name, q, qty, price, buy_px, tp, sl, dict(res, lite=lite))
             except Exception as e:
                 skip("fail", f"매수 실패: {e}")
                 continue
+            if add:
+                until = (datetime.now() + timedelta(minutes=SCALE_IN_MIN.get(run["style"], 360))).isoformat(timespec="seconds")
+                self.rt.db.x("UPDATE at_trades SET add_qty=?, add_until=? WHERE id=?", (add, until, tid))
+                dec["add"] = add
             bought += 1
             dec.update(act="buy", qty=qty, price=buy_px, target_pct=tp, stop_pct=sl, trade=tid)
         self.log(rid, "cycle", f"{'빠른 재추천' if lite else '추천'} {len(picks)}종목 중 {bought}종목 매수" + (f" · {res.get('view')}" if res.get("view") else ""),
@@ -2938,12 +3002,13 @@ class AutoTrade:
         size = {"base": round(m["base"], 2), "cash": round(m["cash"], 2), "pct": p["per_trade_pct"], "alloc": round(m["base"] * p["per_trade_pct"] / 100, 2),
                 "warm": warm, "warm_mult": float(p.get("warmup_mult") or 1), "warm_left": max(0, int(p.get("warmup_trades") or 0) - n_closed),
                 "watch_mult": float(p.get("watch_mult") or 0.5), "skip_watch": bool(p.get("skip_watch")), "min_one": run["mode"] == "paper" and bool(p.get("min_one", True)),
-                "exit_mult": float(p.get("exit_mult") or 1), "tp_cap": p["tp_cap"], "sl_cap": p["sl_cap"]}
+                "exit_mult": float(p.get("exit_mult") or 1), "tp_cap": p["tp_cap"], "sl_cap": p["sl_cap"],
+                "scale_in": bool(p.get("scale_in")), "scale_out": bool(p.get("scale_out")), "vol_stop": bool(p.get("vol_stop"))}
         # 5) 주문 · 6) 들고 있기
         buys = self.rt.db.one("SELECT COUNT(*) n FROM at_trades WHERE run_id=? AND entry_day=? AND status!='cancelled'", (rid, today))["n"]
         hold = [{"sym": t["sym"], "name": t["name"], "qty": t["qty"], "pct": round(((t["last"] or t["entry_price"]) / t["entry_price"] - 1) * 100, 2),
                  "tp": t["target_pct"], "sl": t["stop_pct"], "trail": t["trail_pct"] or 0, "high": round(((t["high"] or t["entry_price"]) / t["entry_price"] - 1) * 100, 2),
-                 "exit": t["exit_by"] if run["style"] == "day" else t["exit_date"], "fill_ok": bool(t["fill_ok"])} for t in self._open(rid)]
+                 "exit": t["exit_by"] if run["style"] == "day" else t["exit_date"], "fill_ok": bool(t["fill_ok"]), "part": t["part"], "add": t["add_qty"]} for t in self._open(rid)]
         # 7) 팔기: 오늘 판 것
         ex = {}
         for t in self.rt.db.q("SELECT pnl, reason FROM at_trades WHERE run_id=? AND status='closed' AND exit_day=?", (rid, today)):

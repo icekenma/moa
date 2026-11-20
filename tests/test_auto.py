@@ -1857,3 +1857,51 @@ def test_lab_calm_and_vol_variants(env, monkeypatch):
     F = at.flow(ids["calm"])
     assert "③ 거르기" in next(g for g in F["gates"] if g["code"] == "market")["d"] and any(x["code"] == "market" and x["out"] == 1 for x in F["funnel"]["steps"])
     assert at._atr_pct.__name__ == "<lambda>"
+
+
+def test_scale_out_and_scale_in(env):
+    """분할 매도: 목표의 절반에서 절반을 먼저 팔고 남긴 몫은 본전 손절. 분할 매수: 절반만 먼저 사고 오르면 나머지, 안 오르면 안 삼."""
+    at = env.at
+    rid = env.run()
+    env.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.scale_out',json('true'),'$.max_positions',1) WHERE id=?", (rid,))
+    assert env.enter(rid, [env.pick("005930")]) == 1
+    t0 = at._open(rid)[0]
+    q0, e0 = t0["qty"], t0["entry_price"]
+    assert q0 >= 2
+    env.px["005930"] = round(e0 * 1.016)                               # 목표 3%의 절반을 넘음
+    at._manage(at._run(rid))
+    op, cl = at._open(rid), at._closed(rid)
+    assert len(op) == 1 and op[0]["qty"] == q0 - q0 // 2 and op[0]["part"] == 2 and op[0]["stop_pct"] == 0
+    assert len(cl) == 1 and cl[0]["qty"] == q0 // 2 and cl[0]["reason"] == "분할 익절" and cl[0]["pnl"] > 0 and cl[0]["parent"] == op[0]["id"]
+    at._manage(at._run(rid))
+    assert len(at._closed(rid)) == 1                                   # 다시 나누지 않는다
+    assert at._room(at._run(rid))[0] == "full"                         # 자리는 종목 수로 센다
+    env.px["005930"] = round(e0 * 0.999)
+    at._manage(at._run(rid))
+    last = next(x for x in at._closed(rid) if x["part"] == 2)
+    assert not at._open(rid) and last["reason"] == "본전 정리" and abs(last["pnl_pct"]) < 0.6
+    # 분할 매수
+    r2 = rid
+    env.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.scale_in',json('true'),'$.scale_out',json('false'),'$.max_positions',3) WHERE id=?", (r2,))
+    env.px["000660"] = 100_000.0
+    assert env.enter(r2, [env.pick("000660")]) == 1
+    a = at._open(r2)[0]
+    full = a["qty"] + a["add_qty"]
+    assert a["add_qty"] == full // 2 and a["add_qty"] >= 1 and a["add_until"]
+    at._manage(at._run(r2))
+    assert len(at._open(r2)) == 1                                      # 아직 안 올랐으면 기다림
+    env.px["000660"] = round(a["entry_price"] * 1.006)                  # 손절 1.5%의 30%(0.45%) 넘게 오름
+    at._manage(at._run(r2))
+    op = at._open(r2)
+    assert len(op) == 2 and op[1]["part"] == 3 and op[1]["parent"] == a["id"] and op[1]["qty"] == a["add_qty"] and op[0]["add_qty"] == 0
+    assert op[1]["entry_price"] > a["entry_price"] and (op[1]["target_pct"], op[1]["stop_pct"]) == (a["target_pct"], a["stop_pct"])
+    # 안 오르면 시간 지나 포기
+    r3 = rid
+    env.px["035420"] = 200_000.0
+    assert env.enter(r3, [env.pick("035420")]) == 1
+    env.rt.db.x("UPDATE at_trades SET add_until='2000-01-01T00:00:00' WHERE run_id=? AND sym='035420'", (r3,))
+    at._manage(at._run(r3))
+    nv = [x for x in at._open(r3) if x["sym"] == "035420"]
+    assert len(nv) == 1 and nv[0]["add_qty"] == 0
+    F = at.flow(r2)
+    assert F["size"]["scale_in"] and {h["part"] for h in F["hold"]} == {0, 3}

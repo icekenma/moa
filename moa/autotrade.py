@@ -81,8 +81,8 @@ PLAN_KEYS = {
     "idx_floor": (-5.0, 0.0, float, "지수가 이만큼 내리면 AI를 부르지 않음(%, 0=끔)"),
     "exit_mult": (0.3, 3.0, float, "AI가 낸 익절·손절 폭에 곱하는 배수"),
     "vol_stop": (None, None, bool, "흔들림(ATR)에 맞춰 손절을 넓히고 수량을 줄임"),
-    "scale_out": (None, None, bool, "분할 매도: 목표의 절반에서 절반을 먼저 팔고 나머지는 본전 손절"),
-    "scale_in": (None, None, bool, "분할 매수: 절반만 먼저 사고 오르기 시작하면 나머지"),
+    "scale_out": (None, None, bool, "분할 매도: 상황(승률·지수·오른 속도·남은 시간)에 맞춘 비율로 나눠 팔기"),
+    "scale_in": (None, None, bool, "분할 매수: 확신(승률·지수)에 맞춘 비율로 먼저 사고 오르면 나머지"),
 }
 
 
@@ -158,12 +158,17 @@ VARIANTS = {
     "focus": ("한 종목 집중", "1종목에 절반씩", {"max_positions": 1, "per_trade_pct": 50}),
     "spread": ("여러 종목 분산", "5종목에 20%씩", {"max_positions": 5, "per_trade_pct": 20}),
     "calm": ("약한 날 쉬기", "지수가 -1% 아래면 사지 않음(실전 기본과 같은 지수 기준)", {"idx_floor": -1.0}),
-    "out": ("분할 매도", "목표의 절반에 닿으면 절반을 먼저 팔고, 나머지는 손절선을 본전으로 올려 목표까지", {"scale_out": True}),
-    "in": ("분할 매수", "절반만 먼저 사고, 오르기 시작하면(손절폭의 30%만큼) 나머지를 삼. 바로 밀리면 절반만 잃음", {"scale_in": True}),
+    "out": ("분할 매도", "승률·지수·오른 속도·남은 시간으로 힘을 재서, 약하면 일찍 많이 팔고 강하면 늦게 조금만 팔아 나머지를 길게", {"scale_out": True}),
+    "in": ("분할 매수", "확신이 높으면 많이(아주 높으면 한 번에), 낮으면 조금만 먼저 사고 오르는 걸 확인한 뒤 나머지", {"scale_in": True}),
     "vol": ("흔들림 맞춤 손절", "최근 봉의 평균 흔들림(ATR)에 맞춰 손절을 넓히고, 잃는 돈은 같도록 수량을 줄임", {"vol_stop": True}),
 }
-SCALE_OUT_AT = 0.5     # 분할 매도: 목표의 이 비율에 닿으면 절반을 판다
-SCALE_IN_AT = 0.3      # 분할 매수: 손절폭의 이 비율만큼 오르면 나머지를 산다
+# 분할 매도·매수는 '힘'(0~1: 보정 승률·지수·오른 속도·남은 시간)으로 비율과 시점을 그때그때 정한다 → AutoTrade._strength
+SCALE_OUT_AT = (0.4, 0.6)      # 1차 매도 시점: 목표의 40%(약함) ~ 60%(강함)
+SCALE_OUT_F1 = (0.65, 0.25)    # 1차에 파는 비율: 65%(약함) ~ 25%(강함)
+SCALE_OUT_AT2 = 0.8            # 2차 매도 시점: 목표의 80%
+SCALE_OUT_F2 = (0.6, 0.3)      # 2차에 (남은 것 중) 파는 비율
+SCALE_IN_F = (0.4, 0.8)        # 먼저 사는 비율: 40%(확신 낮음) ~ 80%(높음), 확신 0.85 이상이면 한 번에
+SCALE_IN_AT = (0.5, 0.2)       # 나머지를 사는 확인 폭: 손절폭의 50%(확신 낮음) ~ 20%(높음)
 SCALE_IN_MIN = {"day": 30, "swing": 360, "month": 360}   # 분할 매수: 이 시간(분) 안에 오르지 않으면 나머지는 사지 않는다
 VOL_K = {"day": 2.0, "swing": 1.5, "month": 1.5}   # 손절 = 최근 봉 평균 흔들림(ATR, 단타는 5분봉·스윙은 일봉) × 이 배수보다 좁게는 잡지 않는다
 def apply_variant(p, key, keep=()):
@@ -301,7 +306,7 @@ class AutoTrade:
             id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL, ts TEXT NOT NULL, ver INTEGER NOT NULL, source TEXT NOT NULL,
             changes TEXT NOT NULL, stats TEXT)""")
         # part: 1=분할 매도로 먼저 판 몫, 2=남긴 몫(본전 손절), 3=분할 매수로 더 산 몫 · add_qty: 아직 안 산 나머지 수량
-        AP._col(db, "at_trades", (("part", "INTEGER NOT NULL DEFAULT 0"), ("parent", "INTEGER"), ("add_qty", "INTEGER NOT NULL DEFAULT 0"), ("add_until", "TEXT")))
+        AP._col(db, "at_trades", (("part", "INTEGER NOT NULL DEFAULT 0"), ("parent", "INTEGER"), ("add_qty", "INTEGER NOT NULL DEFAULT 0"), ("add_until", "TEXT"), ("add_at", "REAL")))
         AP._col(db, "at_runs", (("last_review_day", "TEXT"), ("lab_id", "INTEGER"), ("variant", "TEXT"), ("last_full", "REAL NOT NULL DEFAULT 0")))
         self._idx = {}        # 시장 → (받은 시각, 지수 등락률)
         self._idx_at = {}     # 지수 기호 → 날짜별 등락을 마지막으로 받은 시각
@@ -709,7 +714,7 @@ class AutoTrade:
                 elif chg >= t["target_pct"]:
                     reason = "익절"
                 elif chg <= -t["stop_pct"]:
-                    reason = "본전 정리" if t["part"] == 2 and not t["stop_pct"] else "손절"
+                    reason = "손절" if t["stop_pct"] > 0 else "이익 지키기" if t["stop_pct"] < 0 else "본전 정리"
                 elif t["trail_pct"] and high > t["entry_price"] * (1 + t["trail_pct"] / 100) \
                         and price <= high * (1 - t["trail_pct"] / 100) and price > t["entry_price"]:
                     reason = "추적 익절"
@@ -720,8 +725,8 @@ class AutoTrade:
                     reason = "기간 정리"
                 if reason:
                     self._sell(run, t, price, reason)
-                elif p.get("scale_out") and not t["part"] and t["qty"] >= 2 and chg >= t["target_pct"] * SCALE_OUT_AT:
-                    self._scale_out(run, t, price)
+                elif p.get("scale_out") and t["part"] in (0, 2, 3) and t["qty"] >= 2:
+                    self._scale_out(run, t, price, chg, ss)
                 elif t["add_qty"]:
                     self._scale_in(run, t, price, chg)
         opens = self._open(run["id"])
@@ -758,16 +763,49 @@ class AutoTrade:
         self.rt.db.x("INSERT INTO at_equity(run_id,day,equity) VALUES(?,?,?) ON CONFLICT(run_id,day) DO UPDATE SET equity=excluded.equity",
                      (run["id"], day or AP.mkt_date(run["mkt"]), self.money(run)["equity"]))
 
-    def _scale_out(self, run, t, price):
-        """분할 매도: 절반을 지금 팔아 이익을 챙기고, 남긴 몫은 손절선을 본전으로 올려 목표(또는 추적 익절)까지 둔다.
-        기록은 두 줄로 나눈다(먼저 판 몫 = 새 줄, 남긴 몫 = 원래 줄) — 실전 주문·체결 확인도 줄마다 그대로 쓴다."""
-        half = t["qty"] // 2
+    def _strength(self, run, wp, stance=None, hold_min=None, left_min=None):
+        """지금 이 종목을 얼마나 믿고 들고 갈 만한가(0~1)와 그 근거. 분할 매도·매수의 비율과 시점을 정한다.
+        보정 승률(높을수록 강함) · 그 시장 지수(-1%=0, +1%=1) · 오른 속도(빨리 닿을수록 강함) · 남은 장 시간(단타: 2시간 아래면 약함)."""
+        clip = lambda v: max(0.0, min(1.0, v))
+        idx = self.index_pct(run["mkt"])
+        cv, mk = clip(((wp or 55) - 50) / 25), clip((idx + 1) / 2) if idx is not None else 0.5
+        why = [f"승률 {wp or 0:g}%", f"지수 {idx:+.2f}%" if idx is not None else "지수 모름"]
+        if hold_min is None:                                   # 살 때: 확신만
+            v = 0.6 * cv + 0.4 * mk
+            if stance == "관망":
+                v, why = v * 0.6, why + ["AI 관망"]
+            return round(v, 2), why
+        span = 60 if run["style"] == "day" else 60 * 24 * 3
+        mo = clip(1 - hold_min / span)
+        tl = clip((left_min or 0) / 120) if run["style"] == "day" else 0.5
+        why.append(f"{hold_min}분 만에 도달" if hold_min < 600 else f"{hold_min // 1440 + 1}일째 도달")
+        if run["style"] == "day":
+            why.append(f"장 {left_min or 0:g}분 남음")
+        return round(0.35 * cv + 0.25 * mk + 0.25 * mo + 0.15 * tl, 2), why
+
+    def _scale_out(self, run, t, price, chg, ss):
+        """분할 매도(두 번까지). 힘이 약하면 일찍·많이 팔고 남긴 몫의 이익 일부를 지키고, 강하면 늦게·조금만 팔고 남긴 몫은 본전 손절 + 느슨한 추적으로 길게 둔다.
+        기록은 몫마다 한 줄(먼저 판 몫 = 새 줄, 남긴 몫 = 원래 줄) — 실전 주문·체결 확인도 줄마다 그대로 쓴다."""
+        second = t["part"] == 2
+        try:
+            hold = int((datetime.now() - datetime.fromisoformat(t["entry_ts"])).total_seconds() // 60)
+        except Exception:
+            hold = 0
+        st, why = self._strength(run, t["cal_prob"] if t["cal_prob"] is not None else t["win_prob"], hold_min=hold, left_min=ss.get("left_min"))
+        mix = lambda ab: ab[0] + (ab[1] - ab[0]) * st
+        at = t["target_pct"] * (SCALE_OUT_AT2 if second else mix(SCALE_OUT_AT))
+        if chg < at:
+            return
+        n = max(1, min(t["qty"] - 1, round(t["qty"] * mix(SCALE_OUT_F2 if second else SCALE_OUT_F1))))
+        keep = round(chg * (0.5 if second else 0.25 if st < 0.6 else 0.0), 2)     # 남긴 몫이 이 수익률 아래로 내려오면 정리(0 = 본전)
+        trail = t["trail_pct"] or round((json.loads(t["why"] or "{}").get("ai_stop") or t["target_pct"] / 2) * (0.6 + 0.4 * st), 2)
         cols = [k for k in t if k != "id"]
-        row = dict(t, qty=half, part=1, parent=t["id"], add_qty=0, add_until=None)
+        row = dict(t, qty=n, part=1, parent=t["id"], add_qty=0, add_until=None)
         cid = self.rt.db.x(f"INSERT INTO at_trades({','.join(cols)}) VALUES({','.join('?' * len(cols))})", tuple(row[k] for k in cols))
-        self.rt.db.x("UPDATE at_trades SET qty=?, part=2, stop_pct=0, add_qty=0 WHERE id=?", (t["qty"] - half, t["id"]))
-        self.log(run["id"], "control", f"{t['name']} 분할 매도 · 목표의 절반(+{t['target_pct'] * SCALE_OUT_AT:g}%)에 닿아 {half}주를 먼저 팔고, 남은 {t['qty'] - half}주는 손절선을 본전으로 올렸어요",
-                 {"trade": t["id"], "part": cid})
+        self.rt.db.x("UPDATE at_trades SET qty=?, part=?, stop_pct=?, trail_pct=?, add_qty=0 WHERE id=?", (t["qty"] - n, 4 if second else 2, -keep, trail, t["id"]))
+        self.log(run["id"], "control", f"{t['name']} 분할 매도 {'2차' if second else '1차'} · {chg:+.2f}%에서 {t['qty']}주 중 {n}주({n / t['qty'] * 100:.0f}%)를 팔고 "
+                                       f"남은 {t['qty'] - n}주는 {'본전' if not keep else f'+{keep:g}%'} 아래로 내려오면 정리 · 힘 {st:g}({', '.join(why)})",
+                 {"trade": t["id"], "part": cid, "strength": st, "frac": round(n / t["qty"], 2), "keep": keep})
         self._sell(run, dict(row, id=cid), price, "분할 익절")
 
     def _scale_in(self, run, t, price, chg):
@@ -779,10 +817,12 @@ class AutoTrade:
             return
         if t["add_until"] and self._now() > t["add_until"]:
             return drop("정한 시간 안에 오르지 않음")
-        if chg >= t["target_pct"] * SCALE_OUT_AT:
+        if chg >= t["target_pct"] * SCALE_OUT_AT[0]:
             return drop("이미 많이 올라 쫓지 않음")
-        if chg < t["stop_pct"] * SCALE_IN_AT:
+        if chg < (t.get("add_at") or t["stop_pct"] * 0.3):
             return
+        if (self.index_pct(run["mkt"]) or 0) <= -1.5:
+            return drop("지수가 크게 밀림")
         mkt = run["mkt"]
         buy_px = C.buy_fill(price, self.rt.settings.get("costs")) if mkt == "kr" else round(price * (1 + US_SLIP), 4)
         qty = min(t["add_qty"], int(max(0.0, self.money(run)["cash"]) // (buy_px * 1.002)))
@@ -1512,7 +1552,13 @@ class AutoTrade:
                 continue
             add = 0
             if p.get("scale_in") and qty >= 2:
-                add, qty = qty // 2, qty - qty // 2          # 절반(홀수면 한 주 더)만 먼저
+                # 확신(보정 승률·지수·관망)에 맞춰 먼저 사는 비율과 나머지를 사는 확인 폭을 정한다. 아주 높으면 나누지 않는다
+                cf, cwhy = self._strength(run, wp, stance=res.get("stance"))
+                if cf < 0.85:
+                    first = max(1, min(qty - 1, round(qty * (SCALE_IN_F[0] + (SCALE_IN_F[1] - SCALE_IN_F[0]) * cf))))
+                    add, qty = qty - first, first
+                    add_at = round(sl * (SCALE_IN_AT[0] + (SCALE_IN_AT[1] - SCALE_IN_AT[0]) * cf), 2)
+                    dec.update(conf=cf, add_at=add_at)
             try:
                 tid = self._buy(run, x, sym, name, q, qty, price, buy_px, tp, sl, dict(res, lite=lite))
             except Exception as e:
@@ -1520,8 +1566,9 @@ class AutoTrade:
                 continue
             if add:
                 until = (datetime.now() + timedelta(minutes=SCALE_IN_MIN.get(run["style"], 360))).isoformat(timespec="seconds")
-                self.rt.db.x("UPDATE at_trades SET add_qty=?, add_until=? WHERE id=?", (add, until, tid))
+                self.rt.db.x("UPDATE at_trades SET add_qty=?, add_until=?, add_at=? WHERE id=?", (add, until, add_at, tid))
                 dec["add"] = add
+                self.log(rid, "control", f"{name} 분할 매수 · 확신 {cf:g}({', '.join(cwhy)}) → {qty}주({qty / (qty + add) * 100:.0f}%) 먼저, +{add_at:g}% 오르면 {add}주 더", {"trade": tid})
             bought += 1
             dec.update(act="buy", qty=qty, price=buy_px, target_pct=tp, stop_pct=sl, trade=tid)
         self.log(rid, "cycle", f"{'빠른 재추천' if lite else '추천'} {len(picks)}종목 중 {bought}종목 매수" + (f" · {res.get('view')}" if res.get("view") else ""),

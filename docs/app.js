@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261120.1406";
+const UI_VERSION = "261120.1450";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2486,10 +2486,11 @@ pages.invest = {
   },
   evoDraw(box) {
     const E = this.ev, D = E.d, O = D.overview;
-    const P = { now: () => this.evoNow(D), road: () => this.evoRoad(D), logic: () => this.evoLogic(D), next: () => this.evoNext(D) };
+    const P = { now: () => this.evoNow(D), rules: () => this.evoRules(D), road: () => this.evoRoad(D), logic: () => this.evoLogic(D), next: () => this.evoNext(D) };
+    if (!P[E.tab] || (E.tab === "rules" && !D.rules)) E.tab = "now";
     box.innerHTML = `<section class="ev-hero card">
         <div class="ev-hh"><b>엔진 노트</b><span>${O.since ? `${esc(O.since.slice(2).replace(/-/g, "."))}부터 ${O.days}일째 · ` : ""}수익률을 높이려고 해 온 일과 지금 규칙, 다음 수</span></div>
-        ${seg("엔진노트", [["now", "한눈에"], ["road", "걸어온 길"], ["logic", "지금 로직"], ["next", "앞으로"]], E.tab, "ap-mkt")}
+        ${seg("엔진노트", [["now", "한눈에"], ["rules", "매매 규칙"], ["road", "걸어온 길"], ["logic", "지금 로직"], ["next", "앞으로"]], E.tab, "ap-mkt ev-seg")}
       </section><div id="evBody" class="ev-body">${P[E.tab]()}</div>`;
     bindSeg(box, "엔진노트", (v) => { E.tab = v; store.set("evoTab", v); this.evoDraw(box); window.scrollTo(0, 0); });
     box.onclick = (e) => {
@@ -2528,6 +2529,27 @@ pages.invest = {
       <section class="card"><h2 class="ev-h2">수익률을 위한 원칙</h2>
         <ol class="ev-pr">${L.principles.map((x) => `<li><b>${esc(x.t)}</b><span>${esc(x.d)}</span></li>`).join("")}</ol></section>
       <div class="tiny" style="padding:0 3px">${esc(D.at.replace("T", " "))} 기준 · 미국 손익은 지금 환율(${won(O.fx)}원)로 바꿔 더했어요.</div>`;
+  },
+  // 매매 규칙: 기본 원칙 · 지금 들어 있는 매수·매도 규칙 전부(최근 쓰임과 판정) · 변경 이력
+  evoRules(D) {
+    const R = D.rules, K = { add: ["더함", "g"], change: ["고침", "y"], remove: ["지움", "warn"], check: ["전체 점검", "v"] }, SD = { buy: "매수", sell: "매도", both: "매수·매도" };
+    const row = (r) => `<li class="ev-rl ${r.tone ? "rk-" + r.tone : ""}"><div class="ev-rlh"><b>${esc(r.t)}</b>${r.since ? `<span class="ev-rv">${esc(r.since)}</span>` : ""}${r.tone === "check" ? `<span class="tag warn">검토</span>` : r.tone === "keep" ? `<span class="tag g">유지</span>` : ""}</div>
+        <p>${esc(r.why)}</p>${r.verdict ? `<small>${esc(r.verdict)}</small>` : ""}</li>`;
+    const block = (list, stages) => stages.map((st) => { const xs = list.filter((r) => r.stage === st), J = xs.filter((r) => r.kind === "judge"), O = xs.filter((r) => r.kind !== "judge");
+      return xs.length ? `<h3 class="ev-h3">${st} <span>${xs.length}</span></h3>${J.length ? `<ul class="ev-rls">${J.map(row).join("")}</ul>` : ""}
+        ${O.length ? `<details class="ev-ops"><summary>운영·안전장치 ${O.length}개</summary><ul class="ev-rls">${O.map(row).join("")}</ul></details>` : ""}` : ""; }).join("");
+    const B = R.bought;
+    return `<section class="card ev-core"><span>가장 기본이 되는 원칙</span><b>${esc(R.core.t)}</b><p>${esc(R.core.d)}</p></section>
+      <section class="card"><div class="ev-ks three">
+          <div class="ev-k"><span>매수 규칙</span><b>${R.n.buy}</b></div><div class="ev-k"><span>매도 규칙</span><b>${R.n.sell}</b></div>
+          <div class="ev-k ${R.n.check ? "warnk" : ""}"><span>검토할 규칙</span><b>${R.n.check}</b></div></div>
+        <div class="tiny" style="margin-top:8px">판정은 최근 ${R.days}일 기록(지금 ${R.seen_days}거래일치)으로 해요. 걸러낸 종목을 AI 목표·손절대로 샀다면 어땠을지(추천 성적표)를 봐요.${B.graded ? ` 같은 기간 실제로 산 종목은 평균 ${pct(B.avg, 2)} · 이익 ${B.win}%.` : ""}</div></section>
+      <section class="card ev-rb"><h2 class="ev-h2">매수 규칙</h2>${block(R.buy, ["점검", "거르기", "크기"])}</section>
+      <section class="card ev-rb"><h2 class="ev-h2">매도 규칙</h2>${block(R.sell, ["팔기"])}</section>
+      <section class="card"><h2 class="ev-h2">규칙을 관리하는 방법</h2><ol class="ev-pr plain">${R.upkeep.map((t) => `<li><span>${esc(t)}</span></li>`).join("")}</ol></section>
+      <section class="card"><h2 class="ev-h2">매수·매도 로직 변경 이력</h2>
+        <ol class="ev-lg2">${R.log.map((x) => `<li class="${x.kind}"><div class="ev-lgh"><time>${esc(x.day.slice(5).replace("-", "/"))}</time><span class="tag ${K[x.kind][1]}">${K[x.kind][0]}</span><span class="ev-sd">${SD[x.side]}</span><span class="ev-rv">${esc(x.ver)}</span></div>
+          <b>${esc(x.t)}</b><p>${esc(x.what)}</p><small>왜: ${esc(x.why)}</small></li>`).join("")}</ol></section>`;
   },
   evoRoad(D) {
     const E = this.ev;

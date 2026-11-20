@@ -38,6 +38,8 @@ SKIP = {"winprob": "승률 기준 미달", "score": "점수 기준 미달", "rr"
         "auto": "앱이 고른 예비 종목", "watch": "AI가 관망 권함", "quote": "시세 없음", "fail": "매수 실패", "market": "지수가 약해 쉼", "etc": "기타"}
 _SKIP_TEXT = (("승률", "winprob"), ("점수", "score"), ("손익비", "rr"), ("비용", "fee"), ("쫓아가지", "chase"), ("1주를 못", "qty"),
               ("꽉 참", "full"), ("이미 거래", "dup"), ("예비 종목", "auto"), ("시세", "quote"), ("매수 실패", "fail"))
+# 파는 이유 전부. 매매 규칙 대장(moa/evolution.py RULES)과 항상 같아야 한다(테스트가 확인)
+EXITS = ("익절", "손절", "추적 익절", "시간 정리", "기간 정리", "종료 정리", "분할 익절", "이익 지키기", "본전 정리")
 SHARE_SEC = 600        # 같은 조건의 추천을 함께 쓰는 시간(초)
 QUICK_MIN = 10         # 빠른 재추천의 가장 짧은 간격(분)
 # 정밀 추천 엔진 사다리. 성과가 나쁘면 한 칸씩 올린다(Sonnet → Opus → Fable). 하루 AI 비용 한도는 그대로 지킨다(필요하면 횟수를 줄여서)
@@ -1746,6 +1748,43 @@ class AutoTrade:
         return out
 
     # ----- 기회 분석: 추천받은 종목을 얼마나 샀고, 건너뛴 종목은 그 뒤 실제로 어땠나
+    def rule_use(self, days=30):
+        """매매 규칙이 실제로 얼마나 쓰였고 도움이 됐는지(모든 자동매매, 최근 days일).
+        거르기: 규칙별로 걸러낸 종목 수와, 그 종목을 AI 목표·손절대로 샀다면 어땠는지(추천 성적표). 같은 추천을 여러 플랜이 나눠 쓴 것은 한 번만 센다.
+        팔기: 이유별 건수·평균 수익률·이익 비율."""
+        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        seen, by, buys, dset = set(), {}, set(), set()
+        for r in self.rt.db.q("SELECT day, data FROM at_log WHERE kind='cycle' AND data IS NOT NULL AND day>=?", (since,)):
+            d = json.loads(r["data"])
+            dset.add(r["day"])
+            dec = d.get("decisions")
+            if dec is None and d.get("watch"):
+                dec = [dict(q, act="skip", code="auto" if q.get("auto") else "watch") for q in d.get("picks") or []]
+            for q in dec or []:
+                sym = str(q.get("sym") or "").upper()
+                if q.get("act") == "buy":
+                    buys.add((d.get("pick_id"), sym))
+                    continue
+                k = (d.get("pick_id"), sym, skip_code(q))
+                if k not in seen:
+                    seen.add(k)
+                    by.setdefault(k[2], []).append(k[:2])
+        ids = sorted({k[0] for ks in by.values() for k in ks if k[0]} | {k[0] for k in buys if k[0]})
+        res = {}
+        for i in range(0, len(ids), 400):
+            part = ids[i:i + 400]
+            for r in self.rt.db.q(f"SELECT pick_id, sym, net_pct, result FROM ai_outcomes WHERE status='done' AND net_pct IS NOT NULL AND pick_id IN ({','.join('?' * len(part))})", part):
+                if r["result"] not in ("미체결", "자료 없음"):
+                    res[(r["pick_id"], str(r["sym"]).upper())] = r["net_pct"]
+
+        def agg(keys):
+            g = [res[k] for k in keys if k in res]
+            return {"n": len(keys), "graded": len(g), "avg": round(sum(g) / len(g), 2) if g else None, "win": round(sum(1 for v in g if v > 0) / len(g) * 100) if g else None}
+        ex = {}
+        for r in self.rt.db.q("SELECT reason, COUNT(*) n, AVG(pnl_pct) a, SUM(pnl>0) w FROM at_trades WHERE status='closed' AND exit_day>=? GROUP BY reason", (since,)):
+            ex[r["reason"] or "기타"] = {"n": r["n"], "avg": round(r["a"] or 0, 2), "win": round((r["w"] or 0) / r["n"] * 100) if r["n"] else None}
+        return {"days": days, "seen_days": len(dset), "filters": {c: agg(ks) for c, ks in by.items()}, "bought": agg(list(buys)), "exits": ex}
+
     def opportunity(self, run):
         """지금 플랜 판에서 받은 추천을 모아, 건너뛴 이유별 건수와 그 종목들의 실제 결과(추천 성적표)를 붙인다.
         결과는 AI가 낸 목표·손절대로 샀다고 쳤을 때의 비용 뺀 수익률이라, 플랜의 익절·손절 상한과는 조금 다를 수 있다."""

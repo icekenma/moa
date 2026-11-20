@@ -1914,3 +1914,35 @@ def test_scale_out_and_scale_in(env):
     assert len(nv) == 1 and nv[0]["add_qty"] == 0
     F = at.flow(r2)
     assert F["size"]["scale_in"] and {h["part"] for h in F["hold"]} == {0, 3}
+
+
+def test_rule_book_matches_engine(env):
+    """매매 규칙 대장(엔진 노트)은 엔진과 같아야 한다: 규칙을 더하거나 지우면 대장·변경 이력도 함께 고친다.
+    가장 기본 원칙(자산을 불릴 확률이 가장 높은 쪽으로 사고판다)은 빠지면 안 된다."""
+    import inspect
+    import re
+    from moa import autotrade as AT, evolution as EV
+    codes = [r[2] for r in EV.RULES]
+    assert len(codes) == len(set(codes))
+    pick = lambda pre: {c.split(":", 1)[1] for c in codes if c.startswith(pre + ":")}
+    assert pick("gate") == {g for g, _ in AT.AutoTrade.GATES} and pick("filter") == {f for f, _ in AT.AutoTrade.FILTERS} and pick("exit") == set(AT.EXITS)
+    src = inspect.getsource(AT.AutoTrade._manage) + inspect.getsource(AT.AutoTrade._scale_out)
+    used = set(re.findall(r'"([가-힣]+(?: [가-힣]+)?)"', "\n".join(ln for ln in src.splitlines() if "reason = " in ln or "_sell(" in ln)))
+    assert used and used <= set(AT.EXITS), used - set(AT.EXITS)             # 엔진이 쓰는 파는 이유는 모두 대장에 있다
+    assert "확률" in EV.CORE[0] and "자산" in EV.CORE[0] and EV.PRINCIPLES[0][0] == EV.CORE[0]
+    assert all(k in ("add", "change", "remove", "check") and sd in ("buy", "sell", "both") for _, _, k, sd, *_ in EV.LOGIC_LOG)
+    assert [x[0] for x in EV.LOGIC_LOG] == sorted((x[0] for x in EV.LOGIC_LOG), reverse=True)
+    # 쓰임: 걸러낸 종목이 그 뒤 어땠는지로 판정
+    rid = env.run()
+    env.enter(rid, [env.pick("005930"), env.pick("000660", win_prob=40)])
+    R = env.rt.evolution.rules()
+    assert R["core"]["t"] == EV.CORE[0] and R["n"]["buy"] + R["n"]["sell"] == len(EV.RULES) and R["log"][0]["ver"] and R["upkeep"]
+    wp = next(r for r in R["buy"] if r["code"] == "filter:winprob")
+    assert wp["use"]["n"] == 1 and "모으는 중" in wp["verdict"]
+    sc = next(r for r in R["buy"] if r["code"] == "filter:score")
+    assert sc["tone"] == "" and "아직 안 걸림" in sc["verdict"]
+    for k in range(1, 11):                                                # 기록이 10거래일 넘게 쌓였는데도 한 번도 안 걸린 규칙은 '검토'
+        env.at.rt.db.x("INSERT INTO at_log(run_id,ts,day,kind,msg,data) VALUES(?,?,?,?,?,?)", (rid, env.at._now(), f"{(AP.kst_now() - timedelta(days=k)):%Y-%m-%d}", "cycle", "x", '{"decisions": []}'))
+    sc = next(r for r in env.rt.evolution.rules()["buy"] if r["code"] == "filter:score")
+    assert sc["tone"] == "check" and "한 번도" in sc["verdict"]
+    assert "rules" in env.rt.evolution.all()

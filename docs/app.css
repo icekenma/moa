@@ -3530,3 +3530,45 @@ html.dark-theme .cd-pt text,html.dark-theme .cd-tt text{fill:var(--nbg)}
 .rc-x{flex:none;width:36px;height:36px;border:0;background:none;color:var(--ink3);display:grid;place-items:center;cursor:pointer;border-radius:50%}
 .rc-x svg{width:14px;height:14px}
 .rc-x:active{background:var(--press)}
+
+/* ===== v4.90 엔진 노트: 매매 규칙 ===== */
+.ev-seg button{padding-inline:2px;font-size:12px;letter-spacing:-.02em}
+.ev-core{display:grid;gap:5px;border:1.5px solid var(--hl);background:linear-gradient(180deg,color-mix(in srgb,var(--hl) 13%,var(--card)),var(--card))}
+.ev-core span{font-size:11px;font-weight:800;color:var(--ink2)}
+.ev-core b{font-size:19px;line-height:1.3;letter-spacing:-.3px;text-wrap:balance}
+.ev-core p{margin:0;font-size:12px;color:var(--ink2);line-height:1.55}
+.ev-ks.three{grid-template-columns:repeat(3,1fr)}
+.ev-ks.three .ev-k b{font-size:22px}
+.ev-k.warnk b{color:var(--up)}
+.ev-rb .ev-h3{display:flex;align-items:baseline;gap:6px;color:var(--ink)}
+.ev-rb .ev-h3 span{font-size:11px;color:var(--ink3);font-weight:700}
+.ev-rls{list-style:none;margin:0;padding:0;display:grid}
+.ev-rl{padding:9px 0 9px 11px;border-left:3px solid var(--line2);margin-bottom:6px}
+.ev-rl.rk-keep{border-left-color:var(--in)}
+.ev-rl.rk-check{border-left-color:var(--up)}
+.ev-rlh{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.ev-rlh b{font-size:13px}
+.ev-rv{font-size:10px;font-weight:700;color:var(--ink3);font-variant-numeric:tabular-nums}
+.ev-rl p{margin:2px 0 0;font-size:12px;color:var(--ink2);line-height:1.5}
+.ev-rl small{display:block;margin-top:3px;font-size:11px;color:var(--ink3);line-height:1.45}
+.ev-rl.rk-check small{color:var(--up);font-weight:700}
+.ev-ops{margin:2px 0 4px}
+.ev-ops summary{font-size:12px;font-weight:700;color:var(--ink2)}
+.ev-ops .ev-rl{opacity:.85}
+.ev-pr.plain li{grid-template-columns:24px 1fr;align-items:start}
+.ev-pr.plain li::before{grid-row:auto;background:var(--sub-bg);color:var(--ink2)}
+.ev-lg2{list-style:none;margin:0;padding:0;display:grid}
+.ev-lg2 li{padding:10px 0;border-top:1px solid var(--line)}
+.ev-lg2 li:first-child{border-top:0;padding-top:2px}
+.ev-lgh{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+.ev-lgh time{font-size:12px;font-weight:800;font-variant-numeric:tabular-nums}
+.ev-sd{font-size:11px;font-weight:700;color:var(--ink2)}
+.ev-lgh .ev-rv{margin-left:auto}
+.ev-lg2 b{display:block;font-size:13px}
+.ev-lg2 p{margin:2px 0 0;font-size:12px;color:var(--ink2);line-height:1.5}
+.ev-lg2 small{display:block;margin-top:3px;font-size:11px;color:var(--ink3);line-height:1.45}
+.ev-lg2 li.remove b{text-decoration:line-through;text-decoration-color:var(--ink3)}
+.ev-pr:not(.plain) li:first-child b{color:var(--ink);font-size:14px}
+.ev-pr:not(.plain) li:first-child{padding-bottom:9px;border-bottom:1px dashed var(--line2)}
+html.gm-on .ev-core{background:var(--g-panel);border-color:var(--g-gold)}
+html.gm-on .ev-core b{font-family:var(--g-font);font-weight:400}

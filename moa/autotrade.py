@@ -35,7 +35,7 @@ US_SLIP = 0.0005       # 모의 체결 슬리피지(미국)
 # 추천받은 종목을 사지 않은 이유(기회 분석에 쓴다)
 SKIP = {"winprob": "승률 기준 미달", "score": "점수 기준 미달", "rr": "손익비 기준 미달", "fee": "목표가 비용보다 작음",
         "chase": "추천가보다 올라 쫓지 않음", "qty": "배정 금액으로 1주를 못 삼", "full": "보유 자리 없음", "dup": "오늘 이미 거래",
-        "auto": "앱이 고른 예비 종목", "watch": "AI가 관망 권함", "quote": "시세 없음", "fail": "매수 실패", "etc": "기타"}
+        "auto": "앱이 고른 예비 종목", "watch": "AI가 관망 권함", "quote": "시세 없음", "fail": "매수 실패", "market": "지수가 약해 쉼", "etc": "기타"}
 _SKIP_TEXT = (("승률", "winprob"), ("점수", "score"), ("손익비", "rr"), ("비용", "fee"), ("쫓아가지", "chase"), ("1주를 못", "qty"),
               ("꽉 참", "full"), ("이미 거래", "dup"), ("예비 종목", "auto"), ("시세", "quote"), ("매수 실패", "fail"))
 SHARE_SEC = 600        # 같은 조건의 추천을 함께 쓰는 시간(초)
@@ -80,6 +80,7 @@ PLAN_KEYS = {
     "watch_mult": (0.1, 1.0, float, "관망일 때 매수 크기(배)"),
     "idx_floor": (-5.0, 0.0, float, "지수가 이만큼 내리면 AI를 부르지 않음(%, 0=끔)"),
     "exit_mult": (0.3, 3.0, float, "AI가 낸 익절·손절 폭에 곱하는 배수"),
+    "vol_stop": (None, None, bool, "흔들림(ATR)에 맞춰 손절을 넓히고 수량을 줄임"),
 }
 
 
@@ -89,7 +90,7 @@ def _short_model(model):
 
 
 # 예전 판 자동매매에 없던 플랜 값 → 그 판의 동작과 같은 값
-PARAM_OLD = {"exit_mult": 1.0, "watch_mult": 0.5, "idx_floor": 0.0, "chase_pct": 0.5, "loss_streak": 3}
+PARAM_OLD = {"exit_mult": 1.0, "watch_mult": 0.5, "idx_floor": 0.0, "chase_pct": 0.5, "loss_streak": 3, "vol_stop": False}
 
 
 def _clamp_key(key, val):
@@ -154,7 +155,10 @@ VARIANTS = {
     "wide": ("길게 끌기", "AI가 낸 익절·손절 폭의 1.5배까지 기다리기", {"exit_mult": 1.5, "tp_cap": "*1.5", "sl_cap": "*1.5"}),
     "focus": ("한 종목 집중", "1종목에 절반씩", {"max_positions": 1, "per_trade_pct": 50}),
     "spread": ("여러 종목 분산", "5종목에 20%씩", {"max_positions": 5, "per_trade_pct": 20}),
+    "calm": ("약한 날 쉬기", "지수가 -1% 아래면 사지 않음(실전 기본과 같은 지수 기준)", {"idx_floor": -1.0}),
+    "vol": ("흔들림 맞춤 손절", "최근 봉의 평균 흔들림(ATR)에 맞춰 손절을 넓히고, 잃는 돈은 같도록 수량을 줄임", {"vol_stop": True}),
 }
+VOL_K = {"day": 2.0, "swing": 1.5, "month": 1.5}   # 손절 = 최근 봉 평균 흔들림(ATR, 단타는 5분봉·스윙은 일봉) × 이 배수보다 좁게는 잡지 않는다
 def apply_variant(p, key, keep=()):
     """플랜 값에 실험 플랜의 차이를 입힌다. '*1.5'는 곱하기, '+5'·'-7'은 더하기·빼기, 그 밖은 그 값으로."""
     for k, v in VARIANTS[key][2].items():
@@ -1367,6 +1371,13 @@ class AutoTrade:
         if run["status"] != "running":
             self.log(rid, "cycle", "추천은 받았지만 멈춘 상태라 사지 않았어요", head)
             return 0
+        floor = float(p.get("idx_floor") or 0)
+        if run.get("lab_id") and floor < 0 and head["idx"] is not None and head["idx"] < floor:
+            # 실험 묶음은 맨 앞 플랜이 추천을 받아 나눠 준다. 지수 기준은 플랜마다 여기서 본다('약한 날 쉬기')
+            self.log(rid, "cycle", f"지수가 {head['idx']:+.2f}%로 약해 사지 않아요(기준 {floor:g}%)", dict(head, market=True, decisions=[
+                {"sym": str(x.get("sym") or "").upper(), "name": x.get("name"), "score": x.get("score"), "win_prob": x.get("win_prob"),
+                 "act": "skip", "code": "market", "why": f"지수 {head['idx']:+.2f}% < 기준 {floor:g}%"} for x in picks]))
+            return 0
         if p.get("skip_watch") and res.get("stance") == "관망":
             self.log(rid, "cycle", f"AI가 관망을 권해 쉬어요 · {res.get('view') or ''}"[:200], dict(head, watch=True,
                                                                                                 picks=[{"sym": str(x.get("sym") or "").upper(), "name": x.get("name"), "score": x.get("score"),
@@ -1420,8 +1431,19 @@ class AutoTrade:
             if ref and price > ref * (1 + p["chase_pct"] / 100):
                 skip("chase", f"추천가보다 {((price / ref) - 1) * 100:.2f}% 올라 쫓아가지 않음")
                 continue
+            vm = 1.0
+            if p.get("vol_stop"):
+                # 흔들림 맞춤: 손절이 평소 흔들림보다 좁으면 잡음에 먼저 걸린다 → 손절을 넓히고(익절도 같은 비율로) 수량을 줄여 잃는 돈은 그대로
+                atr = self._atr_pct(mkt, sym, run["style"])
+                if atr:
+                    want = round(min(VOL_K.get(run["style"], 1.5) * atr, p["sl_cap"] * 2), 2)
+                    dec["atr"] = atr
+                    if want > sl:
+                        vm = sl / want
+                        dec["sl_from"], dec["tp_from"] = sl, tp
+                        tp, sl = round(min(tp * want / sl, p["tp_cap"] * 2), 2), want
             m = self.money(run)
-            alloc = min(m["base"] * p["per_trade_pct"] / 100 * mult, m["cash"])
+            alloc = min(m["base"] * p["per_trade_pct"] / 100 * mult * vm, m["cash"])
             buy_px = C.buy_fill(price, self.rt.settings.get("costs")) if mkt == "kr" else round(price * (1 + US_SLIP), 4)
             qty = int(alloc // (buy_px * 1.002))
             if qty < 1 and run["mode"] == "paper" and p.get("min_one", True) and m["cash"] >= buy_px * 1.002:
@@ -1441,6 +1463,18 @@ class AutoTrade:
         self.log(rid, "cycle", f"{'빠른 재추천' if lite else '추천'} {len(picks)}종목 중 {bought}종목 매수" + (f" · {res.get('view')}" if res.get("view") else ""),
                  dict(head, mult=mult, decisions=decisions))
         return bought
+
+    def _atr_pct(self, mkt, sym, style):
+        """최근 14봉의 평균 흔들림(진폭, 전 봉 종가와의 차이 포함)을 지금 가격 대비 %로. 단타는 5분봉, 그 밖은 일봉. 못 구하면 None."""
+        try:
+            bars = (self.rt.invest.candles(mkt, sym, "m5" if style == "day" else "d") or {}).get("bars") or []
+        except Exception:
+            return None
+        bars = [b for b in bars if b.get("h") and b.get("l") and b.get("c")][-15:]
+        if len(bars) < 6:
+            return None
+        tr = [max(b["h"], a["c"]) - min(b["l"], a["c"]) for a, b in zip(bars, bars[1:])]
+        return round(sum(tr) / len(tr) / bars[-1]["c"] * 100, 2)
 
     def _buy(self, run, x, sym, name, q, qty, price, buy_px, tp, sl, res):
         mkt, now = run["mkt"], datetime.now()
@@ -2227,8 +2261,8 @@ class AutoTrade:
         # 예전 판에서 만든 실험을 지금 설계에 맞춘다(바뀐 것이 있을 때만 한 번 쓴다)
         for r in self._runs("WHERE lab_id IS NOT NULL AND status IN ('running','paused')"):
             p, old = r["params"], json.dumps(r["params"], sort_keys=True)
-            if float(p.get("idx_floor") or 0) < 0:
-                p["idx_floor"] = 0.0                                   # 모의는 약한 장에도 쉬지 않는다
+            if float(p.get("idx_floor") or 0) < 0 and "idx_floor" not in VARIANTS.get(r["variant"] or "", ("", "", {}))[2]:
+                p["idx_floor"] = 0.0                                   # 모의는 약한 장에도 쉬지 않는다('약한 날 쉬기' 실험만 빼고)
             if r["variant"] in ("loose", "strict"):                    # 고정값이라 스윙에서는 기본과 같았다 → 기본 대비로
                 base = self.rt.db.one("SELECT params FROM at_runs WHERE lab_id=? AND variant='base'", (r["lab_id"],))
                 if base:
@@ -2822,7 +2856,7 @@ class AutoTrade:
     GATES = (("closed", "장이 열렸나"), ("over", "기간 안인가"), ("time", "매수 시간인가"), ("full", "자리가 있나"), ("dayloss", "오늘 손실 한도 안인가"),
              ("streak", "연속 손절 아닌가"), ("cash", "현금이 있나"), ("turn", "추천 받을 차례인가"), ("aicost", "오늘 AI 비용 한도 안인가"),
              ("market", "지수가 기준보다 강한가"), ("watchwait", "관망 뒤 쉬는 중이 아닌가"), ("nokey", "AI 키가 있나"), ("budget", "이번 달 AI 예산 안인가"))
-    FILTERS = (("full", "자리"), ("watch", "관망"), ("auto", "AI가 고른 종목"), ("winprob", "승률"), ("score", "점수"), ("rr", "손익비"), ("fee", "비용"), ("dup", "오늘 이미 거래"),
+    FILTERS = (("market", "지수"), ("full", "자리"), ("watch", "관망"), ("auto", "AI가 고른 종목"), ("winprob", "승률"), ("score", "점수"), ("rr", "손익비"), ("fee", "비용"), ("dup", "오늘 이미 거래"),
                ("quote", "시세"), ("chase", "쫓지 않기"), ("qty", "1주 이상"), ("fail", "주문"), ("etc", "기타"))
 
     def flow(self, rid):
@@ -2847,7 +2881,9 @@ class AutoTrade:
                 "turn": (f"정밀 하루 {p['cycles_per_day']}번 · {p['cycle_gap_min']}분 간격 + 빠른 재추천 {D['quick']}분마다" if D["quick"]
                          else f"하루 {p['cycles_per_day']}번 · {p['cycle_gap_min']}분 간격"),
                 "aicost": f"{'실험 묶음 합계 ' if run.get('lab_id') else ''}하루 ${float(p.get('ai_daily_usd') or 1):g}까지", "market": (f"지수 {float(p.get('idx_floor') or 0):g}% 아래면 AI를 안 부름(무료 점검) · 지금 {idx:+.2f}%" if idx is not None else f"지수 {float(p.get('idx_floor') or 0):g}% 아래면 쉼")
-                if float(p.get("idx_floor") or 0) < 0 else "모의는 지수와 상관없이 물어요",
+                if float(p.get("idx_floor") or 0) < 0 and not run.get("lab_id") else
+                f"추천은 묶음이 함께 받고, 이 플랜은 지수 {float(p.get('idx_floor')):g}% 아래면 사지 않음(③ 거르기)" if float(p.get("idx_floor") or 0) < 0
+                else "모의는 지수와 상관없이 물어요",
                 "watchwait": "관망이면 지수가 회복되거나 간격 두 배가 지날 때까지" if (p.get("skip_watch") or not D["quick"]) else "관망이어도 작게 사 보며 계속 물어요",
                 "nokey": "설정 → AI", "budget": "설정 → AI의 월 예산"}
         order = [g for g, _ in self.GATES]
@@ -2879,7 +2915,8 @@ class AutoTrade:
         rule = {"full": f"보유 {p['max_positions']}종목 미만", "auto": "앱이 고른 예비 종목은 사지 않음", "winprob": f"AI 승률 {p['min_win_prob']:g}% 이상",
                 "score": f"점수 {p['min_score']:g} 이상", "rr": f"익절÷손절 {p['min_rr']:g} 이상", "fee": f"목표가 비용({fee:g}%)의 3배 이상", "dup": "같은 종목은 하루 한 번",
                 "quote": "지금 시세가 있어야", "chase": f"추천가보다 {p['chase_pct']:g}% 넘게 오르면 안 쫓음", "qty": "배정 금액으로 1주 이상" + (" (모의는 현금이 되면 1주)" if run["mode"] == "paper" and p.get("min_one", True) else ""),
-                "fail": "주문이 들어가야", "watch": "AI가 관망을 권하면 " + ("사지 않음" if p.get("skip_watch") else f"×{float(p.get('watch_mult') or 0.5):g}로 작게"),
+                "fail": "주문이 들어가야", "market": f"실험: 지수 {float(p.get('idx_floor') or 0):g}% 아래면 사지 않음",
+                "watch": "AI가 관망을 권하면 " + ("사지 않음" if p.get("skip_watch") else f"×{float(p.get('watch_mult') or 0.5):g}로 작게"),
                 "etc": "그 밖의 이유"}
         cnt = {}
         for x in decs:

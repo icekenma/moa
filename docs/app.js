@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261120.0738";
+const UI_VERSION = "261120.1027";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2596,7 +2596,7 @@ pages.invest = {
     // ③ 거르기: 깔때기
     const s3 = fu.picks ? `<div class="fl-fun">
         <div class="fl-f top"><span><b>받은 종목</b><small>오늘 추천 ${ai.full + ai.quick}번</small></span><span class="fl-fb"><i style="width:100%"></i></span><b>${fu.picks}</b></div>
-        ${fu.steps.filter((x) => x.in > 0 && (x.out || !["watch", "etc"].includes(x.code))).map((x) => `<div class="fl-f ${x.out ? "cut" : ""}"><span><b>${esc(x.t)}</b><small>${esc(x.rule)}</small></span>
+        ${fu.steps.filter((x) => x.in > 0 && (x.out || !["watch", "etc", "market"].includes(x.code))).map((x) => `<div class="fl-f ${x.out ? "cut" : ""}"><span><b>${esc(x.t)}</b><small>${esc(x.rule)}</small></span>
           <span class="fl-fb"><i style="width:${((x.in - x.out) / fu.picks * 100).toFixed(1)}%"></i>${x.out ? `<u style="left:${((x.in - x.out) / fu.picks * 100).toFixed(1)}%;width:${(x.out / fu.picks * 100).toFixed(1)}%"></u>` : ""}</span>
           <b>${x.out ? `−${x.out}` : "✓"}</b></div>`).join("")}
         <div class="fl-f end"><span><b>산 종목</b><small>${fu.buy ? "아래 크기대로 주문" : "오늘은 아직 없어요"}</small></span><span class="fl-fb"><i style="width:${(fu.buy / fu.picks * 100).toFixed(1)}%"></i></span><b>${fu.buy}</b></div></div>

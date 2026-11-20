@@ -1137,7 +1137,7 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     with pytest.raises(ValueError, match="두 개 이상"):
         at.lab_create({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 20, "variants": ["base"]})
     L = at.lab_create({"budget": 3_000_000, "mkt": "kr", "style": "day", "days": 20, "model": "claude-sonnet-5-5"})["labs"][0]
-    assert len(L["runs"]) == 10 and L["status"] == "running" and {x["variant"] for x in L["runs"]} == set(VARIANTS)
+    assert len(L["runs"]) == len(VARIANTS) and L["status"] == "running" and {x["variant"] for x in L["runs"]} == set(VARIANTS)
     with pytest.raises(ValueError, match="이미 돌고"):
         at.lab_create({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 20})
     ids = {x["variant"]: x["id"] for x in L["runs"]}
@@ -1173,7 +1173,7 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     lp = {x["sym"]: x for x in B["last"]["picks"]}
     assert lp["005930"]["bought"] == len(g["plans"]) and any(k["why"] == "AI가 관망 권함" for k in lp["005930"]["skips"])
     usd = [json.loads(r["data"])["usd"] for r in at.rt.db.q("SELECT data FROM at_log WHERE kind='cycle' AND data IS NOT NULL AND run_id!=?", (solo,))]
-    assert len(usd) == 10 and all(u == 0.09 for u in usd)                  # 비용은 똑같이 나눠 적는다
+    assert len(usd) == len(VARIANTS) and all(u == round(0.9 / len(VARIANTS), 4) for u in usd)                  # 비용은 똑같이 나눠 적는다
     rows = {x["variant"]: x for x in B["runs"]}
     assert rows["base"]["open_qty"] == at._open(ids["base"])[0]["qty"] and rows["watch_full"]["open_pct"] > rows["base"]["open_pct"] > 0 and rows["strict"]["open_qty"] == 0
     # 다음 추천도 묶음 전체에서 한 번: 한 종목 집중은 자리가 없어 건너뛰고, 나머지는 각자 판단
@@ -1197,7 +1197,7 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     assert L["runs"][0]["variant"] == "loose" and L["lead"] == "느슨한 기준" and "30건이 쌓여야" in L["note"] and L["runs"][0]["net_ret_pct"] < L["runs"][0]["ret_pct"]
     # 홈 요약과 목록에서는 묶음 하나로 보인다
     b = at.brief()
-    assert [r["id"] for r in b["runs"]] == [solo] and b["labs"][0]["n"] == 10 and b["labs"][0]["lead"] == "느슨한 기준"
+    assert [r["id"] for r in b["runs"]] == [solo] and b["labs"][0]["n"] == len(VARIANTS) and b["labs"][0]["lead"] == "느슨한 기준"
     assert [r["id"] for r in at.overview()["runs"]] == [solo]
     # 한꺼번에 멈추고 끝낸다
     assert at.lab_control(lab, "pause")["labs"][0]["status"] == "paused"
@@ -1215,7 +1215,7 @@ def test_autopilot_only_needs_on_off_and_feeds_a_real_plan(env, monkeypatch):
     assert at.labs()["labs"] == []                                       # 꺼져 있으면 아무것도 만들지 않는다
     S = at.auto_set(True)
     L = at.labs()["labs"]
-    assert S["on"] is True and sorted((x["mkt"], x["style"]) for x in L) == sorted(AUTO_SET) and all(len(x["runs"]) == 10 for x in L)
+    assert S["on"] is True and sorted((x["mkt"], x["style"]) for x in L) == sorted(AUTO_SET) and all(len(x["runs"]) == len(VARIANTS) for x in L)
     kd = at._run(next(x["id"] for x in L if (x["mkt"], x["style"]) == ("kr", "day")))
     ks = at._run(next(x["id"] for x in L if (x["mkt"], x["style"]) == ("kr", "swing")))
     # 비용은 앱이 정한다(전체 하루 $3): 단타 하루 $1.05 → 20분마다 빠른 재추천 + 정밀 추천 Sonnet 2번(뉴스 검색), 스윙 $0.45 → 60분마다 + Sonnet 1번
@@ -1266,11 +1266,11 @@ def test_running_experiments_pick_up_new_and_fixed_plans(env, monkeypatch):
     at._auto_at = 0
     at.tick(force=True)
     runs = {r["variant"]: r for r in at._runs("WHERE lab_id=?", (lab["id"],))}
-    assert len(runs) == 10 and runs["all"]["params"]["min_win_prob"] == 40 and runs["all"]["status"] == "running"
+    assert len(runs) == len(VARIANTS) and runs["all"]["params"]["min_win_prob"] == 40 and runs["all"]["status"] == "running"
     assert runs["loose"]["params"]["min_win_prob"] == 43 and runs["loose"]["params"]["idx_floor"] == 0 and runs["wide"]["params"]["exit_mult"] == 1.5
     at._auto_at = 0
     at.tick(force=True)
-    assert len(at._runs("WHERE lab_id=?", (lab["id"],))) == 10                # 두 번 붙이지 않는다
+    assert len(at._runs("WHERE lab_id=?", (lab["id"],))) == len(VARIANTS)                # 두 번 붙이지 않는다
 
 
 def test_paper_never_skips_for_lot_size_and_real_only_sees_affordable_stocks(env, monkeypatch):
@@ -1499,7 +1499,7 @@ def test_old_runs_get_quick_rescans_once(env, monkeypatch):
     P = lambda i: at._run(i)["params"]
     assert P(paper)["quick_gap_min"] == 20 and P(paper)["cycles_per_day"] == 3 and P(us)["quick_gap_min"] == 0       # 직접 만든 모의: 간격만 붙인다. 실전: 끈 채로
     sibs = at._runs("WHERE lab_id=?", (lab,))
-    assert all((r["params"]["quick_gap_min"], r["params"]["cycles_per_day"], r["params"]["cycle_gap_min"]) == (20, 2, 160) for r in sibs) and len(sibs) == 10
+    assert all((r["params"]["quick_gap_min"], r["params"]["cycles_per_day"], r["params"]["cycle_gap_min"]) == (20, 2, 160) for r in sibs) and len(sibs) == len(VARIANTS)
     assert sum(1 for x in at.rt.db.q("SELECT msg FROM at_log WHERE kind='control'") if "더 자주" in x["msg"]) == 5       # 직접 만든 모의 1 + 실험 묶음 4
     at.tick(force=True)
     assert sum(1 for x in at.rt.db.q("SELECT msg FROM at_log WHERE kind='control'") if "더 자주" in x["msg"]) == 5       # 한 번만
@@ -1829,3 +1829,31 @@ def test_history_profit_factor_in_krw_and_split_by_market(env, monkeypatch):
     assert H["total"]["pf"] == round(10000 / 140000, 2)
     d = next(x for x in H["days"] if x["day"] == "2026-11-17")
     assert d["by_mkt"] == [{"mkt": "kr", "n": 1, "pnl": 10000}, {"mkt": "us", "n": 1, "pnl": -140000}]
+
+
+def test_lab_calm_and_vol_variants(env, monkeypatch):
+    """새 실험 플랜 2개: '약한 날 쉬기'는 지수가 -1% 아래면 나눠 받은 추천을 사지 않고,
+    '흔들림 맞춤 손절'은 손절을 최근 흔들림(ATR)×배수까지 넓히고 잃는 돈이 같도록 수량을 줄인다."""
+    at = env.at
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (0.9, {"fx": 1400.0}))
+    L = at.lab_create({"budget": 3_000_000, "mkt": "kr", "style": "day", "days": 20, "model": "claude-sonnet-5-5"})["labs"][0]
+    ids = {x["variant"]: x["id"] for x in L["runs"]}
+    assert at._run(ids["calm"])["params"]["idx_floor"] == -1.0 and at._run(ids["base"])["params"]["idx_floor"] == 0.0 and at._run(ids["vol"])["params"]["vol_stop"] is True
+    at._auto_at = 0
+    monkeypatch.setattr(at, "auto_on", lambda: True)
+    monkeypatch.setattr(at, "ready", lambda: {"ai": False, "data": False})
+    at._autopilot()                                                       # 다시 맞출 때도 '약한 날 쉬기'의 지수 기준은 지우지 않는다
+    assert at._run(ids["calm"])["params"]["idx_floor"] == -1.0
+    env.idx = -2.5
+    monkeypatch.setattr(at, "_atr_pct", lambda mkt, sym, style: 1.2)      # 5분봉 평균 흔들림 1.2% → 손절 2.4%
+    res = {"id": 1, "stance": "보통", "view": "v", "picks": [env.pick("005930")]}
+    assert at._enter(at._run(ids["calm"]), res, {"usd": 0.1}) == 0
+    log = json.loads(at.rt.db.one("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' ORDER BY id DESC", (ids["calm"],))["data"])
+    assert log["market"] and log["decisions"][0]["code"] == "market"
+    assert at._enter(at._run(ids["base"]), res, {"usd": 0.1}) == 1 and at._enter(at._run(ids["vol"]), res, {"usd": 0.1}) == 1
+    b, v = at._open(ids["base"])[0], at._open(ids["vol"])[0]
+    assert (b["stop_pct"], b["target_pct"]) == (1.5, 3.0) and (v["stop_pct"], v["target_pct"]) == (2.4, 4.8)
+    assert abs(v["qty"] * 2.4 - b["qty"] * 1.5) <= 2.4 + 1e-9                  # 잃는 돈(수량 × 손절폭)은 거의 같다
+    F = at.flow(ids["calm"])
+    assert "③ 거르기" in next(g for g in F["gates"] if g["code"] == "market")["d"] and any(x["code"] == "market" and x["out"] == 1 for x in F["funnel"]["steps"])
+    assert at._atr_pct.__name__ == "<lambda>"

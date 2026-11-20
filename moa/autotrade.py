@@ -623,7 +623,7 @@ class AutoTrade:
         self.rt.db.x("INSERT INTO at_changes(run_id,ts,ver,source,changes,stats) VALUES(?,?,?,?,?,?)",
                      (rid, self._now(), 1, "start", json.dumps([], ensure_ascii=False), None))
         self.log(rid, "start", f"자동매매를 시작했어요 · {name}", {"params": pv["params"]})
-        self.rt.notify(f"[moa 자동매매] {name} 시작 · {pv['budget']:,.0f}{'원' if pv['mkt'] == 'kr' else '달러'}")
+        self.rt.notify(f"{name} 시작 · {pv['budget']:,.0f}{'원' if pv['mkt'] == 'kr' else '달러'}", "real" if mode == "real" else "paper", f"{'실전' if mode == 'real' else '모의'} 자동매매 시작")
         return self.detail(rid)
 
     def control(self, rid, action):
@@ -654,7 +654,7 @@ class AutoTrade:
         self._set_status(run, "ended", why)
         self._snap(run)
         self.log(run["id"], "end", f"종료 · {why} · 수익률 {m['ret_pct']:+.2f}%", m)
-        self.rt.notify(f"[moa 자동매매] {run['name']} 종료 · {why} · {m['ret_pct']:+.2f}%")
+        self._tell(run, f"종료 · {why} · 수익률 {m['ret_pct']:+.2f}%", "자동매매 종료")
 
     def busy(self):
         """추천을 받아 주문하려는 중인지(업데이트·되돌리기를 잠깐 미룰 때 본다)."""
@@ -664,6 +664,84 @@ class AutoTrade:
         return bool(self.rt.db.one("SELECT 1 x FROM at_runs WHERE status IN ('running','paused','closing') LIMIT 1"))
 
     # ------------------------------------------------------------------ 반복(엔진)
+    def _tell(self, run, msg, title=None, urgent=False, key=None, force_real=False):
+        """자동매매 알림. 실전은 '실전'(위험·실패는 '꼭'), 모의·실험은 '모의 매매 하나하나'(기본 끔 — 장 마감 요약에 모아 보낸다).
+        force_real: 모의여도 사람이 해야 할 일이면(승인 대기) 실전 갈래로 보낸다."""
+        real = run["mode"] == "real"
+        cat = "urgent" if urgent and real else "real" if real or force_real else "paper"
+        name = ("실험 " if run.get("lab_id") else "") + run["name"]
+        return self.rt.notify(f"{name}: {msg}", cat, f"{'실전' if real else '모의'} · {title}" if title else None, key=key)
+
+    def _digest(self):
+        """장 마감 요약(시장마다 하루 한 번): 실전 손익, 모의 실험 1등·꼴찌와 기본 플랜, AI 비용, 사람이 볼 것. 그날 추천·매매가 있었을 때만."""
+        for mkt in ("kr", "us"):
+            day = AP.mkt_date(mkt)
+            if self._session(mkt)["open"] or self.rt.db.get_setting(f"digest_{mkt}") == day:
+                continue
+            ids = [r["id"] for r in self._runs("WHERE mkt=?", (mkt,))]
+            if not ids:
+                continue
+            q = ",".join("?" * len(ids))
+            if not self.rt.db.one(f"SELECT 1 FROM at_log WHERE run_id IN ({q}) AND day=? AND kind IN ('cycle','buy','sell') LIMIT 1", (*ids, day)):
+                continue
+            self.rt.db.set_setting(f"digest_{mkt}", day)
+            k = self.rt.ai.fx() if mkt == "us" else 1.0
+            won = lambda v: f"{v * k:+,.0f}원"
+            ts = self.rt.db.q(f"SELECT t.pnl, r.mode, r.lab_id, r.variant FROM at_trades t JOIN at_runs r ON r.id=t.run_id "
+                              f"WHERE t.run_id IN ({q}) AND t.status='closed' AND t.exit_day=?", (*ids, day))
+            lines = []
+            for mode, lbl in (("real", "실전"), ("paper", "모의")):
+                g = [t["pnl"] or 0 for t in ts if t["mode"] == mode]
+                if g:
+                    lines.append(f"{lbl} {len(g)}건 · 이익 {sum(1 for v in g if v > 0)}건 · {won(sum(g))}")
+                elif mode == "real" and self._runs("WHERE mkt=? AND mode='real' AND status='running'", (mkt,)):
+                    lines.append("실전 매매 없음")
+            by = {}
+            for t in ts:
+                if t["lab_id"]:
+                    by[t["variant"]] = by.get(t["variant"], 0.0) + (t["pnl"] or 0)
+            if len(by) >= 2:
+                rk = sorted(by.items(), key=lambda x: -x[1])
+                nm = lambda v: VARIANTS.get(v, (v,))[0]
+                lines.append(f"실험 1등 {nm(rk[0][0])} {won(rk[0][1])} · 꼴찌 {nm(rk[-1][0])} {won(rk[-1][1])}" + (f" · 기본 {won(by['base'])}" if "base" in by else ""))
+            idx = self.index_pct(mkt)
+            if idx is not None:
+                lines.append(f"{'코스피·코스닥' if mkt == 'kr' else 'S&P·나스닥'} 평균 {idx:+.2f}%")
+            usd = sum(float((json.loads(c["data"]) or {}).get("usd") or 0) for c in self.rt.db.q(
+                f"SELECT data FROM at_log WHERE run_id IN ({q}) AND kind='cycle' AND day=? AND data IS NOT NULL", (*ids, day)))
+            if usd:
+                lines.append(f"AI 비용 ${usd:.2f}({usd * self.rt.ai.fx():,.0f}원)")
+            todo = self.rt.db.one(f"SELECT COUNT(*) n FROM at_proposals WHERE status='pending' AND run_id IN ({q})", ids)["n"]
+            if todo:
+                lines.append(f"승인 기다리는 개선안 {todo}건")
+            if lines:
+                self.rt.notify("\n".join(lines), "daily", f"{'국내' if mkt == 'kr' else '미국'}장 마감 요약 · {day[5:].replace('-', '/')}")
+
+    def _heads_up(self):
+        """가끔만 생기는 '알아야 할 것': 실전 후보가 처음 나왔을 때, 이번 달 AI 예산의 80%·100%."""
+        if time.time() - getattr(self, "_hu_at", 0) < 600:
+            return
+        self._hu_at = time.time()
+        for a in self.advice():
+            b = a.get("best")
+            if b:
+                k = f"ready:{a['mkt']}:{a['style']}:{b.get('variant')}"
+                if self.rt.db.get_setting(k) != "1":
+                    self.rt.db.set_setting(k, "1")
+                    self.rt.notify(a["text"], "real", f"실전 후보가 나왔어요 · {'국내' if a['mkt'] == 'kr' else '미국'} {a['style_label']}")
+        usd, _n = self.rt.ai.month_usd()
+        cap = float((self.rt.ai.conf() or {}).get("budget_usd") or 0)
+        if cap > 0:
+            mon = datetime.now().strftime("%Y-%m")
+            for th, cat, txt in ((1.0, "urgent", "이번 달 AI 예산을 다 썼어요. AI 추천·자동매매의 새 매수가 멈춰요(설정 → AI에서 예산을 바꿀 수 있어요)"),
+                                 (0.8, "real", "이번 달 AI 예산의 80%를 썼어요")):
+                if usd >= cap * th:
+                    k = f"aibud:{mon}:{th}"
+                    if self.rt.db.get_setting(k) != "1":
+                        self.rt.db.set_setting(k, "1")
+                        self.rt.notify(f"{txt} · ${usd:.2f} / ${cap:g}", cat, "AI 예산")
+                    break
+
     def tick(self, force=False):
         if not force and time.time() - self._last < 5:
             return
@@ -674,6 +752,8 @@ class AutoTrade:
             self._lab_cap_upgrade()
             self._engine_watch()
             self._autopilot()
+            self._digest()
+            self._heads_up()
         except Exception as e:
             self.rt.db.log("system", "error", f"모의 자동 테스트 오류: {type(e).__name__}: {e}", self._now())
         for run in self._runs("WHERE status IN ('running','paused','closing')"):
@@ -744,7 +824,7 @@ class AutoTrade:
             m = self.money(run)
             if m["equity"] <= run["budget"] * (1 - p["total_loss_pct"] / 100):
                 self.log(run["id"], "risk", f"전체 손실 한도(-{p['total_loss_pct']:g}%)에 닿아 전부 정리하고 종료해요", m)
-                self.rt.notify(f"[moa 자동매매] {run['name']} 전체 손실 한도 도달 · 전부 정리 후 종료")
+                self._tell(run, f"전체 손실 한도(-{p['total_loss_pct']:g}%)에 닿아 전부 정리하고 종료해요", "손실 한도 도달", urgent=True)
                 if opens:
                     self._set_status(run, "closing", "손실 한도에 닿아 전부 정리하는 중이에요")
                     self._manage(run)
@@ -885,7 +965,7 @@ class AutoTrade:
         unit = "원" if run["mkt"] == "kr" else "달러"
         self.log(run["id"], "sell", f"{t['name']} {t['qty']}주 {reason} · {pnl:+,.0f}{unit} ({pnl / cost * 100:+.2f}%)" if run["mkt"] == "kr"
                  else f"{t['name']} {t['qty']}주 {reason} · {pnl:+,.2f}{unit} ({pnl / cost * 100:+.2f}%)", {"trade": t["id"]})
-        self.rt.notify(f"[moa 자동매매] {t['name']} {reason} {pnl / cost * 100:+.2f}%")
+        self._tell(run, f"{t['name']} {t['qty']}주 {reason} {pnl / cost * 100:+.2f}% ({pnl:+,.{0 if run['mkt'] == 'kr' else 2}f}{unit})", f"매도 · {reason}")
         self._after_close(run)
 
     def _after_close(self, run):
@@ -899,7 +979,7 @@ class AutoTrade:
         try:
             pr = self.review(run["id"], auto=True)
             if pr and pr.get("changes") and not self._auto_apply(run, pr, f"거래 {n}건 분석"):
-                self.rt.notify(f"[moa 자동매매] {run['name']} 개선안이 나왔어요({len(pr['changes'])}건). 앱에서 확인해 주세요")
+                self._tell(run, f"개선안이 나왔어요({len(pr['changes'])}건). 앱에서 확인하고 승인해 주세요", "개선안 승인 대기", force_real=True)
         except Exception as e:
             self.rt.db.log("system", "error", f"자동매매 분석 오류: {e}", self._now())
         if p.get("ai_review") and self.rt.ai.configured():
@@ -942,7 +1022,7 @@ class AutoTrade:
                     elif age > 900:  # 체결 조회가 계속 안 되고 잔고에도 없음
                         self.rt.db.x("UPDATE at_trades SET status='cancelled', reason='체결 확인 실패' WHERE id=?", (t["id"],))
                         self.log(run["id"], "skip", f"{t['name']} 매수 체결을 확인하지 못해 기록에서 뺐어요. 키움 앱에서 잔고를 확인해 주세요")
-                        self.rt.notify(f"[moa 자동매매] {t['name']} 매수 체결 확인 실패. 키움 잔고를 확인해 주세요")
+                        self._tell(run, f"{t['name']} 매수 체결 확인 실패. 키움 잔고를 확인해 주세요", "체결 확인 실패", urgent=True)
             else:
                 if f and f["qty"] > 0:
                     pnl, fees = self._fees(run["mkt"], t["entry_price"], f["price"], t["qty"])
@@ -1311,6 +1391,8 @@ class AutoTrade:
             if code in ("dayloss", "streak", "aicost", "market", "watchwait"):
                 for x in sibs or [run]:
                     self._note_once(x, why if code != "market" else why.split("(")[0].strip() + " · 비용 없음")
+            if run["mode"] == "real" and code in ("dayloss", "streak", "market", "budget", "nokey"):
+                self._tell(run, f"새로 사지 않고 쉬어요 · {why}", "오늘 매수 쉼", urgent=code in ("dayloss", "nokey"), key=f"rest:{run['id']}:{code}:{AP.mkt_date(run['mkt'])}")
             return
         ids = [x["id"] for x in sibs] if sibs else [run["id"]]
         lite = self._due(run)["kind"] == "quick"
@@ -1565,6 +1647,8 @@ class AutoTrade:
                 tid = self._buy(run, x, sym, name, q, qty, price, buy_px, tp, sl, dict(res, lite=lite))
             except Exception as e:
                 skip("fail", f"매수 실패: {e}")
+                if run["mode"] == "real":
+                    self._tell(run, f"{name} 매수 주문 실패: {e}", "주문 실패", urgent=True)
                 continue
             if add:
                 until = (datetime.now() + timedelta(minutes=SCALE_IN_MIN.get(run["style"], 360))).isoformat(timespec="seconds")
@@ -1633,7 +1717,7 @@ class AutoTrade:
              json.dumps(x.get("feat"), ensure_ascii=False, default=str), json.dumps(why, ensure_ascii=False, default=str), buy_no, fill_ok))
         unit = "원" if mkt == "kr" else "달러"
         self.log(run["id"], "buy", f"{name} {qty}주 매수 · {buy_px:,.{0 if mkt == 'kr' else 2}f}{unit} · 목표 +{tp:g}% / 손절 -{sl:g}%", {"trade": tid})
-        self.rt.notify(f"[moa 자동매매] {name} {qty}주 매수 · 목표 +{tp:g}% 손절 -{sl:g}%")
+        self._tell(run, f"{name} {qty}주 매수 · {buy_px:,.{0 if mkt == 'kr' else 2}f}{unit} · 목표 +{tp:g}% / 손절 -{sl:g}%", "매수")
         return tid
 
     # ------------------------------------------------------------------ 분석
@@ -1963,7 +2047,7 @@ class AutoTrade:
         except ValueError:
             return False
         self.log(run["id"], "review", f"모의라서 개선안을 스스로 반영했어요({why})", {"proposal": pr["id"], "auto": True})
-        self.rt.notify(f"[moa 자동매매] {run['name']} 개선안 {len(pr['changes'])}건을 스스로 반영했어요(모의)")
+        self._tell(run, f"개선안 {len(pr['changes'])}건을 스스로 반영했어요(모의)", "플랜 조정")
         return True
 
     def _daily_review(self, run, day):
@@ -1985,7 +2069,7 @@ class AutoTrade:
         except ValueError:
             return None
         if pr.get("changes") and not self._auto_apply(run, pr, f"{len(days)}거래일 점검"):
-            self.rt.notify(f"[moa 자동매매] {run['name']} 개선안이 나왔어요({len(pr['changes'])}건). 앱에서 확인해 주세요")
+            self._tell(run, f"개선안이 나왔어요({len(pr['changes'])}건). 앱에서 확인하고 승인해 주세요", "개선안 승인 대기", force_real=True)
         return pr
 
     def _save_proposal(self, run, source, summary, changes, stats=None, text=None):
@@ -2314,7 +2398,7 @@ class AutoTrade:
             self.rt.db.x("UPDATE at_runs SET params=?, model=? WHERE id=?", (json.dumps(dict(r["params"], **patch), ensure_ascii=False), model, r["id"]))
         if why:
             self.log(b["id"], "control", f"추천 엔진 점검 · {why}", {"engine": {"from": cur, "to": model, "ceil": ceil, "stats": st, "lock": lock}})
-            self.rt.notify(f"[moa 자동매매] {'실험 ' if lab else ''}{b['name']}: {why}")
+            self._tell(b, why, "추천 엔진 점검")
 
     def _cap_upgrade(self):
         """시드머니에 비례한 하루 AI 비용 한도(최소 $3)를 예전 판에서 시작한 직접 만든 자동매매에 한 번 적용한다.
@@ -2559,7 +2643,7 @@ class AutoTrade:
                 self.rt.db.x("UPDATE at_runs SET lab_id=? WHERE id=?", (lab, rid))
             self.rt.db.x("INSERT INTO at_changes(run_id,ts,ver,source,changes,stats) VALUES(?,?,?,?,?,?)", (rid, self._now(), 1, "start", "[]", None))
             self.log(rid, "start", f"실험을 시작했어요 · {label}", {"params": p, "lab": lab})
-        self.rt.notify(f"[moa 자동매매] 모의 실험 {len(keys)}개를 시작했어요")
+        self.rt.notify(f"모의 실험 {len(keys)}개를 시작했어요", "paper", "모의 자동 테스트")
         return self.labs()
 
     def lab_control(self, lab_id, action):

@@ -38,6 +38,7 @@ DEFAULTS = {
     "holidays": ["2026-12-25", "2026-12-31"],
     "networth_goal": 0,
     "ntfy_topic": "",
+    "notify": {},          # 알림 갈래별 켬/끔(runtime.NOTIFY_CATS). 비어 있으면 기본값: 모의 매매 하나하나만 끔
     # 휴대폰에서 GitHub Pages 화면으로 접속할 때 허용할 출처와, 이 서버의 바깥 주소
     "allowed_origins": ["https://icekenma.github.io"],
     "public_url": "",

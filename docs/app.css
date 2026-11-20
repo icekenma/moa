@@ -3598,3 +3598,20 @@ html.gm-on .pgs-in{background:var(--g-field);color:var(--g-ink)}
 html.pgs-open,html.pgs-open body{overflow:hidden}
 html.pgs-open .fab{display:none}
 @media (prefers-reduced-motion:reduce){.pgs.in .pgs-in,.pgs.out .pgs-in,.pgs.in .pgs-bd,.pgs.out .pgs-bd{animation:none}}
+
+/* ===== v4.92 알림 설정 ===== */
+#nfBox{display:grid;gap:9px;margin-top:10px}
+.nf-cats{display:grid;border-radius:12px;overflow:hidden;border:1px solid var(--line)}
+.nf-cat{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px;border-top:1px solid var(--line)}
+.nf-cat:first-child{border-top:0}
+.nf-cat b{display:block;font-size:13px}
+.nf-cat small{display:block;font-size:11px;color:var(--ink3);line-height:1.4}
+.nf-cat .switch:disabled{opacity:.55}
+.nf-log summary{font-size:12px;font-weight:700;color:var(--ink2)}
+.nf-log ul{list-style:none;margin:4px 0 0;padding:0;display:grid}
+.nf-log li{display:grid;grid-template-columns:74px 1fr;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
+.nf-log li.off{opacity:.6}
+.nf-log time{font-size:11px;color:var(--ink3);font-variant-numeric:tabular-nums;padding-top:1px}
+.nf-log b{display:block;font-size:12px}
+.nf-log p{margin:1px 0 0;font-size:12px;color:var(--ink2);line-height:1.45;white-space:pre-line}
+.nf-log small{font-size:10px;color:var(--ink3)}

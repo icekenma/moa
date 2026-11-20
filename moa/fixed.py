@@ -238,7 +238,7 @@ class Fixed:
                     continue
                 left = (due - today).days
                 when = "오늘" if left == 0 else "내일" if left == 1 else f"{left}일 뒤"
-                self.rt.notify(f"[moa] {when}({due.month}/{due.day}) {r['name']} {r['amount']:,}원 {'입금' if r['kind'] == 'in' else '결제'} 예정")
+                self.rt.notify(f"{when}({due.month}/{due.day}) {r['name']} {r['amount']:,}원 {'입금' if r['kind'] == 'in' else '결제'} 예정", "info", "고정 지출·수입 예정")
                 self.db.x("INSERT OR IGNORE INTO recurring_notified VALUES(?,?)", (r["id"], due.isoformat()))
 
     def absorb_sms(self, it):

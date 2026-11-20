@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261120.1515";
+const UI_VERSION = "261121.0738";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -6560,6 +6560,23 @@ async function bkAfterRestore(r) {
 }
 
 pages.settings = {
+  // 휴대폰 알림: 갈래별 켬/끔 · 시험 알림 · 최근 보낸 알림
+  async notifyBox(el) {
+    let N;
+    try { N = await GET("/api/notify"); } catch (e) { el.innerHTML = ""; return; }
+    if (!el.isConnected) return;
+    const hm = (ts) => `${ts.slice(5, 10).replace("-", "/")} ${ts.slice(11, 16)}`;
+    el.innerHTML = `<div class="nf-cats">${N.cats.map((c) => `<div class="nf-cat"><span><b>${esc(c.label)}</b>${c.fixed ? `<small>손실 한도·주문 실패·보안·엔진 오류 · 끌 수 없어요</small>` : ""}</span>
+        <button type="button" class="switch" role="switch" data-nf="${c.key}" aria-checked="${!!c.on}" ${c.fixed ? "disabled" : ""} aria-label="${esc(c.label)} 알림"><span></span></button></div>`).join("")}</div>
+      <div class="tiny">모의 매매는 하나하나 보내지 않고 장 마감 요약에 모아 보내요. 켜고 끈 것은 "설정 저장"을 눌러야 반영돼요.</div>
+      <button type="button" class="btn sm" id="nfTest">시험 알림 보내기</button>
+      <details class="nf-log"><summary>최근 알림 ${N.log.length}건</summary><ul>${N.log.map((x) => `<li class="${x.sent ? "" : "off"}"><time>${esc(hm(x.ts))}</time><div><b>${esc(x.title || "알림")}</b><p>${esc(x.msg)}</p>${x.sent ? "" : `<small>보내지 않음(꺼 둔 갈래이거나 토픽 없음)</small>`}</div></li>`).join("") || `<li class="off"><div><p>아직 없어요</p></div></li>`}</ul></details>`;
+    el.onclick = async (e) => {
+      const sw = e.target.closest("[data-nf]");
+      if (sw && !sw.disabled) return sw.setAttribute("aria-checked", sw.getAttribute("aria-checked") !== "true");
+      if (e.target.closest("#nfTest")) { try { await run(() => api("POST", "/api/notify/test"), "시험 알림을 보냈어요. 휴대폰을 확인해 주세요"); } catch (err) { /* 안내는 run이 띄운다 */ } }
+    };
+  },
   every: 5000,
   async refresh(h) {  // 계좌 연결 화면에서는 키움 카드만 몇 초마다 새로(입력란은 그대로)
     if (h.sub === "ai") {
@@ -7016,7 +7033,8 @@ pages.settings = {
         <div class="tiny">주말은 자동으로 빼요.</div></section>
       <section class="card"><h2>휴대폰 알림</h2>
         <label class="field">ntfy 토픽<input id="ntfy" value="${esc(s.ntfy_topic)}" autocapitalize="off" placeholder="비우면 알림 안 보냄"></label>
-        <div class="tiny">ntfy 앱에서 같은 토픽을 구독하면 매수·매도·적립 결과를 받아요.</div></section>
+        <div class="tiny">ntfy 앱에서 같은 토픽을 구독하면 꼭 알아야 할 것만 골라 보내요. 토픽을 바꿨으면 먼저 아래 "설정 저장"을 눌러 주세요.</div>
+        <div id="nfBox"></div></section>
       <div id="setErr"></div>
       <button class="btn dark wide" id="saveSet">설정 저장</button>`;
     const appHtml = `
@@ -7050,6 +7068,7 @@ pages.settings = {
         out.holidays = $("#hol").value.split(/\s+/).filter((x) => /^\d{4}-\d\d-\d\d$/.test(x));
       }
       if ($("#ntfy")) out.ntfy_topic = $("#ntfy").value.trim();
+      if ($("[data-nf]")) { const nf = {}; $$("[data-nf]").forEach((b) => (nf[b.dataset.nf] = b.getAttribute("aria-checked") === "true")); out.notify = nf; }
       if ($("#pubUrl")) out.public_url = $("#pubUrl").value.trim().replace(/\/+$/, "");
       return out;
     };
@@ -7104,6 +7123,7 @@ pages.settings = {
       toast(`${r.server} 계좌 연결 성공. 총자산 ${won(r.total)}원, 보유 ${r.holdings.length}종목`);
       kwCache.save(r); $("#kwCard").innerHTML = kwCardHtml(r); bindKwCard($("#kwCard"));
     };
+    if ($("#nfBox")) this.notifyBox($("#nfBox"));
     if ($("#saveSet")) $("#saveSet").onclick = async () => { const r = await run(() => api("PUT", "/api/settings", collect()), "설정을 저장했어요"); errs(r.errors); };
     view.onclick = async (e) => {
       const t = e.target.closest("[data-test]"), rs = e.target.closest("[data-reset]");

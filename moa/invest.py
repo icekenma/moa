@@ -352,6 +352,6 @@ class Invest:
             unit = "원" if a["mkt"] == "kr" else "달러"
             pf = f"{p:,.0f}" if a["mkt"] == "kr" else f"{p:,.2f}"
             tf = f"{a['price']:,.0f}" if a["mkt"] == "kr" else f"{a['price']:,.2f}"
-            self.rt.notify(f"[moa] {a['name']} {pf}{unit} — 목표 {tf}{unit} {'이상' if a['cond'] == 'above' else '이하'} 도달")
+            self.rt.notify(f"{a['name']} {pf}{unit} — 목표 {tf}{unit} {'이상' if a['cond'] == 'above' else '이하'} 도달", "real", "목표가 알림")
             fired.append(a["id"])
         return fired

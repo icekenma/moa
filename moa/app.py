@@ -139,7 +139,7 @@ def create_app(rt, updater=None):
         if not got or not hmac.compare_digest(got.encode(), token.encode()):
             if throttle.fail(who):
                 rt.db.log("system", "error", f"틀린 접속 토큰이 반복돼 {who}의 접속을 10분 막았어요", datetime.now().isoformat(timespec="seconds"))
-                rt.notify("[moa 보안] 틀린 접속 토큰으로 여러 번 접속을 시도했어요")
+                rt.notify("틀린 접속 토큰으로 여러 번 접속을 시도했어요", "urgent", "가계부S · 보안")
             return jsonify(error="접속 토큰이 맞지 않아요. 설정에서 토큰을 다시 넣어 주세요", code="auth"), 401
         throttle.ok(who)
         # 접속 토큰은 맞음 → 이제 앱 비밀번호(잠금) 확인. 문자 자동 기록(단축어)은 넣기만 하므로 토큰만으로 받는다.
@@ -742,7 +742,7 @@ def create_app(rt, updater=None):
             return jsonify(ok=True, financial=False)
         if r.get("status") == "added":
             sign = "+" if r["action"] in ("income", "cancel") else "-"
-            rt.notify(f"[가계부] {r['merchant'] or r['issuer']} {sign}{r['amount']:,}원 자동 기록")
+            rt.notify(f"{r['merchant'] or r['issuer']} {sign}{r['amount']:,}원 자동 기록", "ledger")
         return jsonify(ok=True, financial=True, item=r)
 
     @app.get("/api/inbox")
@@ -1157,6 +1157,18 @@ def create_app(rt, updater=None):
         rt.dividend.remove_custom(mkt, sym)
         return jsonify(ok=True)
 
+    @app.get("/api/notify")
+    def notify_info():
+        return jsonify(cats=[{"key": k, "label": v[0], "on": rt.notify_on(k), "fixed": k == "urgent"} for k, v in rt.NOTIFY_CATS.items()],
+                       topic=bool(rt.settings.get("ntfy_topic")), log=rt.notify_log())
+
+    @app.post("/api/notify/test")
+    def notify_test():
+        if not rt.settings.get("ntfy_topic"):
+            return jsonify({"error": "ntfy 토픽을 먼저 넣고 저장해 주세요"}), 400
+        rt.notify("시험 알림이에요. 이 글이 보이면 알림이 잘 가고 있어요.", "info", "가계부S · 시험 알림", force=True)
+        return jsonify(ok=True)
+
     @app.get("/api/evo")
     def evo_all():
         return jsonify(rt.evolution.all())
@@ -1449,7 +1461,7 @@ def create_app(rt, updater=None):
         stocks_cache.d.clear()
         d = body()
         allowed = {"data_source", "demo_speed", "trade_mode", "kiwoom", "kiwoom_view", "real_orders_allowed", "paper_start_cash",
-                   "costs", "holidays", "ntfy_topic", "dca_window", "public_url", "allowed_origins", "ai"}
+                   "costs", "holidays", "ntfy_topic", "notify", "dca_window", "public_url", "allowed_origins", "ai"}
         patch = {k: v for k, v in d.items() if k in allowed}
         if patch.get("data_source") not in (None, "demo", "kiwoom"):
             raise ValueError("시세 출처를 골라 주세요")

@@ -39,7 +39,7 @@ class Env:
         mp.setattr(at, "_local", lambda mkt: datetime.fromisoformat(f"{self.day}T{self.hm}:00"))
         mp.setattr(AP, "mkt_date", lambda mkt: self.day)
         mp.setattr(AP, "kst_now", lambda: datetime.fromisoformat(f"{self.day}T{self.hm}:00"))
-        mp.setattr(rt, "notify", lambda msg: None)
+        mp.setattr(rt, "notify", lambda msg, *a, **k: None)
         mp.setattr(rt.ai, "configured", lambda: True)
         self.idx = None                                              # 지수 등락률(없으면 사전 점검을 하지 않는다)
         mp.setattr(at, "index_pct", lambda mkt: self.idx)
@@ -743,7 +743,7 @@ def test_daily_review_runs_by_days_and_paper_can_apply_itself(env, monkeypatch):
     at = env.at
     rid = env.run(budget=1_000_000)
     notes = []
-    monkeypatch.setattr(env.rt, "notify", lambda m: notes.append(m))
+    monkeypatch.setattr(env.rt, "notify", lambda m, *a, **k: notes.append(m))
     close = lambda: (setattr(env, "open", False), setattr(env, "hm", "17:00"), at.tick(force=True), setattr(env, "open", True), setattr(env, "hm", "10:30"))
     props = lambda: at.rt.db.q("SELECT status, source, changes FROM at_proposals WHERE run_id=? ORDER BY id", (rid,))
     # 첫날: 두 번 추천받았지만 돈이 모자라 못 삼 → 아직 하루뿐이라 지켜본다
@@ -1664,7 +1664,7 @@ def test_engine_moves_up_when_results_are_poor_and_back_if_worse(env, monkeypatc
     monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (per[model] * (1 if web else 0.6), {"fx": 1400.0}))
     monkeypatch.setattr(env.rt.ai, "conf", lambda: {"model": "claude-sonnet-5-5", "web_search": True})
     notes = []
-    monkeypatch.setattr(env.rt, "notify", lambda m: notes.append(m))
+    monkeypatch.setattr(env.rt, "notify", lambda m, *a, **k: notes.append(m))
     rid = env.run(mode="paper")
     env.rt.db.x("UPDATE at_runs SET model='claude-sonnet-5-5' WHERE id=?", (rid,))
     env.open = False
@@ -1946,3 +1946,40 @@ def test_rule_book_matches_engine(env):
     sc = next(r for r in env.rt.evolution.rules()["buy"] if r["code"] == "filter:score")
     assert sc["tone"] == "check" and "한 번도" in sc["verdict"]
     assert "rules" in env.rt.evolution.all()
+
+
+def test_notify_only_what_matters(env, monkeypatch):
+    """알림: 모의 매매 하나하나는 보내지 않고(기록만), 실전·위험·장 마감 요약은 보낸다. 같은 일은 한 번만."""
+    import moa.runtime as RT
+    rt, at = env.rt, env.at
+    sent = []
+
+    class Resp:
+        status_code = 200
+    monkeypatch.setattr(RT.requests, "post", lambda url, json=None, timeout=0, **k: sent.append(json) or Resp())
+    monkeypatch.setattr(RT.threading, "Thread", lambda target=None, daemon=None, **k: type("T", (), {"start": lambda self: target()})())
+    monkeypatch.setattr(rt, "notify", RT.Runtime.notify.__get__(rt))
+    rt.settings.update({"ntfy_topic": "t-test"})
+    rid = env.run()
+    assert env.enter(rid, [env.pick("005930")]) == 1                    # 모의 매수 → 안 보냄
+    assert not [x for x in sent if "매수" in x["message"]] and any(r["cat"] == "paper" and not r["sent"] for r in rt.notify_log())
+    assert rt.notify("손실 한도", "urgent", key="k1") and not rt.notify("손실 한도", "urgent", key="k1")       # 같은 일은 한 번
+    assert sent[-1]["priority"] == 5 and sent[-1]["topic"] == "t-test" and sent[-1]["title"]
+    rt.settings.update({"notify": {"paper": True, "daily": False}})
+    assert rt.notify_on("paper") and not rt.notify_on("daily") and rt.notify_on("urgent")
+    rt.settings.update({"notify": {"paper": False, "daily": True}})
+    # 장 마감 요약: 장이 닫혔고 그날 매매가 있었으면 한 번
+    env.px["005930"] = 72_500.0
+    at._manage(at._run(rid))
+    n0 = len(sent)
+    at._digest()                                                        # 장중에는 보내지 않는다
+    assert len(sent) == n0
+    env.open = False
+    at._digest()
+    at._digest()
+    d = [x for x in sent[n0:] if "마감 요약" in x["title"]]
+    assert len(d) == 1 and "모의 1건" in d[0]["message"] and "이익 1건" in d[0]["message"]
+    from moa.app import create_app
+    c = create_app(rt).test_client()
+    j = c.get("/api/notify").get_json()
+    assert j["topic"] and [x["key"] for x in j["cats"]][0] == "urgent" and j["log"] and c.post("/api/notify/test").status_code == 200

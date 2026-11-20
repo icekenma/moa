@@ -659,7 +659,7 @@ class Dividend:
         self.rt.db.set_setting("div_daily_day", day)
         for i, kind, chg, h in ev:
             if h and kind in ("raise", "cut"):
-                self.rt.notify(f"[moa 배당] {i['name']} 배당 {'인상' if kind == 'raise' else '삭감'} {chg:+.1f}% (배당락 {i['last']['date']})")
+                self.rt.notify(f"{i['name']} 배당 {'인상' if kind == 'raise' else '삭감'} {chg:+.1f}% (배당락 {i['last']['date']})", "real", "보유 종목 배당 변화")
         return {"day": day, "saved": n, "events": len(ev), "total": len(pairs)}
 
     def events(self, days=90):

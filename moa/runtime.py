@@ -21,6 +21,17 @@ from .trading.scalp import ScalpEngine
 class Runtime:
     def __init__(self, db, start_thread=True, data_dir=None):
         self.db = db
+        db.x("CREATE TABLE IF NOT EXISTS notify_log(id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, cat TEXT NOT NULL, title TEXT, msg TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0)")
+        _log = db.log
+
+        def log_and_tell(engine, level, msg, ts):          # 엔진 오류는 기록과 함께 휴대폰으로도(같은 오류는 1시간에 한 번)
+            _log(engine, level, msg, ts)
+            if level == "error":
+                try:
+                    self.notify(str(msg)[:180], "urgent", "가계부S · 엔진 오류", key="err:" + str(msg)[:60], quiet_min=60)
+                except Exception:
+                    pass
+        db.log = log_and_tell
         self.settings = Settings(db)
         self.ledger = Ledger(db)
         self.account = AccountView(self.settings, fx=lambda: self.market.yh_quote("USDKRW=X")["price"])
@@ -115,17 +126,56 @@ class Runtime:
             raise RuntimeError(self.errors.get(engine) or "계좌가 준비되지 않았어요")
         return b.cash() + sum(h["qty"] * h["price"] for h in b.positions())
 
-    def notify(self, msg):
+    # ---------- 휴대폰 알림(ntfy) ----------
+    # 갈래(cat): urgent 꼭 알아야 할 것(손실 한도·주문 실패·보안·엔진 오류) / real 실전 매매·실전 플랜 변화 / daily 장 마감 요약
+    #           / paper 모의 매매 하나하나(기본 끔: 요약으로 충분) / ledger 가계부 자동 기록 / info 그 밖(가격 알림·배당·고정비·복기)
+    NOTIFY_CATS = {"urgent": ("꼭 알아야 할 것", 5, "rotating_light"), "real": ("실전 자동매매", 4, "chart_with_upwards_trend"),
+                   "daily": ("장 마감 요약", 3, "bar_chart"), "paper": ("모의 매매 하나하나", 2, "test_tube"),
+                   "ledger": ("가계부 자동 기록", 2, "receipt"), "info": ("그 밖의 알림", 3, "bell")}
+    NOTIFY_OFF = ("paper",)          # 기본으로 꺼 둔 갈래
+
+    def notify_on(self, cat):
+        conf = self.settings.get("notify") or {}
+        return bool(conf.get(cat, cat not in self.NOTIFY_OFF)) or cat == "urgent"
+
+    def notify(self, msg, cat="info", title=None, key=None, quiet_min=0, force=False):
+        """휴대폰으로 알린다. key를 주면 같은 key는 quiet_min분(0이면 하루) 안에 한 번만 보낸다. 보낸 것·걸러진 것 모두 알림 기록에 남는다."""
         topic = self.settings.get("ntfy_topic")
-        if not topic:
-            return
+        now = time.time()
+        if key:
+            seen = self._notified = getattr(self, "_notified", {})
+            last = seen.get(key)
+            if last and now - last < (quiet_min or 1440) * 60:
+                return False
+            seen[key] = now
+            if len(seen) > 500:
+                for k in sorted(seen, key=seen.get)[:200]:
+                    seen.pop(k, None)
+        label, prio, tag = self.NOTIFY_CATS.get(cat, self.NOTIFY_CATS["info"])
+        on = bool(topic) and (force or self.notify_on(cat))
+        try:
+            self.db.x("INSERT INTO notify_log(ts,cat,title,msg,sent) VALUES(?,?,?,?,?)",
+                      (datetime.now().isoformat(timespec="seconds"), cat, title or label, msg, 1 if on else 0))
+            self.db.x("DELETE FROM notify_log WHERE id < (SELECT MAX(id) FROM notify_log) - 300")
+        except Exception:
+            pass
+        if not on:
+            return False
+        body = {"topic": topic, "message": msg, "title": title or f"가계부S · {label}", "priority": prio, "tags": [tag]}
+        url = (self.settings.get("public_url") or "").strip()
+        if url:
+            body["click"] = url
 
         def send():
             try:
-                requests.post(f"https://ntfy.sh/{topic}", data=msg.encode("utf-8"), timeout=5)
+                requests.post("https://ntfy.sh/", json=body, timeout=6)
             except Exception:
                 pass
         threading.Thread(target=send, daemon=True).start()
+        return True
+
+    def notify_log(self, n=40):
+        return self.db.q("SELECT ts, cat, title, msg, sent FROM notify_log ORDER BY id DESC LIMIT ?", (n,))
 
     # ---------- 반복 ----------
     def _loop(self):

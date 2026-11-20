@@ -916,7 +916,7 @@ class AIPick:
             rt.db.x("UPDATE ai_guards SET status='done', exit_reason=?, exit_price=?, closed_at=?, msg=? WHERE id=?",
                     (reason, res.get("fill_price") or price, now, f"{reason} 주문을 넣었어요", g["id"]))
             pl = (price / (g["base"] or g["entry"]) - 1) * 100
-            rt.notify(f"[moa AI] {g['name']} {qty}주 {reason} 매도 주문 · 약 {pl:+.2f}%")
+            rt.notify(f"{g['name']} {qty}주 {reason} 매도 주문 · 약 {pl:+.2f}%", "real", "AI 추천 자동 매도")
         except Exception as e:
             rt.db.x("UPDATE ai_guards SET msg=? WHERE id=?", (f"{reason} 매도 실패: {e} (다음 확인 때 다시)", g["id"]))
             rt.db.log("system", "error", f"AI 자동 {reason} 실패 {g['sym']}: {e}", now)
@@ -1850,7 +1850,7 @@ def auto_learn(self):
                 for ev in self.rt.ai.stream("learn", {"horizon": h}):
                     if ev.get("t") == "error":
                         self.rt.db.log("system", "error", f"AI 자동 복기 실패: {ev.get('msg')}", datetime.now().isoformat(timespec="seconds"))
-                self.rt.notify(f"[moa AI] {H['label']} 추천 성적을 복기해서 추천 규칙을 새로 정했어요")
+                self.rt.notify(f"{H['label']} 추천 성적을 복기해서 추천 규칙을 새로 정했어요. 엔진 노트에서 볼 수 있어요", "info", "추천 규칙 갱신")
             finally:
                 self._learning = False
         import threading

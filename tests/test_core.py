@@ -1066,7 +1066,7 @@ def test_fixed_recurring_match_post_absorb_and_suggest(rt):
     assert not any(x["key"] == sug[0]["key"] for x in F.suggestions(today=date(2026, 11, 6)))
     # 결제 전 알림(ntfy)
     sent = []
-    rt.notify = lambda m: sent.append(m)
+    rt.notify = lambda m, *a, **k: sent.append(m)
     F._notify(date(2026, 12, 9), hour=7)
     assert sent == []                               # 아침 8시 전에는 조용히
     F._notify(date(2026, 12, 9), hour=9)            # 테스트를 도는 시각과 무관하게
@@ -1214,7 +1214,7 @@ def test_invest_book_candles_rank_info_home_alerts(rt):
     assert h["account"]["total"] >= 6166000 and h["holdings"][0]["day_pct"] == -1.27 and h["day_pnl"] == -900 * sum(x["qty"] for x in h["holdings"])
     # 가격 알림: 현재가 70,100 → 70,000 이하 알림은 바로, 80,000 이상은 대기
     sent = []
-    rt.notify = lambda m: sent.append(m)
+    rt.notify = lambda m, *a, **k: sent.append(m)
     c.post("/api/invest/alerts", json={"mkt": "kr", "sym": "005930", "name": "삼성전자", "price": 70000})
     c.post("/api/invest/alerts", json={"mkt": "kr", "sym": "005930", "name": "삼성전자", "price": "80,000"})
     al = c.get("/api/invest/alerts").get_json()
@@ -2706,7 +2706,7 @@ def test_dividend_daily_collect_records_and_detects_changes(rt, monkeypatch):
     _div_rt(rt, monkeypatch)
     dv = rt.dividend
     sent = []
-    monkeypatch.setattr(rt, "notify", lambda m: sent.append(m))
+    monkeypatch.setattr(rt, "notify", lambda m, *a, **k: sent.append(m))
     monkeypatch.setattr(dv, "_held", lambda: {("us", "SCHD"): "SCHD"})
     r = dv.collect("2026-11-19")
     assert r["saved"] >= 4 and r["events"] == 0                                         # 처음엔 비교할 게 없다

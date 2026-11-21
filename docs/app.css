@@ -3624,3 +3624,13 @@ html.pgs-open .fab{display:none}
 .pgs-rt .star{color:var(--ink2)}
 .pgs-body .mk-act{bottom:calc(10px + var(--safe-b))}
 .pgs-body .mk-d{padding-bottom:6px}
+
+/* ===== v4.94 설명 글은 자르지 않는다: 이름(굵은 글)은 한 줄, 그 아래 설명·보조 글은 끝까지 보이게 줄을 바꾼다 ===== */
+.item .sub,.lab-nm small,.at-row-n small,.at-row-v small,.hx-mid small,.dv-as-n small,.dca-stair div>small,.at-top span,.at-cell-s,.at-cell-f,
+.at-scan-txt span,.bot-sub,.g-st-f,.g-lane-f small,.g-unit-f small,.lab-pn small{
+  white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:break-word;line-height:1.4}
+.lab-nm{align-items:flex-start}
+.lab-nm>span{min-width:0}
+.lab-nm small{display:block;margin-top:1px}
+.lab-tr{align-items:start}
+.lab-tr>span:not(.lab-nm){padding-top:1px}

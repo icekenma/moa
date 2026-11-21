@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261121.1315";
+const UI_VERSION = "261121.1357";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -430,7 +430,7 @@ const G = {
   heat(p, cap = 6) {
     if (p == null || isNaN(p)) return "rgba(120,150,200,.25)";
     const k = Math.min(1, Math.abs(p) / cap) * .78 + .16;
-    return p >= 0 ? `rgba(240,64,92,${k.toFixed(2)})` : `rgba(48,134,255,${k.toFixed(2)})`;
+    return p >= 0 ? `rgba(214,44,74,${k.toFixed(2)})` : `rgba(36,108,224,${k.toFixed(2)})`;   // 흰 글자가 4.5:1 넘게 읽히는 진하기
   },
   // 경주 트랙: 플랜들이 0% 선을 기준으로 왼쪽(손해)·오른쪽(이익)에 선다. 1등엔 왕관
   trackMini(race) {
@@ -1561,7 +1561,7 @@ pages.ledger = {
       const iso = `${S.month}-${String(day).padStart(2, "0")}`;
       const wd = (first + day - 1) % 7;
       cells += `<button type="button" class="cal-cell ${iso === today ? "today" : ""} ${iso > today ? "future" : ""} ${out[day] ? "spent" : ""} ${wd === 0 ? "sun" : wd === 6 ? "sat" : ""}" style="--heat:${((out[day] || 0) / omax).toFixed(2)}" data-day="${iso}" aria-label="${korDate(iso)} 지출 ${won(out[day] || 0)}원">
-        <span class="cal-d">${day}</span>${out[day] ? `<span class="cal-out">-${shortWon(out[day])}</span>` : ""}${inc[day] ? `<span class="cal-in">+${shortWon(inc[day])}</span>` : ""}</button>`;
+        <span class="cal-d">${day}</span>${out[day] ? `<span class="cal-out">−${shortWon(out[day])}</span>` : ""}${inc[day] ? `<span class="cal-in">+${shortWon(inc[day])}</span>` : ""}</button>`;
     }
     const spentDays = Object.keys(out).length;
     view.innerHTML = `${monthNav(S, d.summary)}
@@ -2349,7 +2349,7 @@ pages.invest = {
             <span class="lab-nm"><i class="${x.closed >= 10 ? "" : "few"}">${x.closed >= 10 ? i + 1 : "·"}</i><span><b>${esc(x.label)}</b><small>${esc(x.desc)}</small></span></span>
             <span>${x.closed}${x.open ? `<small>${x.open > 1 ? `${x.open}종목 ` : ""}${x.open_qty}주 · ${x.open_pct}%</small>` : ""}</span>
             <span>${x.win_rate == null ? "-" : `${x.win_rate}%`}</span>
-            <span class="${tone(x.net_ret_pct)}">${pct(x.net_ret_pct, 2)}<small>비용 전 ${pct(x.ret_pct, 2)}</small></span></button>`).join("")}
+            ${x.closed || x.open ? `<span class="${tone(x.net_ret_pct)}">${pct(x.net_ret_pct, 2)}<small>비용 전 ${pct(x.ret_pct, 2)}${x.closed ? "" : " · 보유 중"}</small></span>` : `<span class="lab-none">-<small>거래 전</small></span>`}</button>`).join("")}
         </div>
         <details class="at-more"><summary>이 표 읽는 법</summary><div class="tiny">같은 추천을 받아 플랜만 다르게 사고판 결과예요. 수익률은 플랜에 배정된 가상 돈 전체 대비라, 같은 종목이어도 많이 산 플랜일수록 크게 움직여요(보유 칸의 %가 들어간 비중). 순위는 거래가 10건 넘은 플랜끼리만 매겨요. 추천 비용은 한 번만 들고 플랜 수로 나눠 적어요. 플랜을 누르면 그 매매 기록이 열려요.</div></details>
         ${L.status === "ended" ? "" : `<div class="grid2"><button type="button" class="btn sm" data-labctl="${L.id}:${L.status === "paused" ? "resume" : "pause"}">${L.status === "paused" ? "다시 시작" : "새 매수 멈춤"}</button>
@@ -2699,7 +2699,7 @@ pages.invest = {
       <section class="card ev-rb"><h2 class="ev-h2">매도 규칙</h2>${block(R.sell, ["팔기"])}</section>
       <section class="card"><h2 class="ev-h2">규칙을 관리하는 방법</h2><ol class="ev-pr plain">${R.upkeep.map((t) => `<li><span>${esc(t)}</span></li>`).join("")}</ol></section>
       <section class="card"><h2 class="ev-h2">매수·매도 로직 변경 이력</h2>
-        <ol class="ev-lg2">${R.log.map((x) => `<li class="${x.kind}"><div class="ev-lgh"><time>${esc(x.day.slice(5).replace("-", "/"))}</time><span class="tag ${K[x.kind][1]}">${K[x.kind][0]}</span><span class="ev-sd">${SD[x.side]}</span><span class="ev-rv">${esc(x.ver)}</span></div>
+        <ol class="ev-lg2">${R.log.map((x) => `<li class="lk-${x.kind}"><div class="ev-lgh"><time>${esc(x.day.slice(5).replace("-", "/"))}</time><span class="tag ${K[x.kind][1]}">${K[x.kind][0]}</span><span class="ev-sd">${SD[x.side]}</span><span class="ev-rv">${esc(x.ver)}</span></div>
           <b>${esc(x.t)}</b><p>${esc(x.what)}</p><small>왜: ${esc(x.why)}</small></li>`).join("")}</ol></section>`;
   },
   evoRoad(D) {
@@ -2781,7 +2781,7 @@ pages.invest = {
       <div class="fl-facts">${ai.shared ? `<span>같은 추천을 플랜들이 함께 써서 이 플랜 몫은 $${ai.mine.toFixed(2)}예요</span>` : ""}<span>정밀 추천이 남은 한도를 넘길 것 같으면 그 차례는 빠른 재추천으로 받아요</span><span>이미 다룬 ${ai.exclude}종목은 빼고 물어요</span>${ai.price_cap ? `<span>${M(ai.price_cap)} 넘는 종목은 후보에서 빼요(1주를 못 사서)</span>` : ""}</div>`;
     // ③ 거르기: 깔때기
     const s3 = fu.picks ? `<div class="fl-fun">
-        <div class="fl-f top"><span><b>받은 종목</b><small>오늘 추천 ${ai.full + ai.quick}번</small></span><span class="fl-fb"><i style="width:100%"></i></span><b>${fu.picks}</b></div>
+        <div class="fl-f fl-first"><span><b>받은 종목</b><small>오늘 추천 ${ai.full + ai.quick}번</small></span><span class="fl-fb"><i style="width:100%"></i></span><b>${fu.picks}</b></div>
         ${fu.steps.filter((x) => x.in > 0 && (x.out || !["watch", "etc", "market"].includes(x.code))).map((x) => `<div class="fl-f ${x.out ? "cut" : ""}"><span><b>${esc(x.t)}</b><small>${esc(x.rule)}</small></span>
           <span class="fl-fb"><i style="width:${((x.in - x.out) / fu.picks * 100).toFixed(1)}%"></i>${x.out ? `<u style="left:${((x.in - x.out) / fu.picks * 100).toFixed(1)}%;width:${(x.out / fu.picks * 100).toFixed(1)}%"></u>` : ""}</span>
           <b>${x.out ? `−${x.out}` : "✓"}</b></div>`).join("")}
@@ -3064,7 +3064,7 @@ pages.invest = {
         if (wd === 0 || wd === 6) continue;
         const key = `${ym}-${String(dd).padStart(2, "0")}`, x = by[key];
         if (!x) { cells.push(`<span class="g-cd none ${key === today ? "today" : ""}"><i>${dd}</i></span>`); continue; }
-        const k = Math.min(1, Math.abs(x.net) / mx) * .8 + .2, bg = x.net >= 0 ? `rgba(240,64,92,${k.toFixed(2)})` : `rgba(48,134,255,${k.toFixed(2)})`;
+        const k = Math.min(1, Math.abs(x.net) / mx) * .8 + .2, bg = x.net >= 0 ? `rgba(214,44,74,${k.toFixed(2)})` : `rgba(36,108,224,${k.toFixed(2)})`;
         cells.push(`<button type="button" class="g-cd ${H.openDay === key ? "on" : ""} ${key === today ? "today" : ""}" data-hxday="${key}" style="background:${bg}"
           aria-label="${m}월 ${dd}일 비용 뺀 손익 ${signed(x.net)}원, 매도 ${x.sells}건" aria-pressed="${H.openDay === key}">
           <i>${dd}</i><b>${short(x.net)}</b>${x.stats.n ? `<small>${x.stats.win_rate}%</small>` : ""}</button>`);

@@ -14,12 +14,18 @@ BENCH = {"kr": ("^KS11", "코스피"), "us": ("^GSPC", "S&P 500")}
 N = 60                  # '최근' 창(거래일)
 LONG = 500              # 긴 창: 받을 수 있는 만큼(약 2년)
 # 위험 요인 셋: 국내 주식시장, 미국 주식시장, 환율. 종목마다 이 요인에 얼마나 따라 움직이는지(민감도)를 구해 시나리오에 쓴다
-FACTORS = {"kr": ("^KS11", "코스피"), "us": ("^GSPC", "S&P 500"), "fx": ("USDKRW=X", "원/달러")}
+FACTORS = {"kr": ("^KS11", "코스피"), "us": ("^GSPC", "S&P 500"), "fx": ("USDKRW=X", "원/달러"), "rate": ("^TNX", "미 10년 금리")}
+CORE = {"kr": "코스피", "us": "S&P 500", "fx": "원/달러"}
+# 업종 요인: 그 업종을 따르는 상장 ETF의 움직임으로 본다. 코드는 외워 적지 않고 종목 목록에서 이름으로 찾는다(없으면 그 업종은 뺀다)
+SECTOR_ETF = {"반도체": "KODEX 반도체", "2차전지": "TIGER 2차전지테마", "바이오": "KODEX 바이오", "은행": "KODEX 은행", "자동차": "KODEX 자동차"}
+IMPLY_MIN = 0.2         # '만약에'에서 다른 요인이 따라 움직인다고 볼 최소 상관(주 단위)
+SEC_MIN = 0.3           # 시장을 뺀 나머지 움직임이 업종과 이만큼은 닮아야 그 업종에 든다고 본다(상관)
 # 과거 위기: 그 기간에 요인이 실제로 움직인 폭을 지수 기록에서 읽어(외워 둔 숫자가 아니다) 지금 보유에 입힌다
 CRISES = [("2008년 금융위기", "2008-09-12", "2008-10-27"), ("2020년 코로나 급락", "2020-02-19", "2020-03-23"),
           ("2022년 긴축 하락", "2022-01-03", "2022-09-30"), ("2024년 8월 급락", "2024-07-11", "2024-08-05")]
 # 만약에: 요인 하나를 흔들고, 나머지 요인은 과거에 함께 움직인 만큼 따라 움직인다고 본다
-WHATIF = [("코스피 −10%", "kr", -0.10), ("S&P 500 −10%", "us", -0.10), ("원/달러 +5%(원화 약세)", "fx", 0.05), ("원/달러 −5%(원화 강세)", "fx", -0.05)]
+WHATIF = [("코스피 −10%", "kr", -0.10), ("S&P 500 −10%", "us", -0.10), ("원/달러 +5%(원화 약세)", "fx", 0.05), ("원/달러 −5%(원화 강세)", "fx", -0.05),
+          ("미국 10년 금리 +1%p", "rate", 1.0)]
 GAP = {"kr": 0.30, "us": 0.20}   # 한 종목 급락: 국내는 하한가(−30%), 미국은 하루 −20%로 가정
 
 
@@ -100,27 +106,38 @@ def compute(items, bench):
                 f"같이 움직이는 종목 쌍이 {len(pairs)}개예요(상관 0.7 이상)" if len(pairs) >= 2 else "") if f]}
 
 
-def _rets_by_date(closes):
+def _rets_by_date(closes, diff=False):
+    """날짜별 하루 변화. 주가·지수·환율은 비율, 금리는 차이(%p)."""
     ds = sorted(closes)
+    if diff:
+        return {b: closes[b] - closes[a] for a, b in zip(ds, ds[1:])}
     return {b: closes[b] / closes[a] - 1 for a, b in zip(ds, ds[1:]) if closes[a]}
 
 
 def _fit(y, xs):
-    """y를 xs(1~2개)에 맞춘 기울기들(절편 포함 최소제곱). 날짜로 맞춘 값 목록을 받는다."""
-    n = len(y)
+    """y를 xs(여러 개)에 맞춘 기울기들(절편 포함 최소제곱). 날짜로 맞춘 값 목록을 받는다. 풀 수 없으면 0."""
+    n, k = len(y), len(xs)
     my = sum(y) / n
     cx = [[v - sum(x) / n for v in x] for x in xs]
     cy = [v - my for v in y]
-    if len(xs) == 1:
-        v = sum(a * a for a in cx[0])
-        return [sum(a * b for a, b in zip(cx[0], cy)) / v] if v > 0 else [0.0]
-    a11, a22 = sum(a * a for a in cx[0]), sum(a * a for a in cx[1])
-    a12 = sum(a * b for a, b in zip(cx[0], cx[1]))
-    b1, b2 = sum(a * b for a, b in zip(cx[0], cy)), sum(a * b for a, b in zip(cx[1], cy))
-    det = a11 * a22 - a12 * a12
-    if det <= 1e-18:
-        return [b1 / a11 if a11 > 0 else 0.0, 0.0]
-    return [(b1 * a22 - b2 * a12) / det, (b2 * a11 - b1 * a12) / det]
+    A = [[sum(p * q for p, q in zip(cx[i], cx[j])) for j in range(k)] + [sum(p * q for p, q in zip(cx[i], cy))] for i in range(k)]
+    for i in range(k):                                   # 가우스 소거(작은 수로 나누지 않게 가장 큰 줄을 올린다)
+        p = max(range(i, k), key=lambda q: abs(A[q][i]))
+        if abs(A[p][i]) < 1e-18:
+            return [0.0] * k
+        A[i], A[p] = A[p], A[i]
+        for q in range(k):
+            if q != i:
+                f = A[q][i] / A[i][i]
+                A[q] = [u - f * v for u, v in zip(A[q], A[i])]
+    return [A[i][k] / A[i][i] for i in range(k)]
+
+
+def _corr(a, b):
+    n = len(a)
+    ma, mb = sum(a) / n, sum(b) / n
+    va, vb = sum((x - ma) ** 2 for x in a), sum((x - mb) ** 2 for x in b)
+    return sum((x - ma) * (y - mb) for x, y in zip(a, b)) / math.sqrt(va * vb) if va > 0 and vb > 0 else 0.0
 
 
 def _at(levels, day):
@@ -129,71 +146,122 @@ def _at(levels, day):
     return levels[max(ds)] if ds else None
 
 
+def _shock_txt(s):
+    f = lambda v, u="%": f"{'+' if v > 0 else '−'}{abs(v):g}{u}"
+    out = [f"{CORE[k]} {f(round(s[k] * 100, 1))}" for k in CORE if k in s]
+    if "rate" in s:
+        out.append(f"미 10년 금리 {f(round(s['rate'], 2), '%p')}")
+    out += [f"{k[4:]} 업종(시장 대비) {f(round(v * 100, 1))}" for k, v in s.items() if k.startswith("sec:")]
+    return " · ".join(out)
+
+
 def scenarios(items, levels):
-    """요인 시나리오. items: [{name, mkt, value, closes{날짜: 종가}}], levels: {kr|us|fx: {날짜: 값}}.
-    ① 종목마다 요인 민감도를 구한다(국내: 코스피·환율 두 요인, 미국: S&P — 원화로 보면 환율은 그대로 1배).
+    """요인 시나리오. items: [{name, mkt, value, closes{날짜: 종가}}], levels: {kr|us|fx|rate|sec:<업종>: {날짜: 값}}.
+    ① 종목마다 요인 민감도를 구한다. 국내: 코스피·환율·미국 금리 + (시장을 뺀 나머지 움직임이 가장 닮은) 업종 하나. 미국: S&P·금리 — 원화로 보면 환율은 그대로 1배.
     ② 과거 위기: 그 기간 요인이 실제 움직인 폭을 입힌다. ③ 만약에: 요인 하나를 흔들고 나머지는 과거에 함께 움직인 만큼 따라간다고 본다.
     민감도가 큰 충격에서도 그대로라고 가정한 어림값이라, 충격이 클수록 오차가 크다."""
     total = sum(x["value"] for x in items)
     if total <= 0:
         return None
-    fr = {k: _rets_by_date(v) for k, v in levels.items() if v}
+    levels = {k: v for k, v in levels.items() if v}
+    fr = {k: _rets_by_date(v, diff=k == "rate") for k, v in levels.items()}
+    secs = [k for k in fr if k.startswith("sec:")]
+    # 업종의 '시장 대비' 움직임: 업종 수익률에서 코스피로 설명되는 몫을 뺀다
+    sx = {}
+    for k in secs:
+        ds = [d for d in fr[k] if d in fr.get("kr", {})][-LONG:]
+        if len(ds) >= 60:
+            bk = _fit([fr[k][d] for d in ds], [[fr["kr"][d] for d in ds]])[0]
+            sx[k] = (bk, {d: fr[k][d] - bk * fr["kr"][d] for d in ds})
     est = 0
     for x in items:
         rr = _rets_by_date(x.get("closes") or {})
-        if x["mkt"] == "kr":
-            ds = [d for d in rr if d in fr.get("kr", {}) and d in fr.get("fx", {})][-LONG:]
-            if len(ds) >= 40:
-                x["bm"], x["bfx"] = _fit([rr[d] for d in ds], [[fr["kr"][d] for d in ds], [fr["fx"][d] for d in ds]])
-                est += 1
-            else:
-                x["bm"], x["bfx"], x["guess"] = 1.0, 0.0, True
+        base = ["kr", "fx", "rate"] if x["mkt"] == "kr" else ["us", "rate"]
+        use = [k for k in base if k in fr]
+        ds = [d for d in rr if all(d in fr[k] for k in use)][-LONG:]
+        x["b"] = {}
+        if len(ds) >= 40 and base[0] in use:
+            bs = _fit([rr[d] for d in ds], [[fr[k][d] for d in ds] for k in use])
+            x["b"] = dict(zip(use, bs))
+            est += 1
+            if x["mkt"] == "kr" and sx:
+                res = {d: rr[d] - sum(b * fr[k][d] for k, b in x["b"].items()) for d in ds}
+                best = None
+                for k, (_, ex) in sx.items():
+                    dd = [d for d in ds if d in ex]
+                    if len(dd) >= 40:
+                        c = _corr([res[d] for d in dd], [ex[d] for d in dd])
+                        if c >= SEC_MIN and (best is None or c > best[1]):
+                            best = (k, c, dd)
+                if best:
+                    k, c, dd = best
+                    x["sec"], x["b"][k] = k, _fit([res[d] for d in dd], [[sx[k][1][d] for d in dd]])[0]
         else:
-            ds = [d for d in rr if d in fr.get("us", {})][-LONG:]
-            if len(ds) >= 40:
-                x["bm"] = _fit([rr[d] for d in ds], [[fr["us"][d] for d in ds]])[0]
-                est += 1
-            else:
-                x["bm"], x["guess"] = 1.0, True
-            x["bfx"] = 1.0
+            x["b"], x["guess"] = {base[0]: 1.0}, True
+        if x["mkt"] == "us":
+            x["b"]["fx"] = 1.0
+    held = {x["sec"] for x in items if x.get("sec")}
 
     def run(name, sub, s, kind):
         rows, pnl = [], 0.0
         for x in items:
-            if x["mkt"] == "kr":
-                r = x["bm"] * s.get("kr", 0.0) + x["bfx"] * s.get("fx", 0.0)
-            else:
-                r = (1 + x["bm"] * s.get("us", 0.0)) * (1 + s.get("fx", 0.0)) - 1
+            # 민감도 × 충격을 요인마다 더한다(금리는 1%p당, 나머지는 비율). 미국 종목의 환율은 아래에서 곱으로 따로 넣는다
+            core = sum(b * s.get(k, 0.0) for k, b in x["b"].items() if k != "fx" or x["mkt"] == "kr")
+            r = core if x["mkt"] == "kr" else (1 + core) * (1 + s.get("fx", 0.0)) - 1
             r = max(r, -0.95)
             pnl += x["value"] * r
             rows.append({"name": x["name"], "pct": round(r * 100, 1), "pnl": round(x["value"] * r)})
         rows.sort(key=lambda v: v["pnl"])
-        return {"name": name, "sub": sub, "kind": kind, "shock": {k: round(v * 100, 1) for k, v in s.items()}, "pnl": round(pnl), "pct": round(pnl / total * 100, 2), "items": rows[:10]}
+        shown = {k: v for k, v in s.items() if not k.startswith("sec:") or k in held}
+        return {"name": name, "sub": sub, "kind": kind, "shock": {k: round(v * (1 if k == "rate" else 100), 2 if k == "rate" else 1) for k, v in shown.items()},
+                "shock_txt": _shock_txt(shown), "pnl": round(pnl), "pct": round(pnl / total * 100, 2), "items": rows[:10]}
     out = []
     for name, d0, d1 in CRISES:
         s = {}
         for k, lv in levels.items():
-            a, b = _at(lv or {}, d0), _at(lv or {}, d1)
+            a, b = _at(lv, d0), _at(lv, d1)
             if a and b and min(lv) <= d0:
-                s[k] = b / a - 1
+                s[k] = (b - a) if k == "rate" else b / a - 1
+        for k in secs:                                   # 업종은 '시장 대비'로 바꾼다(기록이 닿는 위기만)
+            if k in s:
+                tot = s.pop(k)
+                if k in sx and "kr" in s:
+                    s[k] = tot - sx[k][0] * s["kr"]
         if "kr" in s or "us" in s:
             out.append(run(name, f"{d0[:7].replace('-', '.')}~{d1[:7].replace('-', '.')}", s, "crisis"))
     # 요인끼리 함께 움직인 정도: 장이 열리는 시간이 달라 하루 단위로는 어긋나므로 5거래일 묶음으로 잰다
-    wk = {}
-    common = sorted(set.intersection(*[set(v) for v in levels.values() if v])) if all(levels.get(k) for k in FACTORS) else []
-    common = common[-(LONG + 1):]
-    for k in FACTORS:
-        pts = [levels[k][d] for d in common][::5]
-        wk[k] = [b / a - 1 for a, b in zip(pts, pts[1:]) if a]
-    for name, k, size in WHATIF:
+    def weekly(keys):
+        common = sorted(set.intersection(*[set(levels[k]) for k in keys]))[-(LONG + 1):]
+        w = {}
+        for k in keys:
+            pts = [levels[k][d] for d in common][::5]
+            w[k] = [(b - a) if k == "rate" else (b / a - 1) for a, b in zip(pts, pts[1:]) if a]
+        return w
+    plain = [k for k in ("kr", "us", "fx", "rate") if k in levels]
+    what = [w for w in WHATIF if w[1] in levels] + [(f"{k[4:]} 업종 −15%", k, -0.15) for k in sorted(held)]
+    for name, k, size in what:
+        keys = plain + ([k] if k not in plain else [])
+        wk = weekly(keys) if all(c in levels for c in CORE) else {}
         s = {k: size}
-        for j in FACTORS:
+        for j in plain:
             if j != k and len(wk.get(k, [])) >= 20:
                 n = min(len(wk[j]), len(wk[k]))
-                s[j] = _fit(wk[j][-n:], [wk[k][-n:]])[0] * size
+                if abs(_corr(wk[j][-n:], wk[k][-n:])) >= IMPLY_MIN:      # 함께 움직인 증거가 약하면 따라 움직이지 않는다고 본다(우연한 기울기를 믿지 않으려고)
+                    s[j] = _fit(wk[j][-n:], [wk[k][-n:]])[0] * size
+        if k.startswith("sec:"):                         # 업종 전체 움직임 → 시장 대비 움직임
+            s[k] = size - sx[k][0] * s.get("kr", 0.0)
         out.append(run(name, "", s, "whatif"))
     worst = max(items, key=lambda x: x["value"] * GAP[x["mkt"]])
-    return {"rows": out, "est": est, "n": len(items), "betas": [{"name": x["name"], "bm": round(x["bm"], 2), "bfx": round(x["bfx"], 2), "guess": bool(x.get("guess"))} for x in items],
+
+    def btxt(x):
+        b, nm = x["b"], {"kr": "지수", "us": "지수", "fx": "환율", "rate": "금리 1%p당"}
+        parts = [f"{nm[k]} {round(b[k] * (100 if k == 'rate' else 1), 1 if k == 'rate' else 2):g}{'%' if k == 'rate' else ''}" for k in ("kr", "us", "fx", "rate") if k in b]
+        if x.get("sec"):
+            parts.append(f"{x['sec'][4:]} 업종 {round(b[x['sec']], 2):g}")
+        return " · ".join(parts) + (" · 기록이 짧아 가정값" if x.get("guess") else "")
+    return {"rows": out, "est": est, "n": len(items), "factors": [CORE.get(k) or ("미 10년 금리" if k == "rate" else k[4:] + " 업종") for k in levels],
+            "betas": [{"name": x["name"], "bm": round(x["b"].get("kr", x["b"].get("us", 1.0)), 2), "bfx": round(x["b"].get("fx", 0.0), 2), "guess": bool(x.get("guess")),
+                       "sec": (x.get("sec") or "")[4:], "txt": btxt(x)} for x in items],
             "gap": {"name": worst["name"], "drop": round(GAP[worst["mkt"]] * 100), "loss": round(worst["value"] * GAP[worst["mkt"]]),
                     "pct": round(worst["value"] * GAP[worst["mkt"]] / total * 100, 2)}}
 
@@ -204,7 +272,7 @@ class RiskView:
         self._memo = None
 
     def levels(self):
-        """요인(코스피·S&P 500·원/달러)의 20년 일별 값. 12시간에 한 번만 받는다. 못 받은 요인은 빈 값."""
+        """요인(코스피·S&P 500·원/달러·미 10년 금리)의 20년 일별 값과 업종 ETF의 약 2년 값. 12시간에 한 번만 받는다. 못 받은 요인은 빈 값."""
         m, out = self.rt.market, {}
         for k, (sym, _) in FACTORS.items():
             def load(sym=sym):
@@ -216,6 +284,24 @@ class RiskView:
                 out[k] = m.cache.get(("risk-lv", sym), 12 * 3600, load, stale=72 * 3600)
             except Exception:
                 out[k] = {}
+        try:
+            names = {v.get("name"): c for c, v in (m.kr_master() or {}).items() if isinstance(v, dict)}
+        except Exception:
+            names = {}
+        for sec, etf in SECTOR_ETF.items():
+            code = names.get(etf)
+            if not code:
+                continue
+
+            def load_s(code=code):
+                bs = (self.rt.invest.candles("kr", code, "d", 600) or {}).get("bars") or []
+                return {b["t"]: b["c"] for b in bs if b.get("c") and b.get("t")}
+            try:
+                v = m.cache.get(("risk-sec", code), 12 * 3600, load_s, stale=72 * 3600)
+                if len(v) >= 100:
+                    out["sec:" + sec] = v
+            except Exception:
+                pass
         return out
 
     def snapshot(self):

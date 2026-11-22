@@ -2524,3 +2524,38 @@ def test_factor_scenarios_replay_crises_and_imply_other_factors():
     assert fxu["shock"]["kr"] < 0 and next(x for x in fxu["items"] + [{"name": "미국주", "pct": 0}] if x["name"] == "미국주") is not None
     assert S["gap"] == {"name": "고베타", "drop": 30, "loss": 1_800_000, "pct": 18.0}
     assert [round(v, 6) for v in _fit([2, 4, 6, 8], [[1, 2, 3, 4]])] == [2.0] and scenarios([], lv) is None
+
+
+def test_rate_and_sector_factors_join_scenarios():
+    from moa.riskview import scenarios, _fit
+    import random
+    from datetime import date
+    r = random.Random(21)
+    days = [(date(2024, 1, 1) + timedelta(days=i)).isoformat() for i in range(1050) if (date(2024, 1, 1) + timedelta(days=i)).weekday() < 5]
+    lv = {"kr": {}, "us": {}, "fx": {}, "rate": {}, "sec:반도체": {}, "sec:은행": {}}
+    k = u = chip = bank = a = b = c = 100.0
+    f, y = 1300.0, 4.0
+    A, B, C = {}, {}, {}
+    for d in days:
+        rk, ru, dy = r.gauss(0, 0.01), r.gauss(0, 0.01), r.gauss(0, 0.05)
+        ec, eb = r.gauss(0, 0.012), r.gauss(0, 0.008)                # 업종만의 움직임(시장 대비)
+        k, u, f, y = k * (1 + rk), u * (1 + ru), f * (1 + r.gauss(0, 0.004)), y + dy
+        chip, bank = chip * (1 + 1.2 * rk + ec), bank * (1 + 0.8 * rk + eb)
+        a = a * (1 + 1.1 * rk + 0.9 * ec + r.gauss(0, 0.003))        # 반도체주
+        b = b * (1 + 0.9 * rk - 0.04 * dy + r.gauss(0, 0.003))       # 금리에 약한 성장주(1%p에 −4%), 업종 없음
+        c = c * (1 + 1.0 * ru - 0.02 * dy + r.gauss(0, 0.003))       # 미국주
+        for m, v in ((lv["kr"], k), (lv["us"], u), (lv["fx"], f), (lv["rate"], y), (lv["sec:반도체"], chip), (lv["sec:은행"], bank), (A, a), (B, b), (C, c)):
+            m[d] = v
+    S = scenarios([{"name": "칩", "mkt": "kr", "value": 5_000_000, "closes": A}, {"name": "성장", "mkt": "kr", "value": 3_000_000, "closes": B},
+                   {"name": "미국", "mkt": "us", "value": 2_000_000, "closes": C}], lv)
+    bt = {x["name"]: x for x in S["betas"]}
+    assert bt["칩"]["sec"] == "반도체" and bt["성장"]["sec"] == "" and "반도체 업종" in bt["칩"]["txt"] and "금리 1%p당 -4" in bt["성장"]["txt"].replace("−", "-")[:60] or "금리 1%p당 -3." in bt["성장"]["txt"]
+    rows = {x["name"]: x for x in S["rows"]}
+    rate = rows["미국 10년 금리 +1%p"]
+    it = {x["name"]: x["pct"] for x in rate["items"]}
+    assert rate["shock"]["rate"] == 1.0 and "미 10년 금리 +1%p" in rate["shock_txt"] and it["성장"] < it["칩"] and it["성장"] < -2.5
+    chip = rows["반도체 업종 −15%"]
+    ic = {x["name"]: x["pct"] for x in chip["items"]}
+    assert "은행 업종 −15%" not in rows and ic["칩"] < ic["성장"] and ic["칩"] < -8 and "반도체 업종(시장 대비)" in chip["shock_txt"]     # 든 업종만 시나리오로
+    assert "미 10년 금리" in S["factors"] and "반도체 업종" in S["factors"]
+    assert [round(v, 6) for v in _fit([3, 5, 8, 10, 14], [[1, 2, 3, 4, 5], [0, 0, 1, 1, 3]])] == [2.0, 1.0]

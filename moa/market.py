@@ -650,6 +650,9 @@ class Market:
         lv = self.rt.riskview.levels()
         bars = (self.rt.invest.candles("kr", "005930", "d", 600) or {}).get("bars") or []
         S = scenarios([{"name": "삼성전자", "mkt": "kr", "value": 10_000_000, "closes": {b["t"]: b["c"] for b in bars if b.get("c")}}], lv)
+        if S:
+            return {"요인 기록": {k: [len(v), min(v), max(v)] if v else "받지 못함" for k, v in lv.items()}, "일봉 수": len(bars),
+                    "민감도": [x["txt"] for x in S["betas"]], "시나리오": [[x["name"], x["shock_txt"], x["pct"]] for x in S["rows"]]}
         return {"요인 기록": {k: [len(v), min(v), max(v)] if v else "받지 못함" for k, v in lv.items()}, "일봉 수": len(bars),
                 "민감도": S and S["betas"], "시나리오": S and [[x["name"], x["shock"], x["pct"]] for x in S["rows"]]}
 

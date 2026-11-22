@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261123.0259";
+const UI_VERSION = "261123.0315";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -3977,14 +3977,14 @@ atAttrHtml(st) {
     const S = r.scen;
     if (!S || !S.rows.length) return "";
     const sh = (s) => [["kr", "코스피"], ["us", "S&P"], ["fx", "원/달러"]].filter(([k]) => s[k] != null).map(([k, n]) => `${n} ${s[k] > 0 ? "+" : ""}${s[k]}%`).join(" · ");
-    const row = (x, i) => `<div class="rk-sr hx-link" role="button" tabindex="0" data-rks="${i}" aria-label="${esc(x.name)} 종목별 내역 보기"><span><b>${esc(x.name)}<i class="hx-chev" aria-hidden="true">›</i></b><small>${x.sub ? esc(x.sub) + " · " : ""}${esc(sh(x.shock))}</small></span>
+    const row = (x, i) => `<div class="rk-sr hx-link" role="button" tabindex="0" data-rks="${i}" aria-label="${esc(x.name)} 종목별 내역 보기"><span><b>${esc(x.name)}<i class="hx-chev" aria-hidden="true">›</i></b><small>${x.sub ? esc(x.sub) + " · " : ""}${esc(x.shock_txt || sh(x.shock))}</small></span>
         <span class="rk-sv"><b class="${tone(x.pnl)}">${signed(x.pnl)}</b><small class="${tone(x.pct)}">${pct(x.pct, 1)}</small></span></div>`;
     const cr = S.rows.map((x, i) => [x, i]).filter(([x]) => x.kind === "crisis"), wi = S.rows.map((x, i) => [x, i]).filter(([x]) => x.kind === "whatif");
     return `${cr.length ? `<div class="rk-h">과거 위기가 지금 다시 온다면</div><div class="rk-sl">${cr.map(([x, i]) => row(x, i)).join("")}</div>` : ""}
       ${wi.length ? `<div class="rk-h">만약에</div><div class="rk-sl">${wi.map(([x, i]) => row(x, i)).join("")}</div>` : ""}
       <div class="rk-h">한 종목 급락</div><div class="rk-sl"><div class="rk-sr"><span><b>${esc(S.gap.name)} 하루 −${S.gap.drop}%</b><small>가장 크게 든 종목 · 손절 주문이 듣지 않는 경우(하한가·거래정지·갭)</small></span>
         <span class="rk-sv"><b class="down">−${won(S.gap.loss)}</b><small class="down">−${S.gap.pct}%</small></span></div></div>
-      <div class="tiny">종목마다 지수·환율에 따라 움직인 정도(민감도)를 구해, 그 기간 지수·환율이 실제 움직인 폭을 입힌 어림값이에요. '만약에'는 나머지 요인도 과거에 함께 움직인 만큼 따라간다고 봐요. 충격이 클수록 오차가 커요.${S.est < S.n ? ` 기록이 짧은 ${S.n - S.est}종목은 지수와 똑같이 움직인다고 봤어요.` : ""}</div>`;
+      <div class="tiny">종목마다 요인(${esc((S.factors || ["코스피", "S&P 500", "원/달러"]).join("·"))})에 따라 움직인 정도(민감도)를 구해, 그 기간 요인이 실제 움직인 폭을 입힌 어림값이에요. '만약에'는 나머지 요인도 과거에 함께 움직인 만큼 따라간다고 봐요. 충격이 클수록 오차가 커요.${S.est < S.n ? ` 기록이 짧은 ${S.n - S.est}종목은 지수와 똑같이 움직인다고 봤어요.` : ""}</div>`;
   },
   riskPop(i) {
     const S = (this.riskMemo || {}).scen, x = S && S.rows[+i];
@@ -3992,9 +3992,9 @@ atAttrHtml(st) {
     const bt = Object.fromEntries(S.betas.map((b) => [b.name, b]));
     openSheet(x.name, `<div class="sc-kpi"><div><span>계좌 손익(어림)</span><b class="${tone(x.pnl)}">${signed(x.pnl)}</b></div><div><span>계좌 대비</span><b class="${tone(x.pct)}">${pct(x.pct, 2)}</b></div>
         <div><span>${x.kind === "crisis" ? "기간" : "가정"}</span><b style="font-size:13px">${esc(x.sub || "요인 하나를 흔듦")}</b></div></div>
-      <div class="hx-sub">넣은 충격</div><div class="tiny">${[["kr", "코스피"], ["us", "S&P 500"], ["fx", "원/달러"]].filter(([k]) => x.shock[k] != null).map(([k, n]) => `${n} <b class="${tone(x.shock[k])}">${x.shock[k] > 0 ? "+" : ""}${x.shock[k]}%</b>`).join(" · ")}${x.kind === "whatif" ? " (첫째만 정한 값, 나머지는 과거에 함께 움직인 만큼)" : " (그 기간 실제 움직임)"}</div>
+      <div class="hx-sub">넣은 충격</div><div class="tiny">${esc(x.shock_txt || "")}${x.kind === "whatif" ? " (첫째만 정한 값, 나머지는 과거에 함께 움직인 만큼)" : " (그 기간 실제 움직임)"}</div>
       <div class="hx-sub">종목별(많이 잃는 순)</div>
-      <div class="rk-sl">${x.items.map((t) => { const b = bt[t.name] || {}; return `<div class="rk-sr"><span><b>${esc(t.name)}</b><small>지수 민감도 ${b.bm ?? "–"}${b.bfx != null ? ` · 환율 민감도 ${b.bfx}` : ""}${b.guess ? " · 기록이 짧아 가정값" : ""}</small></span>
+      <div class="rk-sl">${x.items.map((t) => { const b = bt[t.name] || {}; return `<div class="rk-sr"><span><b>${esc(t.name)}</b><small>${b.txt ? "민감도: " + esc(b.txt) : `지수 민감도 ${b.bm ?? "–"}`}</small></span>
         <span class="rk-sv"><b class="${tone(t.pnl)}">${signed(t.pnl)}</b><small class="${tone(t.pct)}">${pct(t.pct, 1)}</small></span></div>`; }).join("")}</div>
       <div class="tiny">민감도는 최근 약 2년의 일간 움직임으로 구했어요. 위기 때는 종목들이 평소보다 더 같이 떨어지는 경향이 있어 실제 손실은 더 클 수 있어요.</div>`);
   },

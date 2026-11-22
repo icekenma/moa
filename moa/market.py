@@ -380,7 +380,7 @@ class Market:
         try:
             with open(p, encoding="utf-8") as f:
                 stale = json.load(f)
-            if time.time() - os.stat(p).st_mtime < 86400:
+            if time.time() - os.stat(p).st_mtime < 86400 and "warn" in (next(iter(stale.values()), None) or {}):   # 경고 정보가 없는 예전 목록은 다시 받는다
                 return stale
         except (OSError, ValueError):
             pass
@@ -399,8 +399,9 @@ class Market:
                     break
                 for x in d.get("list") or []:
                     c = code6(x.get("code", ""))
-                    if c and c not in master:
-                        master[c] = {"name": x.get("name", c), "market": label}
+                    if c and c not in master:      # 경고·감리·상태·업종: 자동매매가 위험 종목을 빼고 쏠림을 볼 때 쓴다
+                        master[c] = {"name": x.get("name", c), "market": label, "warn": str(x.get("orderWarning") or "").strip(),
+                                     "audit": str(x.get("auditInfo") or "").strip(), "state": str(x.get("state") or "").strip(), "sector": str(x.get("upName") or "").strip()}
                 if cl.last_headers.get("cont-yn") != "Y" or not cl.last_headers.get("next-key"):
                     break
                 key = cl.last_headers["next-key"]
@@ -417,6 +418,19 @@ class Market:
             return (self.kr_master().get(code) or {}).get("name", "")
         except Exception:
             return ""
+
+    def kr_info(self, code):
+        """종목 목록에 적힌 정보(이름·시장·경고·감리·상태·업종). 모르면 빈 값."""
+        try:
+            v = self.kr_master().get(code)
+            return v if isinstance(v, dict) else {}
+        except Exception:
+            return {}
+
+    def junk(self, mkt, sym, name=""):
+        """자동매매에서 뺄 종목이면 그 이유, 아니면 빈 글."""
+        from .trading.universe import junk_reason
+        return junk_reason(mkt, sym, name, self.kr_info(str(sym)) if mkt == "kr" else None)
 
     def kr_market(self, code):
         try:
@@ -572,12 +586,26 @@ class Market:
         except Exception:
             return None
 
+    def _master_check(self):
+        """자동매매의 '경고·특수 종목 제외'가 쓰는 정보가 실제로 들어오는지: 값의 종류와 걸러질 종목 예."""
+        from .trading.universe import junk_reason
+        m = self.kr_master()
+        vals = lambda k: sorted({str(v.get(k) or "") for v in m.values()})[:12]
+        out = [(c, v.get("name"), junk_reason("kr", c, v.get("name"), v)) for c, v in m.items()]
+        hit = [x for x in out if x[2]]
+        kinds = {}
+        for _, _, why in hit:
+            kinds[why] = kinds.get(why, 0) + 1
+        return {"경고 값": vals("warn"), "감리 값": vals("audit"), "업종 있는 종목": sum(1 for v in m.values() if v.get("sector")),
+                "삼성전자": m.get("005930"), "걸러지는 종목 수": len(hit), "이유별": kinds, "예": hit[:8]}
+
     def diag(self):
         out = {"kiwoom_client": self.kr_client() is not None}
         for name, fn in (("국내 현재가(005930)", lambda: self.kr_quote("005930")),
                          ("국내 지수", self.kr_indices),
                          ("국내 일봉", lambda: len(self.kr_chart("005930", "1m")["points"])),
                          ("종목 목록 수", lambda: len(self.kr_master())),
+                         ("종목 목록 경고·업종 정보", self._master_check),
                          ("미국 현재가(AAPL)", lambda: self.yh_quote("AAPL")),
                          ("미국 현재가 키움(AAPL)", lambda: self.kr_client().us_quote("AAPL")),
                          ("미국 잔고 키움", lambda: self.kr_client().us_holdings()),

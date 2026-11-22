@@ -1983,3 +1983,56 @@ def test_notify_only_what_matters(env, monkeypatch):
     c = create_app(rt).test_client()
     j = c.get("/api/notify").get_json()
     assert j["topic"] and [x["key"] for x in j["cats"]][0] == "urgent" and j["log"] and c.post("/api/notify/test").status_code == 200
+
+
+# ---------- v5.10: 경고·특수 종목 제외, 성과 분해, 지수 보유 비교, 우연 확인 ----------
+def test_junk_universe_rules():
+    from moa.trading.universe import junk_reason as J
+    ok = {"market": "코스피", "warn": "0", "audit": "정상", "state": "증거금20%|담보대출|신용가능"}
+    assert J("kr", "005930", "삼성전자", ok) == "" and J("kr", "005930", "삼성전자") == ""          # 정보가 없어도 이름·코드만으로 본다
+    assert J("kr", "005935", "삼성전자우", ok) == "우선주" and J("kr", "00088K", "한화3우B") == "우선주"
+    assert J("kr", "478390", "신한제15호스팩", dict(ok, market="코스닥")) == "스팩"
+    assert J("kr", "122630", "KODEX 레버리지", dict(ok, market="ETF")) == "레버리지·인버스·ETN" and J("kr", "252670", "KODEX 200선물인버스2X", dict(ok, market="ETF")).startswith("레버리지")
+    assert J("kr", "069500", "KODEX 200", dict(ok, market="ETF")) == ""                               # 보통 ETF는 그대로
+    assert J("kr", "000020", "동화약품", dict(ok, warn="5")) == "투자경고" and J("kr", "000020", "동화약품", dict(ok, warn="3")) == "단기과열"
+    assert J("kr", "000020", "동화약품", dict(ok, audit="투자주의환기종목")) == "투자주의환기" and J("kr", "000020", "동화약품", dict(ok, state="관리종목|증거금100%")) == "관리종목"
+    assert J("us", "TQQQ", "ProShares UltraPro QQQ") and J("us", "SOXL", "Direxion Daily Semiconductor Bull 3X Shares") and J("us", "AAPL", "Apple Inc") == ""
+
+
+def test_junk_is_skipped_and_logged(env, monkeypatch):
+    rid = env.run()
+    info = {"005930": {"name": "삼성전자", "market": "코스피", "warn": "0", "audit": "정상", "state": ""},
+            "000660": {"name": "SK하이닉스", "market": "코스피", "warn": "5", "audit": "정상", "state": ""}}
+    monkeypatch.setattr(env.rt.market, "kr_info", lambda code: info.get(code, {}))
+    monkeypatch.setattr(env.rt.market, "kr_market", lambda code: info.get(code, {}).get("market", ""))
+    assert env.enter(rid, [env.pick("000660"), env.pick("005930")]) == 1            # 투자경고 종목은 AI가 골라도 사지 않는다
+    assert [t["sym"] for t in env.at._open(rid)] == ["005930"]
+    dec = json.loads(env.rt.db.q("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' ORDER BY id DESC LIMIT 1", (rid,))[0]["data"])["decisions"]
+    assert [(d["sym"], d.get("code")) for d in dec if d.get("act") == "skip"] == [("000660", "junk")] and "투자경고" in dec[0]["why"]
+    assert "junk" in dict(env.at.FILTERS)
+
+
+def test_attribution_splits_market_pick_and_cost(env, monkeypatch):
+    from moa.autotrade import attribution, prob_better
+    lvl = {"v": 2500.0}
+    monkeypatch.setattr(env.rt.market, "kr_indices", lambda: [{"name": "코스피", "price": lvl["v"], "change_pct": 0.0}, {"name": "코스닥", "price": 800.0, "change_pct": 0.0}])
+    monkeypatch.setattr(env.rt.market, "kr_market", lambda code: "코스피")
+    rid = env.run()
+    assert env.enter(rid, [env.pick("005930")]) == 1
+    t = env.at._open(rid)[0]
+    assert t["idx_name"] == "코스피" and t["idx_in"] == 2500.0 and t["idx_out"] is None
+    env.at._lvl.clear()
+    lvl["v"] = 2525.0                                                 # 지수 +1%
+    env.px["005930"] = t["entry_price"] * 1.03                        # 종목 +3%
+    env.at._sell(env.at._run(rid), t, env.px["005930"], "익절")
+    rows = env.at._closed(rid)
+    a = attribution(rows)
+    assert rows[0]["idx_out"] == 2525.0 and a["n"] == 1 and a["market"] == 1.0 and abs(a["pick"] - (rows[0]["exit_price"] / rows[0]["entry_price"] - 1) * 100 + 1.0) < 0.01
+    assert a["cost"] < 0 and abs(a["market"] + a["pick"] + a["cost"] - a["net"]) < 0.01 and a["beat"] == 100       # 셋을 더하면 실제 수익
+    st = env.at.stats(rid)
+    assert st["attr"]["n"] == 1 and "bench" in st
+    assert attribution([dict(rows[0], idx_in=None)]) == {"n": 0, "total": 1}                                         # 지수 값이 없는 옛 거래는 빼고 센다
+    # 우연 확인: 뚜렷한 차이는 높게, 뒤섞인 차이는 낮게. 같은 자료면 늘 같은 답
+    assert prob_better([-2, -3, -1, -2, -2, -3, -1, -2], [2, 3, 1, 2, 2, 3, 1, 2]) > 0.99
+    mixed = prob_better([-5, 6, -4, 5, -6, 4, -5, 5], [-4, 6, -5, 5, -3, 4, -6, 6])
+    assert mixed < 0.9 and mixed == prob_better([-5, 6, -4, 5, -6, 4, -5, 5], [-4, 6, -5, 5, -3, 4, -6, 6]) and prob_better([], [1]) == 0.0

@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261122.2110";
+const UI_VERSION = "261122.2143";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2630,7 +2630,18 @@ pages.invest = {
         <div class="tiny">'그 뒤 실제 결과'는 건너뛴 종목을 AI가 낸 목표·손절대로 샀다고 쳤을 때의 수익률(비용 뺀 값)이에요. 이 결과가 8건 이상 쌓이고 벌었을 때만 그 기준을 한 단계 낮추자고 해요. 돈이 모자라 못 산 경우는 결과를 기다리지 않고 종목 수를 줄이는 안을 내요.</div>
       </section>`;
   },
-  atPropHtml(p, mkt) {
+atAttrHtml(st) {
+    // 성과 분해: 번 돈이 지수 덕인지, 종목을 잘 골라서인지, 비용이 얼마나 깎았는지. 그리고 지수를 그냥 들고 있었을 때와 비교
+    const a = st.attr || {}, b = st.bench;
+    if (!a.n && !b) return "";
+    const part = a.n ? `<div class="sc-kpi"><div><span>지수가 움직여서</span><b class="${tone(a.market)}">${pct(a.market, 2)}</b></div><div><span>종목을 골라서</span><b class="${tone(a.pick)}">${pct(a.pick, 2)}</b></div>
+        <div><span>비용</span><b class="${tone(a.cost)}">${pct(a.cost, 2)}</b></div></div>
+      <div class="tiny">거래 한 번 평균 ${pct(a.net, 2)}을 셋으로 나눈 값이에요(${esc(a.index || "지수")} 기준, ${a.n}건). 지수보다 더 오른 거래는 ${a.beat}% · 보유 중 최고에서 팔 때까지 되돌려 준 폭은 평균 ${pct(-Math.abs(a.giveback || 0), 2)}.${a.total > a.n ? ` 지수 값을 적기 전의 ${a.total - a.n}건은 빠졌어요.` : ""}</div>`
+      : `<div class="tiny">새로 사는 거래부터 살 때·팔 때의 지수 값을 적어요. 그 거래가 끝나면 번 돈을 '지수 덕'과 '종목 선택'으로 나눠 보여 드려요.</div>`;
+    const bench = b && b.run_pct != null ? `<div class="tiny">같은 기간(${esc(b.since)}부터 ${b.days}거래일) ${esc(b.name)}를 그냥 들고 있었다면 <b class="${tone(b.idx_pct)}">${pct(b.idx_pct, 2)}</b>, 이 자동매매의 확정 손익은 굴리는 돈 대비 <b class="${tone(b.run_pct)}">${pct(b.run_pct, 2)}</b>예요(AI 비용 전).</div>` : "";
+    return `<section class="card tight"><div class="card-head" style="padding-top:8px"><h2>수익이 어디서 왔나</h2></div>${part}${bench}</section>`;
+  },
+    atPropHtml(p, mkt) {
     const pend = p.status === "pending";
     const stLbl = { applied: "반영함", rejected: "반영 안 함", none: "바꿀 것 없음", pending: "승인 대기" }[p.status] || p.status;
     return `<section class="card at-prop ${pend ? "pend" : ""}" data-prop="${p.id}">
@@ -2912,6 +2923,7 @@ pages.invest = {
           ${lineChart([{ values: [r.budget].concat(d.stats.curve || []), color: "#8A7CF0" }], { label: "거래별 굴리는 돈 추이", h: 110 })}
           <div class="tiny">이길 때 평균 ${pct(S.avg_win, 2)}, 질 때 평균 ${pct(S.avg_loss, 2)} · 보유 중 최고 오름폭 중간값 ${pct(S.mfe_med, 2)}, 최저 ${pct(S.mae_med, 2)} · 비용 합계 ${M(S.fees)}</div>
         </section>
+        ${this.atAttrHtml(d.stats)}
         ${(d.stats.groups || []).filter((g) => g.rows.length > 1 || g.label === "파는 사유").map((g) => `<section class="card tight"><div class="card-head" style="padding-top:8px"><h2>${esc(g.label)}별</h2></div>
           <div class="at-tbl"><div class="at-tr at-th"><span></span><span>거래</span><span>승률</span><span>평균</span></div>${g.rows.sort((a, b) => b.n - a.n).map((x) => `<div class="at-tr"><span>${esc(x.key)}</span><span>${x.n}</span><span>${x.win_rate}%</span><span class="${tone(x.avg_pct)}">${pct(x.avg_pct, 2)}</span></div>`).join("")}</div></section>`).join("")}
         ${this.atOppHtml(d)}

@@ -351,7 +351,7 @@ class AIPick:
             raise ValueError("실시간 순위가 필요해서 키움 계좌 연결(설정 → 계좌 연결)이 있어야 추천할 수 있어요")
         ss = session(mkt)
         kinds = ("value", "up", "volume") if mkt == "kr" else ("up", "volume")
-        cand, seen = [], set()
+        cand, seen, dropped = [], set(), []
         rank_dump = {}
         cap = float(d.get("max_price") or 0)        # 자동매매: 한 번에 쓰는 돈으로 1주도 못 사는 종목은 후보에서 뺀다
         lite = bool(d.get("lite"))                  # 자동매매의 빠른 재추천: 같은 자료를 훨씬 짧게 보낸다
@@ -373,6 +373,11 @@ class AIPick:
                 if mkt == "us" and it["price"] < 2:
                     continue
                 if cap and it["price"] > cap:
+                    continue
+                why = rt.market.junk(mkt, it["sym"], it.get("name"))     # 경고 종목·스팩·우선주·레버리지 상품은 후보에서 뺀다
+                if why:
+                    dropped.append(f"{it.get('name') or it['sym']}({why})")
+                    seen.add(it["sym"])
                     continue
                 seen.add(it["sym"])
                 cand.append(it)
@@ -431,6 +436,8 @@ class AIPick:
                 "정규장_진행중": ss["open"], "정규장_남은분": ss["left_min"], "정규장_마감(한국시간)": ss["close_kst"],
                 "지수": idx, "주문가능금액": cash, "통화": "원" if mkt == "kr" else "달러", "계좌(참고)": acct,
                 "후보_상세(오늘 흐름)": deep, "실시간 순위": rank_dump}
+        if dropped:
+            data["앱이 뺀 종목(추천하지 마)"] = dropped[:20]
         ask = (f"지금({ss['kst']} 한국시간) {'국내' if mkt == 'kr' else '미국'} 시장에서 바로 매수해 오늘 안에 수익으로 끝낼 "
                "확률이 가장 높은 종목을 골라 줘. 후보_상세를 중심으로 판단하고, 필요하면 오늘 뉴스·공시를 확인해.")
         if ex:
@@ -520,6 +527,9 @@ class AIPick:
                 if (mkt == "kr" and (it["price"] < 1000 or (it.get("change_pct") or 0) >= 29.5)) or (mkt == "us" and it["price"] < 2):
                     continue
                 if cap and it["price"] > cap:
+                    continue
+                if self.rt.market.junk(mkt, it["sym"], it.get("name")):   # 경고 종목·스팩·우선주·레버리지 상품은 후보에서 뺀다
+                    seen.add(it["sym"])
                     continue
                 seen.add(it["sym"])
                 cand.append(dict(it, src=src_name[k]))
@@ -1526,6 +1536,9 @@ def _done_rows(self, mkt=None, h="day"):
     return [r for r in rows if not mkt or r["mkt"] == mkt]
 
 
+SHRINK_K = 4       # 조건별 성적을 믿는 정도: 가상의 표본 4건만큼은 전체 평균을 믿는다(4건짜리 묶음은 절반만, 12건이면 3/4을 믿는다)
+
+
 def _bucket(rows, label, fn):
     out = []
     groups = {}
@@ -1682,10 +1695,12 @@ def tune(self, h="day", mkt=None):
             out["hold"], out["hold_avg"] = best[0], round(best[1], 2)
     base = sum(r["net_pct"] for r in rows) / n
     bs = [b for b in _buckets(rows, h, feat_only=True) if b["n"] >= 4]
+    for b in bs:     # 표본이 적은 묶음은 전체 평균 쪽으로 당겨서 견준다(4건짜리 우연으로 '피할 조건'이 생기지 않게)
+        b["adj"] = base + (b["avg"] - base) * b["n"] / (b["n"] + SHRINK_K)
     txt = lambda b: f"{b['group']} = {b['key']} ({b['n']}건 평균 {b['avg']:+.2f}%)"
     # 전체 평균과 차이가 큰 것부터 5개씩
-    out["avoid"] = [txt(b) for b in sorted(bs, key=lambda b: b["avg"]) if b["avg"] <= min(-H["gap"], base - H["gap"])][:5]
-    out["prefer"] = [txt(b) for b in sorted(bs, key=lambda b: -b["avg"]) if b["avg"] >= max(H["gap"], base + H["gap"])][:5]
+    out["avoid"] = [txt(b) for b in sorted(bs, key=lambda b: b["adj"]) if b["adj"] <= min(-H["gap"], base - H["gap"])][:5]
+    out["prefer"] = [txt(b) for b in sorted(bs, key=lambda b: -b["adj"]) if b["adj"] >= max(H["gap"], base + H["gap"])][:5]
     return out
 
 
@@ -1699,7 +1714,8 @@ def learn_score(self, feat, h="day", mkt=None):
     cache = getattr(self, "_ls_cache", {})
     if cache.get("key") != key:
         base = sum(r["net_pct"] for r in rows) / len(rows)
-        cache = {"key": key, "map": {(b["group"], b["key"]): b["avg"] - base for b in _buckets(rows, h, feat_only=True)}}
+        # 표본이 적은 묶음의 평균은 우연일 수 있으니 전체 평균 쪽으로 당긴다(n건이면 n/(n+SHRINK_K)만큼만 믿는다)
+        cache = {"key": key, "map": {(b["group"], b["key"]): (b["avg"] - base) * b["n"] / (b["n"] + SHRINK_K) for b in _buckets(rows, h, feat_only=True)}}
         self._ls_cache = cache
     r, sc = {"f": feat or {}}, 0.0
     for label, fn, is_feat in _defs(h):

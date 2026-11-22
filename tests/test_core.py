@@ -3008,3 +3008,33 @@ def test_album_ship_sealed_delivery(rt, tmp_path):
     repo[MANIFEST] = json.dumps({"id": "0" * 64, "key": pub["id"], "note": "바뀐 내용"}).encode()   # 안내문과 내용이 다르면 넣지 않는다
     n = len(posts)
     assert ship.tick() is False and len(posts) == n
+
+
+# ---------- 챙길 일 · 캘린더 내보내기 ----------
+def test_agenda_collects_dated_items_and_serves_readonly_calendar(rt):
+    from datetime import date
+    client = create_app(rt).test_client()
+    ag = rt.agenda
+    today = date(2026, 11, 23)                                     # 월요일
+    rt.fixed.save({"name": "관리비", "amount": 250000, "cycle": "monthly", "day": 25, "start_date": "2026-01-01", "kind": "expense"})
+    rt.health.save_follow({"date": "2026-11-27", "title": "정기 검진"})
+    its = ag.items(30, today)
+    fx = next(x for x in its if x["kind"] == "fixed")
+    assert fx["date"] == "2026-11-25" and fx["title"] == "납부: 관리비" and "250,000" not in fx["title"] and "11월 25일(수)" in fx["ask"]   # 금액은 기본으로 뺀다
+    assert not any(x["kind"] == "health" for x in its)             # 건강 일정은 기본으로 뺀다
+    wk = [x for x in its if x["kind"] == "workout"]
+    assert wk and all(x["title"].startswith("운동: ") for x in wk) and wk[0]["dday"] <= 7
+    ag.save_conf({"amount": True, "health": True, "workout": False})
+    its = ag.items(30, today)
+    assert any(x["title"] == "납부: 관리비 250,000원" for x in its) and any(x["title"] == "정기 검진" for x in its) and not any(x["kind"] == "workout" for x in its)
+    b = ag.brief(today)
+    assert b["conf"]["health"] is True and [x["when"] for x in b["items"]][:1] == ["11.25"] and b["share"] == ""      # 오늘·내일 일이 없으면 넘길 문구도 없다
+    ics = ag.ics(today)
+    assert ics.startswith("BEGIN:VCALENDAR\r\n") and "SUMMARY:납부: 관리비 250\\,000원" in ics and "DTSTART;VALUE=DATE:20261125" in ics and ics.count("BEGIN:VEVENT") == ics.count("END:VEVENT") >= 2
+    # 주소의 열쇠로만 열리고, 새로 만들면 예전 주소는 끊긴다
+    r = client.get("/api/agenda").get_json()
+    assert r["path"].startswith("/cal/") and r["path"].endswith(".ics")
+    assert client.get(r["path"]).status_code == 200 and client.get(r["path"]).mimetype == "text/calendar"
+    assert client.get("/cal/wrong.ics").status_code == 404
+    r2 = client.put("/api/agenda", json={"renew": True, "amount": False}).get_json()
+    assert r2["path"] != r["path"] and client.get(r["path"]).status_code == 404 and client.get(r2["path"]).status_code == 200 and r2["conf"]["amount"] is False

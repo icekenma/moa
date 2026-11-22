@@ -863,6 +863,26 @@ def create_app(rt, updater=None):
         return app.response_class(json.dumps(rt.market.diag(), ensure_ascii=False, default=str, indent=1),
                                   mimetype="application/json")
 
+    # ---------- 챙길 일 · 캘린더 내보내기 ----------
+    @app.get("/api/agenda")
+    def agenda_get():
+        return jsonify(dict(rt.agenda.brief(), path=f"/cal/{rt.agenda.token()}.ics"))
+
+    @app.put("/api/agenda")
+    def agenda_put():
+        d = request.get_json(silent=True) or {}
+        rt.agenda.save_conf(d)
+        if d.get("renew"):
+            rt.agenda.token(renew=True)            # 예전 구독 주소는 이때부터 끊긴다
+        return jsonify(dict(rt.agenda.brief(), path=f"/cal/{rt.agenda.token()}.ics"))
+
+    @app.get("/cal/<tok>.ics")
+    def agenda_ics(tok):
+        # 캘린더 앱은 머리글(Authorization)을 못 붙여서, 주소에 든 읽기 전용 열쇠로만 확인한다(앱 접속 토큰과 다른 값)
+        if not rt.agenda.token_ok(tok):
+            return "", 404
+        return app.response_class(rt.agenda.ics(), mimetype="text/calendar; charset=utf-8", headers={"Cache-Control": "no-store"})
+
     # ---------- 계좌 전체 위험 보기(읽기 전용) ----------
     @app.get("/api/risk")
     def risk_view():

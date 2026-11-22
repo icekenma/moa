@@ -2947,3 +2947,64 @@ def test_photo_app_door(rt):
     assert Album(rt.db, port=1).status()["running"] is False                                        # 실제로 아무것도 없는 포트
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))                              # 판매용 코드는 저장소에 두지 않는다
     assert not [f for d, _, fs in os.walk(root) if ".git" not in d and "node_modules" not in d for f in fs if f in ("grade_engine.py", "style_match.py", "aws_album.py", "album_ui.html")]
+
+
+def test_album_ship_sealed_delivery(rt, tmp_path):
+    """잠근 묶음: 노트북의 열쇠로만 풀리고, 새 묶음은 프로그램의 업데이트 기능에 한 번만 들어간다."""
+    import hashlib
+    import io
+    import zipfile
+    from moa import shipbox
+    from moa.album import Album
+    from moa.ship import AlbumShip, MANIFEST, BUNDLE
+    small = lambda: shipbox.keygen(1024)                    # 시험은 작은 열쇠로 빠르게
+    k = small()
+    blob = shipbox.seal(shipbox.public(k), b"hello" * 1000)
+    assert shipbox.open_(k, blob) == b"hello" * 1000 and b"hellohello" not in blob and shipbox.open_(k, shipbox.seal(shipbox.public(k), b"")) == b""
+    bad = bytearray(blob)
+    bad[-40] ^= 1
+    with pytest.raises(ValueError):
+        shipbox.open_(k, bytes(bad))
+    with pytest.raises(ValueError):
+        shipbox.open_(small(), blob)
+    assert set(shipbox.public(k)) == {"id", "n", "e"}       # 공개 쪽에는 푸는 값이 없다
+
+    web = {"/api/version": (200, {"app": "AWS Album", "version": "1.4"})}
+    album = Album(rt.db, fetch=lambda url, timeout=2: web.get(url.replace("http://127.0.0.1:8790", ""), (0, None)), ts=lambda *a, **kw: (-1, ""))
+    repo, posts, answer = {}, [], [(200, {"ok": True, "changed": ["album_ui.html"], "restarting": True})]
+    ship = rt.ship = AlbumShip(rt.db, str(tmp_path), str(tmp_path), album, git=lambda p: repo.get(p), post=lambda url, data: (posts.append((url, data)), answer[0])[1], keygen=small)
+    c = create_app(rt).test_client()
+    assert ship.tick() is False and not posts               # 묶음이 없으면 아무 일도 없다
+    r = c.get("/api/photo/app/ship").get_json()
+    pub = r["pub"]
+    assert set(pub) == {"id", "n", "e"} and '"d"' not in json.dumps(r) and os.path.exists(tmp_path / "ship_key.json")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("PhotoGraderPro_web/album_ui.html", "<html>new</html>")
+    data = buf.getvalue()
+
+    def put(note, key=None):
+        repo[BUNDLE] = shipbox.seal(pub, data + note.encode())
+        repo[MANIFEST] = json.dumps({"id": hashlib.sha256(data + note.encode()).hexdigest(), "key": key or pub["id"], "note": note}).encode()
+    put("홈 버튼")
+    assert c.get("/api/photo/app/ship").get_json()["status"]["pending"] is True
+    assert ship.tick() is True and posts[-1] == ("http://127.0.0.1:8790/api/self_update", data + "홈 버튼".encode())
+    st = ship.status()
+    assert st["pending"] is False and st["applied"]["note"] == "홈 버튼" and ship.tick() is False and len(posts) == 1     # 같은 묶음은 다시 넣지 않는다
+    assert c.get("/api/photo/app").get_json()["ship"]["applied"]["note"] == "홈 버튼"
+    # 프로그램이 꺼져 있으면 기다렸다가, 켜지면 적용
+    put("둘째")
+    web.pop("/api/version")
+    assert ship.tick() is False and "꺼져" in ship.status()["note"] and len(posts) == 1
+    web["/api/version"] = (200, {"app": "AWS Album", "version": "1.4"})
+    # 프로그램이 거절하면(잠금 번호 등) 세 번까지만 해 보고 멈춘다
+    answer[0] = (401, {"error": "login"})
+    assert [ship.tick() for _ in range(5)] == [False] * 5 and len(posts) == 4 and "잠금 번호" in ship.status()["note"]
+    answer[0] = (200, {"ok": True, "changed": []})
+    put("셋째")                                              # 새 묶음이 오면 다시 시도
+    assert ship.tick() is True and ship.status()["applied"]["note"] == "셋째"
+    put("남의 열쇠", key="ffff")
+    assert ship.tick() is False and "열쇠" in ship.status()["note"]
+    repo[MANIFEST] = json.dumps({"id": "0" * 64, "key": pub["id"], "note": "바뀐 내용"}).encode()   # 안내문과 내용이 다르면 넣지 않는다
+    n = len(posts)
+    assert ship.tick() is False and len(posts) == n

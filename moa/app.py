@@ -1256,7 +1256,18 @@ def create_app(rt, updater=None):
 
     @app.get("/api/photo/app")
     def photo_app():
-        return jsonify(rt.album.status(fresh=request.args.get("fresh") == "1"))
+        st = rt.album.status(fresh=request.args.get("fresh") == "1")
+        if getattr(rt, "ship", None):
+            st["ship"] = rt.ship.status()
+        return jsonify(st)
+
+    @app.get("/api/photo/app/ship")
+    def photo_app_ship():
+        """프로그램 자동 배달 상태와 잠그는 열쇠(공개해도 되는 쪽). 푸는 열쇠는 내보내지 않는다."""
+        ship = getattr(rt, "ship", None)
+        if not ship:
+            return jsonify(error="자동 배달이 꺼져 있어요"), 400
+        return jsonify(pub=ship.public(), status=ship.status())
 
     @app.post("/api/photo/app/https")
     def photo_app_https():

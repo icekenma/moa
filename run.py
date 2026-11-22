@@ -25,8 +25,11 @@ def main():
     db = DB(os.path.join(BASE, "data", "moa.db"))
     rt = Runtime(db, data_dir=os.path.join(BASE, "data"))
     updater = Updater(rt, BASE)
+    from moa.ship import AlbumShip, git_reader      # 사진편집 프로그램 수정분 자동 배달
+    rt.ship = AlbumShip(db, os.path.join(BASE, "data"), BASE, rt.album, git=git_reader(updater.git_path, BASE) if updater.available else None)
     app = create_app(rt, updater)
     updater.start()
+    rt.ship.start()
     url = f"http://127.0.0.1:{a.port}"
     print(f"moa 실행 중: {url}  (끄려면 이 창을 닫으세요)")
     print(f"휴대폰 접속 토큰: {access_token(db)}")

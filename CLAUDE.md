@@ -21,6 +21,7 @@
 
 - 앱 등록: `docs/app.js`의 `APPS`·`addApp()`. 가계부(가계부·자산·투자·설정)는 `app.js`, 건강관리는 `docs/health.js`·`docs/health.css`·`moa/health.py`(기구 안내 글은 `docs/gym.js`, 기구 사진은 서버 DB). 사진편집은 `docs/photo.js`·`docs/photo.css`·`moa/photo.py`(보관·설치)·`moa/photo_engine.py`(보정 계산, numpy·OpenCV)·`moa/slideshow.py`(슬라이드쇼 영상·배경음악). 무거운 꾸러미는 `requirements.txt`에 넣지 않고 앱의 설치 버튼으로 넣는다.
 - 사진편집은 우석World 코드가 아니다: 노트북에서 따로 도는 PhotoGrader 웹 프로그램(AWS Album, 기본 8790 포트)을 `docs/photo.js`가 틀(iframe) 안에 그대로 띄운다. 그 프로그램은 **판매용이라 이 저장소에 넣지 않는다**(코드·화면 일부라도). 고칠 일이 있으면 프로그램 파일을 고쳐 업데이트 zip으로 사용자에게 주고, 프로그램 자체의 '업데이트 → zip 올리기'로 적용한다. `moa/album.py`는 켜짐 여부·주소·사진 수만 읽는다.
+- **사진편집 프로그램 수정 요청이 오면(사용자가 따로 할 일 없이 적용)**: ① 프로그램 원본(작업본은 이 대화의 `/home/claude/album-src`, 없으면 연결된 PC의 프로그램 폴더에서 가져오거나 사용자에게 최신 zip을 받는다)을 고치고 로컬에서 켜서 확인 ② `python tools/ship_album.py /home/claude/album-src "바뀐 내용"`으로 `ship/album.bin`·`ship/album.json` 생성 ③ 커밋·푸시. 노트북이 5분 안에 받아 프로그램의 자체 업데이트(문법 검사·백업·재시작·실패 시 되돌림)로 적용한다(`moa/ship.py`, `moa/shipbox.py`). 프로그램 파일을 잠그지 않은 채로 저장소에 넣으면 안 된다. 적용 여부는 `/api/photo/app`의 `ship`에서 본다.
 - 새 앱 더하기: ① `docs/<앱>.js`에서 `addApp({id, name, desc, home, secs, tabs, skin, tile, live, art})`와 `pages.<구역>` 정의 ② `docs/<앱>.css`(구역은 `html[data-sec="<구역>"]`로 한정, 클래스는 앱 머리글자 접두사) ③ `index.html`에 두 파일 연결 ④ 서버가 필요하면 `moa/<앱>.py` + `app.py` 라우트 + `/api/world`의 한 줄 요약.
 - 전역 클래스(`.top`, `.hl`, `.empty`, `.check` …)와 이름이 겹치지 않게 한다(겹쳐서 난 문제가 여러 번 있었다).
 - 건강 수치 같은 개인 자료는 저장소에 넣지 않는다. 서버 DB에만 두고, 처음 자료는 앱의 '자료 가져오기'로 넣는다.

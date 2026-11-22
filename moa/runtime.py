@@ -63,6 +63,7 @@ class Runtime:
         self.health = Health(db)
         from .album import Album
         self.album = Album(db)
+        self.ship = None                       # run.py가 붙인다(저장소·data 폴더가 있어야 해서)
         self.feed = None
         self.brokers = {}
         self.errors = {}

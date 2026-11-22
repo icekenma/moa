@@ -43,11 +43,23 @@
       .replace('<button type="button" class="px-btn" data-a="retry">다시 확인</button>', '<button type="button" class="px-btn main" data-a="fresh">새 버전 받기</button>');
     else if (d.pin && !store.get("photoFrame", false)) host.innerHTML = notice("잠금 번호를 쓰고 있어요", ["프로그램에 잠금 번호(PIN)가 걸려 있으면 우석World 안에 끼워 넣은 화면에서는 로그인이 유지되지 않아요.", "'프로그램 열기'로 따로 열어 쓰거나, 프로그램 설정에서 잠금 번호를 끄면 이 자리에 바로 뜹니다."], d, url)
       + `<p class="px-dim px-pad"><button type="button" class="px-link" data-a="force">그래도 여기에 띄워 보기</button></p>`;
-    else host.innerHTML = `<div class="px-bar"><a class="px-ico" href="#world" aria-label="우석World 첫 화면으로">🌐</a><b>사진편집</b><span>${esc(d.name)} v${esc(d.version)}</span>
-        <button type="button" class="px-ico" data-a="reload" aria-label="새로 고침">↻</button><a class="px-ico" href="${esc(url)}" target="_blank" rel="noopener" aria-label="따로 열기">↗</a><button type="button" class="px-ico" data-a="addr" aria-label="주소 바꾸기">⋯</button></div>
-      <iframe class="px-frame" id="pxFrame" src="${esc(url)}" title="PhotoGrader 웹 프로그램" allow="fullscreen; web-share; clipboard-write; autoplay; geolocation; camera; microphone; screen-wake-lock" allowfullscreen></iframe>`;
+    else {
+      // 위쪽 막대 없이 프로그램 화면만 가득. 홈으로 가는 버튼은 프로그램 상단바 안에 있다(프로그램이 '홈' 신호를 보내면 첫 화면으로).
+      // 그 버튼이 없는 예전 프로그램이면(인사 신호가 안 오면) 왼쪽 가장자리에 작은 홈 단추를 대신 보인다.
+      host.innerHTML = `<iframe class="px-frame" id="pxFrame" src="${esc(url)}" title="PhotoGrader 웹 프로그램" allow="fullscreen; web-share; clipboard-write; autoplay; geolocation; camera; microphone; screen-wake-lock" allowfullscreen></iframe>
+        <a class="px-fab" id="pxFab" href="#world" aria-label="우석World 첫 화면으로" hidden>🌐</a>`;
+      P.hello = false; clearTimeout(P.fabT);
+      P.fabT = setTimeout(() => { const f = $("#pxFab"); if (f && !P.hello) f.hidden = false; }, 3500);
+    }
+    host.classList.toggle("full", !!$("#pxFrame"));
   }
-  const P = { blocked: false, d: null, unreach: "" };
+  const P = { blocked: false, d: null, unreach: "", hello: false, fabT: 0 };
+  window.addEventListener("message", (e) => {          // 끼워 넣은 프로그램이 보내는 신호만 받는다
+    const f = $("#pxFrame"), m = e.data;
+    if (!f || e.source !== f.contentWindow || !m || m.app !== "aws-album") return;
+    if (m.hello) { P.hello = true; const b = $("#pxFab"); if (b) b.hidden = true; }
+    if (m.go === "home") location.hash = "#world";
+  });
   document.addEventListener("securitypolicyviolation", (e) => {      // 그래도 막혔으면(예전 껍데기) 빈 화면으로 두지 않는다
     if (!/^frame-src/.test(e.violatedDirective || e.effectiveDirective || "") || !$("#pxFrame")) return;
     P.blocked = true; if (P.d) draw(P.d);
@@ -84,7 +96,6 @@
           if (b.dataset.a === "retry") { b.disabled = true; d = await load(true); }
           if (b.dataset.a === "https") { b.disabled = true; b.textContent = "만드는 중…"; try { await api("POST", "/api/photo/app/https", {}); } finally { d = await load(true); } }
           if (b.dataset.a === "fresh") return fresh();
-          if (b.dataset.a === "reload") { const f = $("#pxFrame"); if (f) f.src = f.getAttribute("src"); }
           if (b.dataset.a === "force") { store.set("photoFrame", true); draw(d); }
           if (b.dataset.a === "addr") addrSheet(d);
         } catch (err) { if (!(err instanceof Locked)) toast(err.message, true); }

@@ -2409,3 +2409,80 @@ def test_theme_basket_resolves_and_normalizes_weights(env, monkeypatch):
     assert "원전" in title and data["테마"] == "원전"
     with pytest.raises(ValueError):
         ap.basket_parse("표 없음", "kr", "x", "m", 0)
+
+
+# ---------- 6단계: 몬테카를로 위험 체계 ----------
+def test_montecarlo_is_stable_and_reads_tail_risk():
+    from moa.trading import montecarlo as MC
+    import random
+    r = random.Random(3)
+    a = [r.gauss(0.002, 0.02) for _ in range(60)]
+    b = [x * 0.9 + r.gauss(0, 0.004) for x in a]
+    day = MC.mix([0.5, 0.5], [a, b])
+    p, p2 = MC.paths(day, 20), MC.paths(day, 20)
+    assert p == p2 and p["n"] == 3000 and len(p["band"]) == 4 and p["band"][-1]["d"] == 20                 # 같은 자료면 같은 답
+    assert p["p5"] < p["p25"] < p["p50"] < p["p75"] < p["p95"] and abs(p["p50"]) < 1.5                     # 평균은 0으로 놓는다
+    assert p["cvar95"] >= p["var95"] > 0 and p["mdd95"] >= p["mdd50"] > 0 and p["p_loss5"] >= p["p_loss10"]
+    wide = MC.paths(MC.mix([1.0, 1.0], [a, b]), 20)
+    assert wide["var95"] > p["var95"] * 1.6                                                                # 두 배로 실으면 위험도 그만큼
+    assert MC.paths([0.01] * 5, 20) is None and MC.mix([0.5], [None]) == []
+    full, capped = MC.one_day_var([0.5, 0.5], [a, b]), MC.one_day_var([0.5, 0.5], [a, b], [-0.01, -0.01])
+    assert capped <= 1.0 + 1e-9 < full                                                                      # 손절선에서 멈춘다고 보면 그만큼만
+    good, bad = [0.6, -0.3, 0.5, -0.2, 0.7, -0.3] * 5, [0.2, -0.6, 0.3, -0.5, 0.1, -0.7] * 5
+    assert MC.prob_positive(good) > 0.95 and MC.prob_positive(bad) < 0.05 and MC.prob_positive([1, 2]) is None
+    fg, fb = MC.trades_forward(good, 60, 0.0, 8.0), MC.trades_forward(bad, 60, 3.0, 8.0)
+    assert fg["p_ruin"] < 1 and fg["p_profit"] > 95 and fb["p_ruin"] > 60 and fb["p50"] < 0 and MC.trades_forward(good[:5], 60) is None
+
+
+def test_var_guard_shrinks_or_skips_and_risk_check_reports(env, monkeypatch):
+    import random
+    rr = random.Random(5)
+    base = [rr.gauss(0, 0.03) for _ in range(61)]
+    def candles(mkt, sym, tf, n=120):
+        c, out = 100.0, []
+        for v in base:
+            c *= 1 + v
+            out.append({"c": c, "h": c, "l": c, "v": 1})
+        return {"bars": out}
+    monkeypatch.setattr(env.rt.invest, "candles", candles)
+    at = env.at
+    def run(**kw):
+        rid = env.run()
+        _set(env, rid, warmup_trades=0, max_positions=3, per_trade_pct=33.0, sl_cap=5.0, tp_cap=10.0, **kw)
+        return rid
+    picks = lambda sl: [env.pick(s, target_pct=sl * 2, stop_pct=sl) for s in ("005930", "000660", "035420")]
+    off = run()
+    assert env.enter(off, picks(4.0)) == 3                                    # 꺼져 있으면 예전 그대로(나쁜 날 손실이 한도를 넘어도 산다)
+    rc = at.risk_check(at._run(off))
+    assert rc["hold"]["n"] == 3 and rc["hold"]["over"] and rc["hold"]["var"] > rc["day_limit"] == 2.0 and rc["guard"] is False and "fwd" not in rc
+    assert at.detail(off)["risk"]["hold"]["var"] == rc["hold"]["var"]
+    _end(env, off)
+    on = run(var_guard=True)
+    n = env.enter(on, picks(4.0))
+    dec = json.loads(env.rt.db.q("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' ORDER BY id DESC LIMIT 1", (on,))[0]["data"])["decisions"]
+    assert n < 3 or any(d.get("var_scale") for d in dec)                      # 똑같이 움직이는 세 종목을 넓은 손절로: 줄이거나 사지 않는다
+    assert all(d["var"] <= 2.0 for d in dec if d.get("act") == "buy") and at.risk_check(at._run(on))["hold"]["var"] <= 2.0 + 0.3
+    assert [d["code"] for d in dec if d.get("act") == "skip"] in ([], ["riskcap"], ["riskcap", "riskcap"]) and "riskcap" in dict(at.FILTERS) and "guard" in VARIANTS
+    _end(env, on)
+    tight = run(var_guard=True)
+    assert env.enter(tight, picks(1.0)) == 3                                  # 좁은 손절이면 한도 안이라 그대로 산다
+    # 끝난 거래가 쌓이면 앞날(한도에 닿을 확률·우연이 아닐 가능성)도 낸다
+    for i in range(22):
+        env.rt.db.x("INSERT INTO at_trades(run_id,ver,mkt,sym,name,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,exit_ts,exit_day,exit_price,reason,pnl,pnl_pct) "
+                    "VALUES(?,1,'kr','005930','x',1,'closed','2026-11-17T10:00:00','2026-11-17','10:00',70000,3,1.5,'2026-11-17T11:00:00','2026-11-17',70000,'손절',?,?)",
+                    (tight, -9000 if i % 3 else 6000, -0.9 if i % 3 else 0.6))
+    at._rc.clear()
+    rc = at.risk_check(at._run(tight))
+    assert rc["n"] == 22 and rc["fwd"]["next"] >= 20 and rc["fwd"]["p_ruin"] > 20 and rc["edge"] < 0.2 and rc["fwd"]["p50"] < 0
+    assert at.risk_check(at._run(tight)) is rc                                # 바뀐 것이 없으면 다시 계산하지 않는다
+
+
+def test_account_risk_view_adds_montecarlo_distribution():
+    from moa.riskview import compute
+    import random
+    r = random.Random(9)
+    a = [r.gauss(0, 0.02) for _ in range(60)]
+    out = compute([{"name": "A", "value": 8_000_000, "sector": "x", "mkt": "kr", "rets": a}, {"name": "B", "value": 2_000_000, "sector": "", "mkt": "us", "rets": None}], {"kr": a, "us": None})
+    mc = out["mc"]
+    assert mc["days"] == 20 and mc["var_krw"] == round(10_000_000 * mc["var95"] / 100) and mc["cvar_krw"] >= mc["var_krw"] > 0 and len(mc["band"]) == 4
+    assert compute([{"name": "B", "value": 1, "sector": "", "mkt": "us", "rets": None}], {})["mc"] is None

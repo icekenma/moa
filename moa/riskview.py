@@ -5,6 +5,8 @@
 과거 60거래일의 일간 수익률로 셈한 어림값이라, 앞으로의 손실을 보장하거나 한정하지 않는다.
 """
 import math
+
+from .trading import montecarlo as MC
 from datetime import datetime
 
 BENCH = {"kr": ("^KS11", "코스피"), "us": ("^GSPC", "S&P 500")}
@@ -56,6 +58,10 @@ def compute(items, bench):
     beta = sum(x["w"] * x["beta"] for x in items if x["beta"] is not None)
     cover = sum(x["w"] for x in items if x["beta"] is not None)
     top = sorted(items, key=lambda x: -x["w"])
+    # 몬테카를로: 지금 비중 그대로 20거래일을 3,000번 그려 본다(자료가 없는 종목은 움직이지 않는다고 본다 → cover로 알린다)
+    mc = MC.paths(MC.mix([x["w"] for x in known], [x["rets"] for x in known]), days=20) if known else None
+    if mc:
+        mc.update(var_krw=round(total * mc["var95"] / 100), cvar_krw=round(total * mc["cvar95"] / 100))
     return {"n": len(items), "total": round(total), "cover": round(cover * 100),
             "top": [{"name": x["name"], "w": round(x["w"] * 100, 1), "vol": x["vol"], "beta": x["beta"], "sector": x.get("sector") or ""} for x in top[:8]],
             "sectors": [{"name": k, "w": round(v * 100, 1)} for k, v in sorted(sec.items(), key=lambda kv: -kv[1])[:6]],
@@ -63,6 +69,7 @@ def compute(items, bench):
             "day_risk": None if day_vol is None else round(total * day_vol / 100 * 1.65),      # 스무 날에 한 번쯤 넘는 하루 손실(어림)
             "beta": round(beta / cover, 2) if cover else None,
             "stress": None if not cover else {"idx": -5, "loss": round(total * beta * -0.05), "pct": round(beta * -5, 2)},
+            "mc": mc,
             "pairs": sorted(pairs, key=lambda p: -p["corr"])[:6],
             "flags": [f for f in (
                 f"한 종목({top[0]['name']})이 {top[0]['w'] * 100:.0f}%예요" if top[0]["w"] >= 0.3 else "",

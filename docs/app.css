@@ -3747,3 +3747,23 @@ dialog.sheet .sheet-head h2{overflow:hidden;text-overflow:ellipsis;white-space:n
 dialog.sheet .sheet-head .close{flex:0 0 auto;width:32px;height:32px;border-radius:50%;background:rgba(127,127,127,.14);display:grid;place-items:center}
 html.gm-on dialog.sheet .sheet-in{border-radius:24px}
 @media (min-width:600px){dialog.sheet{margin-bottom:24px!important}}
+
+/* 위험 점검(몬테카를로): 계좌 분포 그림 · 자동매매 한도 막대 */
+.rk-fan{display:block;width:100%;height:auto;margin:2px 0 8px}
+.rk-fan .b1{fill:color-mix(in srgb,var(--ink2) 16%,transparent)}
+.rk-fan .b2{fill:color-mix(in srgb,var(--ink2) 30%,transparent)}
+.rk-fan .md{fill:none;stroke:var(--ink);stroke-width:1.6;stroke-linejoin:round}
+.rk-fan .z{stroke:var(--ink3);stroke-width:1;stroke-dasharray:3 4;opacity:.6}
+.rk-fl{font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
+.rk-fl.up{fill:var(--up)}.rk-fl.down{fill:var(--down)}
+.rk-fx{font-size:10px;fill:var(--ink3)}
+.rkc-m{display:grid;gap:5px;margin:2px 0 10px}
+.rkc-t{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:12px;color:var(--ink2)}
+.rkc-t b{font-size:16px;color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap}
+.rkc-t b.down{color:var(--down)}
+.rkc-t small{font-size:11px;font-weight:600;color:var(--ink3)}
+.rkc-bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden}
+.rkc-bar i{display:block;height:100%;border-radius:4px;background:var(--ink2)}
+.rkc-bar.over i{background:var(--down)}
+.rkc-s{display:flex;justify-content:space-between;font-size:11px;color:var(--ink3)}
+.rkc .notice{margin:0 0 10px}

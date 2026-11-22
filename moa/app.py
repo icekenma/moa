@@ -139,7 +139,7 @@ def create_app(rt, updater=None):
         if not got or not hmac.compare_digest(got.encode(), token.encode()):
             if throttle.fail(who):
                 rt.db.log("system", "error", f"틀린 접속 토큰이 반복돼 {who}의 접속을 10분 막았어요", datetime.now().isoformat(timespec="seconds"))
-                rt.notify("틀린 접속 토큰으로 여러 번 접속을 시도했어요", "urgent", "가계부S · 보안")
+                rt.notify("틀린 접속 토큰으로 여러 번 접속을 시도했어요", "urgent", "우석World · 보안")
             return jsonify(error="접속 토큰이 맞지 않아요. 설정에서 토큰을 다시 넣어 주세요", code="auth"), 401
         throttle.ok(who)
         # 접속 토큰은 맞음 → 이제 앱 비밀번호(잠금) 확인. 문자 자동 기록(단축어)은 넣기만 하므로 토큰만으로 받는다.
@@ -1166,12 +1166,83 @@ def create_app(rt, updater=None):
     def notify_test():
         if not rt.settings.get("ntfy_topic"):
             return jsonify({"error": "ntfy 토픽을 먼저 넣고 저장해 주세요"}), 400
-        rt.notify("시험 알림이에요. 이 글이 보이면 알림이 잘 가고 있어요.", "info", "가계부S · 시험 알림", force=True)
+        rt.notify("시험 알림이에요. 이 글이 보이면 알림이 잘 가고 있어요.", "info", "우석World · 시험 알림", force=True)
         return jsonify(ok=True)
 
     @app.get("/api/evo")
     def evo_all():
         return jsonify(rt.evolution.all())
+
+    # ---------- 건강관리 ----------
+    @app.get("/api/health")
+    def health_all():
+        return jsonify(rt.health.overview(request.args.get("week") or None))
+
+    @app.post("/api/health/body")
+    def health_body():
+        return jsonify(date=rt.health.save_body(body()))
+
+    @app.delete("/api/health/body/<day>")
+    def health_body_del(day):
+        rt.health.delete_body(day)
+        return jsonify(ok=True)
+
+    @app.post("/api/health/check")
+    def health_check():
+        rt.health.set_check(body())
+        return jsonify(ok=True)
+
+    @app.post("/api/health/workout")
+    def health_workout():
+        rt.health.set_workout(body())
+        return jsonify(ok=True)
+
+    @app.put("/api/health/config")
+    def health_cfg():
+        return jsonify(cfg=rt.health.save_cfg(body()))
+
+    @app.post("/api/health/lab")
+    def health_lab():
+        return jsonify(id=rt.health.save_lab(body()))
+
+    @app.delete("/api/health/lab/<int:lid>")
+    def health_lab_del(lid):
+        rt.health.delete_lab(lid)
+        return jsonify(ok=True)
+
+    @app.post("/api/health/follow")
+    def health_follow():
+        return jsonify(id=rt.health.save_follow(body()))
+
+    @app.delete("/api/health/follow/<int:fid>")
+    def health_follow_del(fid):
+        rt.health.delete_follow(fid)
+        return jsonify(ok=True)
+
+    @app.get("/api/health/export")
+    def health_export():
+        return jsonify(rt.health.export())
+
+    @app.post("/api/health/import")
+    def health_import():
+        return jsonify(added=rt.health.import_(body().get("data")))
+
+    # ---------- 우석World 첫 화면: 앱마다 한 줄 ----------
+    @app.get("/api/world")
+    def world():
+        out = {}
+        try:
+            month = datetime.now().strftime("%Y-%m")
+            sm = rt.ledger.summary(month)
+            runs = rt.db.one("SELECT COUNT(*) AS n FROM at_runs WHERE status='running' AND lab_id IS NULL") or {"n": 0}
+            out["ledger"] = {"month": int(month[5:]), "expense": sm.get("expense", 0), "auto": runs["n"]}
+        except Exception:
+            out["ledger"] = None
+        try:
+            out["health"] = rt.health.brief()
+        except Exception:
+            out["health"] = None
+        return jsonify(apps=out, version=version())
 
     @app.get("/api/div/events")
     def div_events():

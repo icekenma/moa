@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261121.1357";
+const UI_VERSION = "261122.1118";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -95,7 +95,7 @@ function oldServerBox(el, retry) {
   if (!el) return;
   clearInterval(oldSrvT);
   el.innerHTML = `<section class="card old-srv"><h2>노트북 서버를 업데이트하고 있어요</h2>
-    <div class="tiny" id="osMsg">이 화면은 새 버전인데, 노트북의 가계부S가 아직 예전 버전이에요. 노트북은 5분마다 새 버전을 확인해 스스로 받아요. 받으면 이 화면이 자동으로 열려요.</div>
+    <div class="tiny" id="osMsg">이 화면은 새 버전인데, 노트북의 우석World가 아직 예전 버전이에요. 노트북은 5분마다 새 버전을 확인해 스스로 받아요. 받으면 이 화면이 자동으로 열려요.</div>
     <div class="ai-status"><span class="ai-dot"></span><span id="osState">서버 버전을 확인하는 중</span></div>
     <button type="button" class="btn dark wide" id="osNow">지금 바로 업데이트</button></section>`;
   let first = "", busy = false;
@@ -153,7 +153,7 @@ const lock = {
         <div class="lk-err" id="lkErr" role="alert"></div>
         <button type="submit" class="lk-go" id="lkGo" data-label="열기">열기</button>
         <label class="lk-keep"><input type="checkbox" id="lkKeep"${store.get("keep") ? " checked" : ""}><span>이 기기에서는 자동 잠금 시간(${LOCK_LABEL[this.after] || "30분"})까지 다시 묻지 않기</span></label>
-        <details class="lk-help"><summary>비밀번호를 잊었어요</summary><div>노트북에서 가계부S를 열고 설정 → 보안 → 비밀번호 초기화를 누르면 새로 만들 수 있어요. 데이터는 그대로 남아요.</div></details>`,
+        <details class="lk-help"><summary>비밀번호를 잊었어요</summary><div>노트북에서 우석World를 열고 설정 → 보안 → 비밀번호 초기화를 누르면 새로 만들 수 있어요. 데이터는 그대로 남아요.</div></details>`,
       setup: `<p class="lk-sub">앱을 열 때 물어볼 비밀번호를 만들어요.<br>노트북 서버에만, 원문이 아닌 암호화한 값으로 저장해요.</p>${user}
         <label class="lk-field"><span class="lk-lab">새 비밀번호</span><span class="lk-box"><input id="lkPw" name="new-password" type="password" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="128" required>${eye}</span></label>
         <label class="lk-field"><span class="lk-lab">한 번 더</span><span class="lk-box"><input id="lkPw2" type="password" autocomplete="new-password" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="128" required></span></label>
@@ -163,7 +163,7 @@ const lock = {
     }[mode];
     d.innerHTML = `<form class="lock-in" id="lkForm" novalidate>
       <span class="lk-mark"><img src="icon-192.png?v=s1" alt="" width="68" height="68"><i aria-hidden="true"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2.2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></i></span>
-      <h2 id="lockTitle">${mode === "setup" ? "비밀번호 만들기" : "가계부S"}</h2>${body}</form>`;
+      <h2 id="lockTitle">${mode === "setup" ? "비밀번호 만들기" : "우석World"}</h2>${body}</form>`;
     if (!d.open) d.showModal();
     clearInterval(this.waitT);
     const form = $("#lkForm", d);
@@ -786,16 +786,47 @@ function groupTabs(name, sub) {
     `<a href="#${name}/${id}" class="ivg-t" ${id === sub ? 'aria-current="page"' : ""}>${esc(label)}</a>`).join("")}</nav>`;
 }
 
+// ---------- 우석World: 앱 모음 ----------
+// 이 웹앱 하나에 내가 만든 앱들을 모은다. 앱마다 구역(주소 첫 마디)·아래 탭·겉모습(skin)을 가진다.
+// 새 앱은 자기 파일에서 addApp({...})과 pages.<구역>만 더하면 첫 화면에 타일이 생긴다(docs/health.js 참고).
+const APPS = [{ id: "ledger", name: "가계부", desc: "가계부, 자산, 투자", home: "#home", secs: ["home", "invest", "assets", "ledger", "settings", "connect"],
+  tile: { bg: "linear-gradient(150deg,#1B1230 0%,#0B0710 62%)", ink: "#FFFFFF", sub: "#C9BEDD", accent: "#FF3DAE" } }];
+function addApp(a) { if (!APPS.some((x) => x.id === a.id)) APPS.push(a); }
+const appOf = (sec) => APPS.find((a) => a.secs.includes(sec)) || null;
+const LEDGER_TABS = $(".tabbar .in").innerHTML;
+let tabsOf = "ledger";
+function setTabbar(app) {
+  const id = app && app.tabs ? app.id : "ledger";
+  if (id === tabsOf) return;
+  tabsOf = id;
+  $(".tabbar .in").innerHTML = id === "ledger" ? LEDGER_TABS : app.tabs.map(([to, label, icon]) =>
+    `<a class="tab" href="#${to}" data-tab="${to}"><span class="dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg></span>${esc(label)}</a>`).join("");
+}
+// 앱마다 다른 겉모습: 색 변수만 잠깐 바꿔 끼우고, 나가면 고른 테마로 되돌린다
+let skinOf = "";
+function sectionSkin(sec) {
+  const app = appOf(sec), sk = sec === "world" ? WORLD_SKIN : app && app.skin, id = sk ? (sec === "world" ? "world" : app.id) : "";
+  if (id === skinOf) return;
+  skinOf = id;
+  const el = document.documentElement, mc = document.querySelector('meta[name="theme-color"]');
+  if (!sk) return applyTheme(THEMES[store.get("theme")] ? store.get("theme") : "neon", store.get("accent"), false);
+  el.classList.remove("dark-theme"); el.dataset.neon = "";
+  Object.entries(sk.vars).forEach(([k, v]) => el.style.setProperty(k, v));
+  if (mc) mc.content = sk.meta;
+}
+const WORLD_SKIN = { meta: "#E7EDF3", vars: { "--deep": "#10243A", "--deep2": "#1B3550", "--bg": "#E7EDF3", "--hl": "#FFD84D", "--solid": "#10243A",
+  "--on-deep": "#E9EDF5", "--on-deep2": "#A3ADC2", "--on-deep-strong": "#FFFFFF", "--sub-bg": "rgba(255,255,255,.08)" } };
+
 // ---------- 라우터 ----------
 const pages = {};
 let current = null, timer = null;
 function setTop(title, opt = {}) {
   $("#title").textContent = title;
   if (opt.badge) $("#title").insertAdjacentHTML("beforeend", ` <span class="ver">${esc(opt.badge)}</span>`);
-  document.title = title === "moa" ? "moa" : `${title} · moa`;
+  document.title = title === "우석World" ? title : `${title} · 우석World`;
   const top = $("#top");
   $(".back", top)?.remove();
-  if (opt.back) top.insertAdjacentHTML("afterbegin", `<a class="back" href="${opt.back}" aria-label="뒤로"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></a>`);
+  if (opt.back) $("#title").insertAdjacentHTML("beforebegin", `<a class="back" href="${opt.back}" aria-label="뒤로"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></a>`);
   $("#topRight").innerHTML = opt.right || "";
   // 2뎁스 메뉴는 엄지가 닿는 아래쪽(하단 탭 바로 위)에 둔다
   $("#subdock").innerHTML = opt.menu ? subnav(opt.menu, opt.sub) : "";
@@ -826,25 +857,31 @@ function countUp(root) {
   });
 }
 function parseHash() {
-  const raw = (location.hash || "#home").slice(1);
+  const raw = (location.hash || "#world").slice(1);
   const [path, query] = raw.split("?");
   const [name, sub] = path.split("/");
   return { name, sub, params: new URLSearchParams(query || "") };
 }
 async function route() {
   const h = parseHash();
-  if (!pages[h.name]) h.name = "home";
+  if (!pages[h.name]) h.name = "world";
   h.sub = resolveSub(h);
   if (MENU[h.name]) lastSub[h.name] = (MENU[h.name].extra && MENU[h.name].extra[h.sub]) ? lastSub[h.name] || h.sub : h.sub;
   if (h.name === "invest" && h.sub === "stock" && current && view.childElementCount && !$("#mkD", view) && (stockSheet.stack.length || nav.prev)) return stockSheet.open(h);
   stockSheet.stack = []; stockSheet.resume = null;
   const page = pages[h.name];
-  const tabName = h.name;
+  const tabName = h.name, app = appOf(h.name);
   document.documentElement.dataset.sec = h.name;
+  document.documentElement.dataset.app = h.name === "world" ? "world" : app ? app.id : "ledger";
+  setTabbar(app);
+  if (app && app.tabs && !h.sub) h.sub = app.tabs[0][0].split("/")[1];
+  sectionSkin(h.name);
   gameTheme(h.name);
+  const skin = h.name === "world" ? WORLD_SKIN : app && app.skin, mcol = document.querySelector('meta[name="theme-color"]');
+  if (skin && mcol) mcol.content = skin.meta;   // 게임 테마를 끄면서 바뀐 상단 색을 앱 색으로 다시
   document.documentElement.dataset.sub = (h.sub === "scalp" ? "ai" : h.sub) || "";
   $$(".tab").forEach((a) => {
-    const on = a.dataset.tab === tabName;
+    const on = a.dataset.tab === tabName || a.dataset.tab === tabName + "/" + (h.sub || "");
     a.classList.toggle("on", on);
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
@@ -968,7 +1005,7 @@ pages.connect = {
       store.set("server", h.params.get("server").trim());
       store.set("token", (h.params.get("token") || "").trim());
       history.replaceState(null, "", location.pathname + "#connect");
-      try { await GET("/api/ping"); toast("연결했어요"); location.hash = "#home"; return; }
+      try { await GET("/api/ping"); toast("연결했어요"); location.hash = "#world"; return; }
       catch (e) { toast(e.message, true); }
     }
     view.innerHTML = `
@@ -992,7 +1029,7 @@ pages.connect = {
       store.set("server", $("#cServer").value.trim().replace(/\/+$/, ""));
       store.set("token", $("#cToken").value.trim());
       await run(() => GET("/api/ping"), "연결했어요");
-      location.hash = "#home";
+      location.hash = "#world";
     };
   },
 };
@@ -7272,13 +7309,19 @@ setTimeout(checkNewVersion, 4000);
 if ("serviceWorker" in navigator && location.protocol === "https:") {
   navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((reg) => reg.update()).catch(() => {});
 }
-if (ON_PAGES && !store.get("server") && !location.hash.startsWith("#connect")) location.hash = "#connect";
-// 서버 연결 화면이 아니면, 먼저 잠금 상태부터 확인하고 화면을 그린다(잠겨 있으면 저장해 둔 자료도 보여 주지 않는다)
-if ((ON_PAGES && !store.get("server")) || location.hash.startsWith("#connect")) route();
-else {
-  if (sess.get()) view.innerHTML = `<div class="empty loading">불러오는 중</div>`; else lock.show("check");
-  lock.verify();
+function startApp() {
+  if (startApp.done) return;
+  startApp.done = true;
+  store.set("skinSecs", JSON.stringify(["world"].concat(...APPS.filter((a) => a.skin).map((a) => a.secs))));
+  if (ON_PAGES && !store.get("server") && !location.hash.startsWith("#connect")) location.hash = "#connect";
+  // 서버 연결 화면이 아니면, 먼저 잠금 상태부터 확인하고 화면을 그린다(잠겨 있으면 저장해 둔 자료도 보여 주지 않는다)
+  if ((ON_PAGES && !store.get("server")) || location.hash.startsWith("#connect")) route();
+  else {
+    if (sess.get()) view.innerHTML = `<div class="empty loading">불러오는 중</div>`; else lock.show("check");
+    lock.verify();
+  }
 }
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", startApp); else setTimeout(startApp, 0);
 window.__moaReady = true;
 try { sessionStorage.removeItem("moa.retry"); } catch (e) { /* 무시 */ }
 if (/[?&]u=\d+/.test(location.search)) history.replaceState(null, "", location.pathname + location.hash);  // 주소의 임시 꼬리표 지우기

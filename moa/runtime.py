@@ -28,7 +28,7 @@ class Runtime:
             _log(engine, level, msg, ts)
             if level == "error":
                 try:
-                    self.notify(str(msg)[:180], "urgent", "가계부S · 엔진 오류", key="err:" + str(msg)[:60], quiet_min=60)
+                    self.notify(str(msg)[:180], "urgent", "우석World · 엔진 오류", key="err:" + str(msg)[:60], quiet_min=60)
                 except Exception:
                     pass
         db.log = log_and_tell
@@ -59,6 +59,8 @@ class Runtime:
         from .backup import Backup
         self.backup = Backup(self, data_dir)
         self.assets = Assets(db, self.value_of, kiwoom_on=lambda: self.account.configured())
+        from .health import Health
+        self.health = Health(db)
         self.feed = None
         self.brokers = {}
         self.errors = {}
@@ -161,7 +163,7 @@ class Runtime:
             pass
         if not on:
             return False
-        body = {"topic": topic, "message": msg, "title": title or f"가계부S · {label}", "priority": prio, "tags": [tag]}
+        body = {"topic": topic, "message": msg, "title": title or f"우석World · {label}", "priority": prio, "tags": [tag]}
         url = (self.settings.get("public_url") or "").strip()
         if url:
             body["click"] = url

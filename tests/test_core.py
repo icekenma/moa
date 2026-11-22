@@ -2751,3 +2751,120 @@ def test_candles_more_bars_for_zoom(rt, monkeypatch):
     c = create_app(rt).test_client()
     assert len(c.get("/api/invest/candles/us/AAPL?tf=d&n=9999").get_json()["bars"]) == 600
     assert len(c.get("/api/invest/candles/us/AAPL?tf=d&n=x").get_json()["bars"]) == 120
+
+
+# ---------- 건강관리(우석World) ----------
+def _health(day="2026-11-23"):
+    from datetime import date as _date
+    from moa.health import Health
+    return Health(DB(":memory:"), today=lambda: _date.fromisoformat(day))
+
+
+def test_health_body_goal_progress():
+    from moa.health import HealthError
+    h = _health()
+    h.save_cfg({"height": 180, "goal": {"weight": 80, "waist": 90, "date": "2027-02-01", "label": "석 달", "start_weight": 90, "start_date": "2026-11-23"}})
+    h.save_body({"date": "2026-11-20", "weight": "90.0", "waist": 98})
+    h.save_body({"date": "2026-11-23", "weight": 88})
+    h.save_body({"date": "2026-11-23", "fat": 25.5})          # 같은 날 다시: 비운 칸은 그대로
+    o = h.overview()
+    assert o["body"]["latest"]["weight"] == {"value": 88.0, "date": "2026-11-23"}
+    assert o["body"]["latest"]["waist"]["date"] == "2026-11-20" and o["body"]["latest"]["fat"]["value"] == 25.5
+    assert abs(o["body"]["progress"] - 0.2) < 1e-9 and o["week_no"] == 1 and o["body"]["bmi"] == 27.2
+    with pytest.raises(HealthError):
+        h.save_body({"date": "2026-11-24", "weight": 88})     # 앞날
+    with pytest.raises(HealthError):
+        h.save_body({"date": "2026-11-23", "weight": 880})
+    with pytest.raises(HealthError):
+        h.save_body({"date": "2026-11-23"})
+    h.delete_body("2026-11-23")
+    assert h.overview()["body"]["latest"]["weight"]["value"] == 90.0
+
+
+def test_health_week_checks_and_plan():
+    from moa.health import HealthError
+    h = _health("2026-11-25")                                  # 수요일
+    h.set_workout({"date": "2026-11-23", "done": True, "rpe": 6})
+    h.set_workout({"date": "2026-11-25", "rpe": 7})            # 힘든 정도만 먼저
+    w = h.week()
+    assert w["start"] == "2026-11-23" and w["target"] == 6 and w["done"] == 1 and w["rpe_avg"] == 6.5
+    assert w["days"][2]["today"] and w["days"][3]["future"] and not w["days"][2]["done"]
+    with pytest.raises(HealthError):
+        h.set_workout({"date": "2026-11-26", "done": True})
+    with pytest.raises(HealthError):
+        h.set_workout({"rpe": 11})
+    h.set_check({"key": "water", "on": True})
+    h.set_check({"key": "water", "on": True})
+    assert h.overview()["checks"] == ["water"]
+    with pytest.raises(HealthError):
+        h.set_check({"key": "nope", "on": True})
+    b = h.brief()
+    assert b["checks"] == 1 and b["checks_total"] == 4 and b["workout"] == "전신 B" and b["week_done"] == 1
+    plan = h.cfg()["plan"]
+    plan["days"][6] = {"name": "산책", "time": "30분", "rest": False, "items": [["걷기", "30분"], ["", "x"]]}
+    c = h.save_cfg({"plan": plan, "habits": [{"title": "물 2L", "sub": "나눠서"}, {"title": "스트레칭"}]})
+    assert c["plan"]["days"][6]["items"] == [["걷기", "30분"]] and h.week()["target"] == 7
+    assert c["habits"][0]["id"] == "water" and len(c["habits"]) == 2    # 이름이 같으면 기록이 이어지게 같은 id
+    with pytest.raises(HealthError):
+        h.save_cfg({"plan": {"days": plan["days"][:3]}})
+
+
+def test_health_meds_one_check_per_time():
+    from moa.health import HealthError
+    h = _health("2026-11-25")
+    with pytest.raises(HealthError):
+        h.set_check({"key": "med_am", "on": True})            # 약이 없으면 체크 줄도 없다
+    c = h.save_cfg({"meds": [{"name": "약 나", "dose": "5mg", "when": "night"}, {"name": "약 가", "dose": "10mg"}, {"name": "", "dose": "x"}, {"name": "약 다", "when": "zzz"}]})
+    assert [m["name"] for m in c["meds"]] == ["약 가", "약 다", "약 나"] and c["meds"][1]["when"] == "am"
+    assert [(m["key"], m["names"]) for m in h.med_slots()] == [("med_am", ["약 가", "약 다"]), ("med_night", ["약 나"])]
+    h.set_check({"key": "med_am", "on": True})
+    h.set_check({"date": "2026-11-24", "key": "med_am", "on": True})
+    h.set_check({"date": "2026-11-10", "key": "med_am", "on": True})   # 7일보다 앞
+    o = h.overview()
+    assert o["med_slots"][0]["week"] == 2 and o["med_slots"][1]["week"] == 0 and "med_am" in o["checks"]
+    assert h.brief()["checks"] == 1 and h.brief()["checks_total"] == 6      # 운동 1 + 기본 체크 3 + 약 2때
+    h.save_cfg({"meds": []})
+    assert h.brief()["checks"] == 0 and h.brief()["checks_total"] == 4      # 없어진 줄의 체크는 세지 않는다
+    assert h.export()["cfg"]["meds"] == []
+
+
+def test_health_labs_follow_import():
+    h = _health()
+    h.save_lab({"date": "2026-11-03", "name": "검사A", "value": "158", "ref": "46~116", "flag": "high"})
+    h.save_lab({"date": "2026-11-03", "name": "검사B", "value": "91", "flag": "ok"})
+    h.save_lab({"date": "2027-02-01", "name": "검사A", "value": "110", "flag": "ok"})
+    labs, latest = h.labs()
+    a = next(x for x in labs if x["name"] == "검사A")
+    assert latest == "2027-02-01" and a["value"] == "110" and a["prev"] == {"value": "158", "date": "2026-11-03"} and a["n"] == 2
+    f1 = h.save_follow({"date": "2027-02-01", "title": "재검", "why": "석 달 뒤"})
+    h.save_follow({"date": "2027-11-01", "title": "초음파"})
+    fs = h.follows()
+    assert fs[0]["dday"] == 70 and fs[0]["next"] and not fs[1]["next"]
+    h.save_follow({"id": f1, "date": "2027-02-01", "title": "재검", "done": True})
+    assert [f["next"] for f in h.follows()] == [True, False] and h.follows()[0]["title"] == "초음파"
+    h.save_body({"date": "2026-11-23", "weight": 88})
+    dump = h.export()
+    h2 = _health()
+    n = h2.import_(json.loads(json.dumps(dump)))
+    assert n["labs"] == 3 and n["follows"] == 2 and n["body"] == 1
+    h2.import_(dump)                                           # 두 번 넣어도 겹치지 않는다
+    assert len(h2.db.q("SELECT * FROM hl_lab")) == 3 and len(h2.db.q("SELECT * FROM hl_follow")) == 2
+    with pytest.raises(ValueError):
+        h2.import_({"kind": "other"})
+
+
+def test_health_and_world_api(rt):
+    c = create_app(rt).test_client()
+    assert c.get("/api/health").get_json()["empty"] is True
+    assert c.post("/api/health/body", json={"weight": 88.2}).status_code == 200
+    assert c.post("/api/health/body", json={"weight": "abc"}).status_code == 400
+    assert c.post("/api/health/check", json={"key": "veg", "on": True}).status_code == 200
+    assert c.post("/api/health/workout", json={"done": True, "rpe": 6}).status_code == 200
+    assert c.put("/api/health/config", json={"goal": {"weight": 82}}).get_json()["cfg"]["goal"]["weight"] == 82
+    lid = c.post("/api/health/lab", json={"name": "검사A", "value": "1"}).get_json()["id"]
+    assert c.delete(f"/api/health/lab/{lid}").status_code == 200
+    o = c.get("/api/health").get_json()
+    assert o["body"]["latest"]["weight"]["value"] == 88.2 and o["checks"] == ["veg"] and not o["empty"]
+    w = c.get("/api/world").get_json()["apps"]
+    assert w["health"]["checks"] == 2 and w["health"]["weight"] == 88.2 and "expense" in w["ledger"]
+    assert c.post("/api/health/import", json={"data": c.get("/api/health/export").get_json()}).status_code == 200

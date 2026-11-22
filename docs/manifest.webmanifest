@@ -1,10 +1,10 @@
 {
-  "name": "가계부S",
-  "short_name": "가계부S",
-  "start_url": "./#home",
+  "name": "우석World",
+  "short_name": "우석World",
+  "start_url": "./#world",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#111A2B",
+  "background_color": "#E7EDF3",
   "theme_color": "#111A2B",
   "lang": "ko",
   "icons": [

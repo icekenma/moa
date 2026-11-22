@@ -29,9 +29,12 @@ def sub(path, pat, rep):
 
 sub(os.path.join(DOCS, "app.js"), r'const UI_VERSION = "[^"]*";', f'const UI_VERSION = "{build}";')
 sub(os.path.join(DOCS, "sw.js"), r'const CACHE = "[^"]*";', f'const CACHE = "moa-{build}";')
-sub(os.path.join(DOCS, "index.html"), r'app\.css\?v=[^"]*"', f'app.css?v={build}"')
-sub(os.path.join(DOCS, "index.html"), r'app\.js\?v=[^"]*"', f'app.js?v={build}"')
-sub(os.path.join(DOCS, "index.html"), r'boot\.js\?v=[^"]*"', f'boot.js?v={build}"')
+# 화면 파일(app·boot·world·health…)의 꼬리표를 한꺼번에 올린다. 앱 파일이 늘어도 여기는 그대로 둔다
+ih = os.path.join(DOCS, "index.html")
+html = open(ih, encoding="utf-8").read()
+html, n = re.subn(r'(\b[a-z]+\.(?:css|js))\?v=\d{6}\.\d{4}"', lambda m: f'{m.group(1)}?v={build}"', html)
+assert n >= 3, ih
+open(ih, "w", encoding="utf-8").write(html)
 with open(os.path.join(DOCS, "version.json"), "w", encoding="utf-8") as f:
     json.dump({"version": version, "build": build, "note": note}, f, ensure_ascii=False)
 print(f"v{version} ({build})")

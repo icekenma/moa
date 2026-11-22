@@ -103,7 +103,7 @@ class Auth:
         c.update(fails=fails, blocked_until=time.time() + wait, last_fail=datetime.now().isoformat(timespec="seconds"))
         self.db.set_setting("auth", c)
         if fails == FREE_TRIES or (fails > FREE_TRIES and fails % 3 == 0):
-            self.notify(f"앱 비밀번호를 {fails}번 틀렸어요. 본인이 아니면 노트북에서 접속 토큰을 새로 만드세요", "urgent", "가계부S · 보안")
+            self.notify(f"앱 비밀번호를 {fails}번 틀렸어요. 본인이 아니면 노트북에서 접속 토큰을 새로 만드세요", "urgent", "우석World · 보안")
         raise AuthError("비밀번호가 맞지 않아요" + (f". {wait}초 동안 막을게요" if wait else f" ({FREE_TRIES - fails}번 더 틀리면 잠시 막아요)"), wait)
 
     def unlock(self, pw, label=""):

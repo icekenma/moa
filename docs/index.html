@@ -7,20 +7,22 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="가계부S">
+<meta name="apple-mobile-web-app-title" content="우석World">
 <meta name="robots" content="noindex">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'">
 <meta name="referrer" content="no-referrer">
-<title>moa</title>
+<title>우석World</title>
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" href="icon-192.png?v=s2">
-<link rel="apple-touch-icon" href="apple-touch-icon.png?v=s2">
+<link rel="icon" href="icon-192.png?v=w1">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=w1">
 <link rel="stylesheet" href="fonts/gamed.css?v=1">
-<link rel="stylesheet" href="app.css?v=261121.1357">
-<script src="boot.js?v=261121.1357"></script>
+<link rel="stylesheet" href="app.css?v=261122.1118">
+<link rel="stylesheet" href="world.css?v=261122.1118">
+<link rel="stylesheet" href="health.css?v=261122.1118">
+<script src="boot.js?v=261122.1118"></script>
 </head>
 <body>
-<header class="top" id="top"><h1 id="title">moa</h1><div id="topRight"></div></header>
+<header class="top" id="top"><a class="wd-home" href="#world" aria-label="우석World 첫 화면으로"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18"/></svg></a><h1 id="title">우석World</h1><div id="topRight"></div></header>
 <main id="view" tabindex="-1"></main>
 <nav class="tabbar" aria-label="주 메뉴"><div class="subdock" id="subdock"></div><div class="in">
   <a class="tab" href="#home" data-tab="home"><span class="dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg></span>홈</a>
@@ -42,6 +44,8 @@
   </div>
 </dialog>
 <div id="toast" role="status" aria-live="polite"></div>
-<script src="app.js?v=261121.1357"></script>
+<script src="app.js?v=261122.1118"></script>
+<script src="world.js?v=261122.1118"></script>
+<script src="health.js?v=261122.1118"></script>
 </body>
 </html>

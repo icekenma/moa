@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261122.1537";
+const UI_VERSION = "261122.1918";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -810,7 +810,7 @@ function sectionSkin(sec) {
   skinOf = id;
   const el = document.documentElement, mc = document.querySelector('meta[name="theme-color"]');
   if (!sk) return applyTheme(THEMES[store.get("theme")] ? store.get("theme") : "neon", store.get("accent"), false);
-  el.classList.remove("dark-theme"); el.dataset.neon = "";
+  el.classList.toggle("dark-theme", !!sk.dark); el.dataset.neon = "";   // 어두운 앱(사진편집)은 공통 창·버튼도 어둡게
   Object.entries(sk.vars).forEach(([k, v]) => el.style.setProperty(k, v));
   if (mc) mc.content = sk.meta;
 }

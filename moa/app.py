@@ -4,6 +4,7 @@ import json
 import os
 import secrets
 from datetime import date, datetime
+from urllib.parse import quote as urlquote
 
 from flask import Flask, Response, jsonify, make_response, request, send_from_directory
 
@@ -125,6 +126,7 @@ def create_app(rt, updater=None):
                 resp.headers["Access-Control-Allow-Origin"] = origin
                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
                 resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-Moa-Session, ngrok-skip-browser-warning"
+                resp.headers["Access-Control-Expose-Headers"] = "X-File-Name"
                 resp.headers["Access-Control-Max-Age"] = "600"
                 resp.headers["Vary"] = "Origin"
             return resp
@@ -161,6 +163,7 @@ def create_app(rt, updater=None):
         if origin and request.path.startswith("/api/"):
             resp.headers["Access-Control-Allow-Origin"] = origin
             resp.headers["Vary"] = "Origin"
+            resp.headers["Access-Control-Expose-Headers"] = "X-File-Name"
         if request.path.startswith("/api/"):
             resp.headers["Cache-Control"] = "no-store"
         # 공통 보안 머리말
@@ -1243,6 +1246,81 @@ def create_app(rt, updater=None):
     def health_import():
         return jsonify(added=rt.health.import_(body().get("data")))
 
+    # ---------- 사진편집 ----------
+    def _jpeg(data, name=None, mime="image/jpeg", cache=False):
+        h = {"Cache-Control": "private, max-age=86400" if cache else "no-store"}
+        if name:
+            h["Content-Disposition"] = "attachment; filename*=UTF-8''" + urlquote(name)
+            h["X-File-Name"] = urlquote(name)
+        return Response(data, mimetype=mime, headers=h)
+
+    @app.get("/api/photo")
+    def photo_all():
+        return jsonify(dict(rt.photo.overview(), moods=rt.slideshow.moods()))
+
+    @app.post("/api/photo/slideshow")
+    def photo_slide_start():
+        d = body()
+        return jsonify(job=rt.slideshow.start(d.get("ids"), d))
+
+    @app.get("/api/photo/slideshow/<jid>")
+    def photo_slide_status(jid):
+        return jsonify(job=rt.slideshow.status(jid))
+
+    @app.get("/api/photo/slideshow/<jid>/file")
+    def photo_slide_file(jid):
+        return _jpeg(rt.slideshow.file(jid), "slideshow.mp4", "video/mp4")
+
+    @app.post("/api/photo/setup")
+    def photo_setup():
+        return jsonify(status=rt.photo.setup())
+
+    @app.post("/api/photo/upload")
+    def photo_upload():
+        added, errors = [], []
+        for f in request.files.getlist("file")[:50]:
+            try:
+                added.append(rt.photo.add(f.filename, f.read()))
+            except ValueError as e:
+                errors.append(f"{f.filename}: {e}")
+        if not added and not errors:
+            return jsonify(error="올릴 사진을 골라 주세요"), 400
+        return jsonify(added=added, errors=errors)
+
+    @app.get("/api/photo/<pid>/thumb")
+    def photo_thumb(pid):
+        b = rt.photo.thumb(pid)
+        return _jpeg(b, cache=True) if b else (jsonify(error="사진이 없어요"), 404)
+
+    @app.post("/api/photo/<pid>/render")
+    def photo_render(pid):
+        d = body()
+        return _jpeg(rt.photo.render(pid, d.get("params"), d.get("size") or "base", crop=d.get("crop", True) is not False, orig=bool(d.get("orig"))))
+
+    @app.put("/api/photo/<pid>")
+    def photo_save(pid):
+        return jsonify(photo=rt.photo.save(pid, body().get("params")))
+
+    @app.get("/api/photo/<pid>/auto")
+    def photo_auto(pid):
+        return jsonify(params=rt.photo.auto(pid))
+
+    @app.post("/api/photo/<pid>/export")
+    def photo_export(pid):
+        d = body()
+        data, mime, name = rt.photo.export(pid, d.get("params"), d.get("size"), d.get("quality"))
+        return _jpeg(data, name, mime)
+
+    @app.post("/api/photo/export")
+    def photo_export_zip():
+        d = body()
+        return _jpeg(rt.photo.export_zip(d.get("ids"), d.get("size"), d.get("quality")), "photos_edit.zip", "application/zip")
+
+    @app.delete("/api/photo/<pid>")
+    def photo_delete(pid):
+        rt.photo.delete(pid)
+        return jsonify(ok=True)
+
     # ---------- 우석World 첫 화면: 앱마다 한 줄 ----------
     @app.get("/api/world")
     def world():
@@ -1258,6 +1336,10 @@ def create_app(rt, updater=None):
             out["health"] = rt.health.brief()
         except Exception:
             out["health"] = None
+        try:
+            out["photo"] = rt.photo.brief()
+        except Exception:
+            out["photo"] = None
         return jsonify(apps=out, version=version())
 
     @app.get("/api/div/events")

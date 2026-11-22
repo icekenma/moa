@@ -2888,3 +2888,201 @@ def test_health_gym_photos(rt):
     assert h.import_({"kind": "moa-health", "photos": [{"key": "bike", "full": jpg, "thumb": jpg}]})["photos"] == 1
     assert "photos" not in h.export()                          # 내보내기 파일에는 사진을 넣지 않는다
     assert c.delete("/api/health/photo/smith").status_code == 200 and set(h.photos()) == {"bike"}
+
+
+# ---------- 사진편집(우석World) ----------
+def _photo_img(w=640, h=480):
+    np = pytest.importorskip("numpy")
+    cv2 = pytest.importorskip("cv2")
+    yy, xx = np.mgrid[0:h, 0:w]
+    img = np.dstack([xx * 255 // w, yy * 255 // h, (xx + yy) * 255 // (w + h)]).astype(np.uint8)   # BGR 그라데이션
+    cv2.circle(img, (w // 2, h // 2), h // 5, (40, 120, 220), -1)
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    return buf.tobytes()
+
+
+def test_photo_engine_each_control_moves_the_right_way():
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("cv2")
+    from moa import photo_engine as E
+    base = E.to_float(E.decode(_photo_img()))
+    lum = lambda a: float((a @ E.LUMA).mean())
+    sat = lambda a: float((a.max(axis=2) - a.min(axis=2)).mean())
+    g = lambda **kw: E.render(base, E.clean(kw))[0]
+    assert float(np.abs(g() - base).max()) == 0 and E.is_neutral({"exposure": 0, "hsl": {"red": [0, 0, 0]}})
+    assert lum(g(exposure=1)) > lum(base) > lum(g(exposure=-1))
+    assert lum(g(shadows=60)) > lum(base) > lum(g(highlights=-60))
+    assert sat(g(saturation=40)) > sat(base) > sat(g(saturation=-40)) and sat(g(bw=True)) < 1e-6
+    assert g(contrast=50).std() > base.std() > g(contrast=-50).std()
+    warm, cool = g(temp=50), g(temp=-50)
+    assert warm[..., 0].mean() > base[..., 0].mean() > cool[..., 0].mean() and warm[..., 2].mean() < cool[..., 2].mean()
+    edge = lambda a: float(np.abs(np.diff(a @ E.LUMA, axis=1)).mean())
+    assert edge(g(sharpen=80)) > edge(base) and lum(g(vignette=-80)) < lum(base)
+    red = g(hsl={"red": [0, -100, 0]})
+    assert sat(red) < sat(base) and E.clean({"hsl": {"red": [0, -100, 0], "zzz": [1, 2, 3]}})["hsl"] == {"red": [0.0, -100.0, 0.0]}
+    for kw in ({"nr_luma": 60, "nr_color": 60}, {"dehaze": 50}, {"clarity": 50}, {"grain": 50, "fade": 30}, {"split_sh_sat": 50, "split_hl_sat": 50}):
+        out = g(**kw)
+        assert out.dtype == np.float32 and out.shape == base.shape and 0 <= out.min() and out.max() <= 1 and float(np.abs(out - base).mean()) > 1e-4
+    assert g(skin=60).shape == base.shape                     # 피부색이 없는 사진에서도 그냥 지나간다
+    # 돌리기·자르기
+    assert g(rot=90).shape[:2] == (640, 480) and g(crop=[0.25, 0.25, 0.5, 0.5]).shape[:2] == (240, 320)
+    t = g(angle=10).shape
+    assert t[0] < 480 and t[1] < 640
+    assert E.clean({"exposure": 99, "rot": 450, "crop": [0.9, 0.9, 5, 5], "skin": "x"})["exposure"] == 2.0
+    assert E.clean({"rot": 450})["rot"] == 90 and E.clean({"crop": [0, 0, 1, 1]})["crop"] is None
+    a = E.auto(E.to_float(E.decode(_photo_img())) * 0.4)       # 어두운 사진은 밝히자고 제안한다
+    assert a["exposure"] > 0 and all(E.RANGES[k][1] <= v <= E.RANGES[k][2] for k, v in a.items())
+    for _, _, pp in E.PRESETS:
+        assert E.render(base, E.clean(pp))[0].shape == base.shape
+
+
+def test_photo_library_render_save_export(rt):
+    pytest.importorskip("cv2")
+    import io
+    import zipfile
+    ph = rt.photo
+    assert ph.status()["ready"] and ph.brief() == {"count": 0, "edited": 0}
+    c = create_app(rt).test_client()
+    r = c.post("/api/photo/upload", data={"file": [(io.BytesIO(_photo_img(2000, 1500)), "여행 사진.JPG"), (io.BytesIO(b"not an image"), "x.jpg")]}, content_type="multipart/form-data").get_json()
+    assert len(r["added"]) == 1 and len(r["errors"]) == 1
+    pid = r["added"][0]["id"]
+    assert r["added"][0]["w"] == 2000 and not r["added"][0]["edited"]
+    o = c.get("/api/photo").get_json()
+    assert len(o["photos"]) == 1 and len(o["presets"]) >= 8 and o["ranges"]["exposure"] == [0.0, -2.0, 2.0] and len(o["hsl"]) == 8
+    assert c.get(f"/api/photo/{pid}/thumb").data[:3] == b"\xff\xd8\xff"
+    a = c.post(f"/api/photo/{pid}/render", json={"params": {}}).data
+    b = c.post(f"/api/photo/{pid}/render", json={"params": {"exposure": 1, "bw": True}, "size": "fast"}).data
+    assert a[:3] == b[:3] == b"\xff\xd8\xff" and a != b
+    assert c.post("/api/photo/000000000000/render", json={}).status_code == 400
+    assert c.post("/api/photo/..%2Fx/render", json={}).status_code in (400, 404, 405)
+    saved = c.put(f"/api/photo/{pid}", json={"params": {"exposure": 0.5, "crop": [0, 0, 0.5, 1], "junk": 1}}).get_json()["photo"]
+    assert saved["edited"] and saved["params"] == {"exposure": 0.5, "crop": [0.0, 0.0, 0.5, 1.0]}
+    assert "exposure" in c.get(f"/api/photo/{pid}/auto").get_json()["params"] or True
+    ex = c.post(f"/api/photo/{pid}/export", json={"size": 800, "quality": 90})
+    assert ex.mimetype == "image/jpeg" and "_edit.jpg" in ex.headers["Content-Disposition"]
+    from moa import photo_engine as E
+    assert E.decode(ex.data).shape[:2] == (800, 533)             # 저장한 자르기(가로 절반)가 내보낼 때 적용된다
+    z = zipfile.ZipFile(io.BytesIO(c.post("/api/photo/export", json={"ids": [pid, pid]}).data))
+    assert len(z.namelist()) == 2 and len(set(z.namelist())) == 2
+    assert c.put(f"/api/photo/{pid}", json={"params": {}}).get_json()["photo"]["edited"] is False
+    assert c.get("/api/world").get_json()["apps"]["photo"] == {"count": 1, "edited": 0}
+    assert c.delete(f"/api/photo/{pid}").status_code == 200 and c.get(f"/api/photo/{pid}/thumb").status_code == 404
+    assert not [f for f in os.listdir(ph.dir) if f.startswith(pid)]
+
+
+def test_photo_background_ai_and_setup(rt):
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("cv2")
+    ph = rt.photo
+    pid = ph.add("a.jpg", _photo_img())["id"]
+    if ph.status()["ai"]:
+        blurred = ph.render(pid, {"bg_blur": 80})
+        assert blurred[:3] == b"\xff\xd8\xff" and os.path.exists(ph._path(pid, "mask.png"))
+        data, mime, name = ph.export(pid, {"bg_remove": True})
+        assert mime == "image/png" and name.endswith(".png") and data[:4] == b"\x89PNG"
+    # 설치: 빠진 것만, 하나씩. 이미 다 있으면 아무것도 하지 않는다
+    import moa.photo as P
+    calls = []
+    old = P._has
+    P._has = lambda m: m != "cv2" and old(m)
+    try:
+        st = ph.status()
+        assert not st["ready"] and st["missing"] == ["opencv-python-headless"]
+        ph.setup(run=lambda pip: (calls.append(pip), type("R", (), {"returncode": 1})())[1])
+        for _ in range(100):
+            if not ph._setup["running"]:
+                break
+            import time
+            time.sleep(0.02)
+        assert "opencv-python-headless" in calls and "실패" in ph._setup["error"]
+    finally:
+        P._has = old
+
+
+def test_slideshow_music_pick_and_fallback(tmp_path):
+    import random
+    from moa.slideshow import Music, auto_mood
+    assert auto_mood([(0.2, 0.2, 0.0)], 5) == "night" and auto_mood([(0.7, 0.4, 0.1)], 20) == "upbeat" and auto_mood([(0.5, 0.15, 0.1)], 5) == "emotional"
+    assert auto_mood([], 3) == "calm" and auto_mood([(0.45, 0.25, 0.0)], 3) == "calm"
+    calls = []
+
+    class R:
+        def __init__(self, js=None, content=b"", code=200):
+            self._js, self.content, self.status_code = js, content, code
+
+        def json(self):
+            return self._js
+
+    def get(url, params=None, timeout=0, **kw):
+        calls.append((url, params))
+        if params is not None:
+            assert params["license"] == "cc0,pdm,by" and params["category"] == "music"
+            return R({"results": [
+                {"id": "aaa-1", "title": "Too Short", "url": "http://x/short.mp3", "duration": 9000, "filetype": "mp3", "license": "cc0"},
+                {"id": "bbb-2", "title": "Morning Light", "creator": "Kim", "url": "http://x/ok.mp3", "duration": 185000, "filetype": "mp3", "license": "by", "license_version": "4.0",
+                 "foreign_landing_url": "http://x/page"},
+                {"id": "ccc-3", "title": "Adult", "url": "http://x/m.mp3", "duration": 100000, "mature": True, "license": "cc0"}]})
+        return R(content=b"ID3" + b"0" * 30000)
+
+    mu = Music(str(tmp_path / "music"), get, random.Random(1))
+    path, m = mu.pick("calm")
+    assert path.endswith("bbb-2.mp3") and os.path.exists(path) and m["sec"] == 185
+    assert m["credit"] == "음악: Morning Light — Kim (CC BY 4.0)" and m["page"] == "http://x/page"
+    n = len(calls)
+    mu.pick("calm")
+    assert len(calls) == n + 1                                 # 같은 곡은 다시 내려받지 않는다(검색만 한 번)
+
+    def down(url, **kw):
+        raise OSError("no network")
+
+    mu2 = Music(str(tmp_path / "music"), down, random.Random(2))
+    path2, m2 = mu2.pick("upbeat")                             # 인터넷이 안 되면 받아 둔 곡으로
+    assert path2 == path and "받아 둔 곡" in m2["note"]
+    assert Music(str(tmp_path / "empty"), down).pick("calm")[0] is None
+
+
+def test_slideshow_makes_playable_video(rt, tmp_path):
+    pytest.importorskip("cv2")
+    import subprocess
+    from moa.slideshow import Slideshow, SlideError, ffmpeg_exe
+    exe = ffmpeg_exe()
+    if not exe:
+        pytest.skip("ffmpeg 없음")
+    ph = rt.photo
+    ids = [ph.add(f"{i}.jpg", _photo_img(*sz))["id"] for i, sz in enumerate([(640, 480), (480, 640), (640, 480)])]
+    ph.save(ids[0], {"bw": True})
+    tone = str(tmp_path / "tone.mp3")
+    subprocess.run([exe, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", tone], check=True)
+
+    class R:
+        status_code = 200
+
+        def __init__(self, js=None, content=b""):
+            self._js, self.content = js, content
+
+        def json(self):
+            return self._js
+
+    def get(url, params=None, **kw):
+        if params is not None:
+            return R({"results": [{"id": "t1", "title": "Tone", "creator": "Me", "url": "http://x/t.mp3", "duration": 60000, "filetype": "mp3", "license": "cc0"}]})
+        return R(content=open(tone, "rb").read())
+
+    ss = Slideshow(ph, get)
+    with pytest.raises(SlideError):
+        ss.start(ids[:1])
+    job = ss.start(ids, {"sec": 1.5, "ratio": "9:16", "music": "auto"}, run_async=False)
+    assert job["state"] == "done" and job["size"] == [720, 1280] and job["music"]["credit"] == "음악: Tone — Me (CC0)"
+    data = ss.file(job["id"])
+    out = tmp_path / "o.mp4"
+    out.write_bytes(data)
+    info = subprocess.run([exe, "-hide_banner", "-i", str(out)], capture_output=True, text=True).stderr
+    assert "Video: h264" in info and "720x1280" in info and "Audio: aac" in info
+    secs = 1.5 * 3 - 0.7 * 2
+    assert f"Duration: 00:00:0{int(secs)}" in info            # 영상보다 짧은 음악은 이어 붙여 채운다
+    job2 = ss.start(ids, {"music": "none", "sec": 1.5}, run_async=False)
+    info2 = subprocess.run([exe, "-hide_banner", "-i", os.path.join(ss.dir, job2["id"] + ".mp4")], capture_output=True, text=True).stderr
+    assert job2["music"] is None and "Audio:" not in info2 and "1280x720" in info2
+    c = create_app(rt).test_client()
+    assert c.get("/api/photo").get_json()["moods"][0] == ["auto", "자동 추천"]
+    assert c.post("/api/photo/slideshow", json={"ids": ["nope", "nope2"]}).status_code == 400

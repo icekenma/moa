@@ -61,10 +61,8 @@ class Runtime:
         self.assets = Assets(db, self.value_of, kiwoom_on=lambda: self.account.configured())
         from .health import Health
         self.health = Health(db)
-        from .photo import Photo
-        self.photo = Photo(db, data_dir)
-        from .slideshow import Slideshow
-        self.slideshow = Slideshow(self.photo)
+        from .album import Album
+        self.album = Album(db)
         self.feed = None
         self.brokers = {}
         self.errors = {}

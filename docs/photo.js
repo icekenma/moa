@@ -16,6 +16,8 @@
   function guess() {              // 프로그램이 주소를 안 알려 줄 때(잠금 번호 사용 등): 우석World 서버와 같은 컴퓨터의 기본 https 주소
     try { const u = new URL(apiBase() || location.href); return u.protocol === "https:" && u.hostname.endsWith(".ts.net") ? "https://" + u.hostname : ""; } catch (e) { return ""; }
   }
+  // 앱 껍데기(index.html)가 예전 것이면 다른 주소의 화면을 끼워 넣는 것이 막혀 있다(업데이트 직후 몇 분 동안 그럴 수 있다) → 빈 화면 대신 안내
+  const frameBlocked = () => { const m = document.querySelector('meta[http-equiv="Content-Security-Policy"]'); return !!m && /frame-src\s+'none'/.test(m.content); };
   const pickUrl = (d) => [d.url].concat(d.urls, [guess()]).find(usable) || "";
 
   function notice(title, lines, d, url) {
@@ -29,13 +31,25 @@
     const url = pickUrl(d);
     if (!d.running) host.innerHTML = notice("프로그램이 꺼져 있어요", ["노트북에서 PhotoGrader 웹 프로그램(AWS Album)을 켜 주세요. 프로그램 폴더의 <b>run_album.bat</b>을 실행하면 됩니다.", "노트북을 켤 때 같이 켜지게 하려면 <b>autostart_album_on.bat</b>을 한 번 실행해 두세요."], d, "");
     else if (!url) host.innerHTML = notice("접속 주소를 찾지 못했어요", [secure ? "휴대폰에서 쓰려면 https 주소가 필요해요. 노트북의 Tailscale이 켜져 있으면 프로그램이 https 주소를 자동으로 만듭니다." : "프로그램이 알려 준 주소가 없어요.", "평소 앨범 앱을 여는 주소를 '주소 직접 넣기'에 넣어도 됩니다."], d, "");
+    else if (frameBlocked() || P.blocked) host.innerHTML = notice("앱을 새 버전으로 바꾸는 중이에요", ["우석World가 방금 업데이트돼서, 프로그램 화면을 띄우는 새 설정이 아직 이 휴대폰에 내려오지 않았어요.", "'새 버전 받기'를 누르거나 앱을 완전히 닫았다가 다시 열어 주세요. 몇 분 뒤에도 같으면 '프로그램 열기'로 따로 열 수 있어요."], d, url)
+      .replace('<button type="button" class="px-btn" data-a="retry">다시 확인</button>', '<button type="button" class="px-btn main" data-a="fresh">새 버전 받기</button>');
     else if (d.pin && !store.get("photoFrame", false)) host.innerHTML = notice("잠금 번호를 쓰고 있어요", ["프로그램에 잠금 번호(PIN)가 걸려 있으면 우석World 안에 끼워 넣은 화면에서는 로그인이 유지되지 않아요.", "'프로그램 열기'로 따로 열어 쓰거나, 프로그램 설정에서 잠금 번호를 끄면 이 자리에 바로 뜹니다."], d, url)
       + `<p class="px-dim px-pad"><button type="button" class="px-link" data-a="force">그래도 여기에 띄워 보기</button></p>`;
     else host.innerHTML = `<div class="px-bar"><a class="px-ico" href="#world" aria-label="우석World 첫 화면으로">🌐</a><b>사진편집</b><span>${esc(d.name)} v${esc(d.version)}</span>
         <button type="button" class="px-ico" data-a="reload" aria-label="새로 고침">↻</button><a class="px-ico" href="${esc(url)}" target="_blank" rel="noopener" aria-label="따로 열기">↗</a><button type="button" class="px-ico" data-a="addr" aria-label="주소 바꾸기">⋯</button></div>
       <iframe class="px-frame" id="pxFrame" src="${esc(url)}" title="PhotoGrader 웹 프로그램" allow="fullscreen; web-share; clipboard-write; autoplay; geolocation; camera; microphone; screen-wake-lock" allowfullscreen></iframe>`;
   }
-  async function load() { const d = await GET("/api/photo/app"); draw(d); return d; }
+  const P = { blocked: false, d: null };
+  document.addEventListener("securitypolicyviolation", (e) => {      // 그래도 막혔으면(예전 껍데기) 빈 화면으로 두지 않는다
+    if (!/^frame-src/.test(e.violatedDirective || e.effectiveDirective || "") || !$("#pxFrame")) return;
+    P.blocked = true; if (P.d) draw(P.d);
+  });
+  async function fresh() {         // 저장해 둔 화면 파일을 버리고 새로 받는다
+    try { if (window.caches) { const ks = await window.caches.keys(); await Promise.all(ks.map((k) => window.caches.delete(k))); } } catch (e) { /* 그냥 새로 고침 */ }
+    try { const r = navigator.serviceWorker && await navigator.serviceWorker.getRegistration(); if (r) await r.update(); } catch (e) { /* 그냥 새로 고침 */ }
+    location.replace(location.pathname + "?u=" + Date.now() + "#photo");
+  }
+  async function load() { const d = await GET("/api/photo/app"); P.d = d; draw(d); return d; }
   function addrSheet(d) {
     openSheet("프로그램 주소", `<label class="field">PhotoGrader 웹 프로그램 주소<input id="pxUrl" type="url" inputmode="url" autocomplete="off" placeholder="https://내컴퓨터.ts.net" value="${esc(d.url || "")}"></label>
       <div class="tiny">비워 두면 자동으로 찾아요.${d.urls.length ? ` 프로그램이 알려 준 주소: ${d.urls.map(esc).join(", ")}` : ""}</div><button type="button" class="btn dark wide" id="pxSave">저장</button>`, (root) => {
@@ -54,6 +68,7 @@
         if (!b) return;
         try {
           if (b.dataset.a === "retry") d = await load();
+          if (b.dataset.a === "fresh") return fresh();
           if (b.dataset.a === "reload") { const f = $("#pxFrame"); if (f) f.src = f.getAttribute("src"); }
           if (b.dataset.a === "force") { store.set("photoFrame", true); draw(d); }
           if (b.dataset.a === "addr") addrSheet(d);

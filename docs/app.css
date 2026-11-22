@@ -3778,3 +3778,21 @@ html.gm-on dialog.sheet .sheet-in{border-radius:24px}
 .rk-sv{display:grid;justify-items:end;gap:1px;font-variant-numeric:tabular-nums}
 .rk-sv b{font-size:14px}
 .rk-sv small.up{color:var(--up)}.rk-sv small.down{color:var(--down)}
+
+/* 내 의견: 추천 카드의 동의·반대, 메모·제외 종목 팝업 */
+.ap-vote{display:flex;align-items:center;gap:6px;margin:8px 0 2px;font-size:11px;color:var(--ink3)}
+.ap-vote span{margin-right:2px;font-weight:700}
+.ap-vote button{min-height:30px;padding:0 12px;border-radius:999px;border:1px solid var(--line2);background:transparent;color:var(--ink2);font:inherit;font-size:12px;font-weight:700}
+.ap-vote button[aria-pressed="true"]{background:var(--ink);color:var(--card);border-color:var(--ink)}
+.ap-vote button.blk{margin-left:auto;border-style:dashed;font-weight:600}
+.ap-vote button:disabled{opacity:.45}
+.ap-my{align-self:flex-start}
+.my{display:grid;gap:8px}
+.my p{margin:0}
+.my .hx-sub small{font-weight:600;color:var(--ink3);margin-left:4px}
+.my-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.my-row.off{opacity:.5}
+.my-row span{display:grid;gap:2px;min-width:0}
+.my-row b{font-size:13px;overflow-wrap:anywhere}
+.my-row small{font-size:11px;color:var(--ink3)}
+.my-x{min-height:30px;padding:0 10px;border-radius:8px;border:1px solid var(--line2);background:transparent;color:var(--ink2);font:inherit;font-size:12px;font-weight:700}

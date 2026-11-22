@@ -63,6 +63,8 @@ class Runtime:
         self.health = Health(db)
         from .album import Album
         self.album = Album(db)
+        from .myview import MyView
+        self.myview = MyView(self)      # 내 의견: 메모 · 제외 목록 · 추천 평가
         from .agenda import Agenda
         self.agenda = Agenda(self)      # 챙길 일 모음 · 캘린더 내보내기(읽기 전용 주소)
         from .riskview import RiskView

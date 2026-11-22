@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261123.0315";
+const UI_VERSION = "261123.0329";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2656,7 +2656,8 @@ atAttrHtml(st) {
       <div class="tiny">자동매매가 도는 시장만, 장이 열리기 30~90분 전에 하루 한 번 AI가 밤사이 뉴스·일정을 찾아 메모를 남기고, 그날 정밀 추천이 함께 읽어요. 주문은 내지 않아요.</div>`;
     const hold = (P.hold || []).length ? `<div class="at-prep-h"><b>보유 종목 재료 확인</b><span class="tiny">오늘</span></div>
       <div class="at-prep-t">${P.hold.map((x) => `<div><b>${esc(x.sym)}</b><span class="tag ${x.verdict === "무효" ? "warn" : ""}">${esc(x.verdict)}</span><span>${esc(x.why || "")}</span></div>`).join("")}</div>` : "";
-    return `<section class="card tight at-prep"><div class="card-head" style="padding-top:8px"><h2>장 시작 전 준비</h2></div>${scan}${brief}${hold}</section>`;
+    const my = `<div class="at-prep-h"><b>내 의견</b><span class="tiny">메모는 AI가 함께 읽고, 제외 종목은 사지 않아요</span><button type="button" class="btn sm" data-prep="my">열기</button></div>`;
+    return `<section class="card tight at-prep"><div class="card-head" style="padding-top:8px"><h2>장 시작 전 준비</h2></div>${scan}${brief}${my}${hold}</section>`;
   },
   atRiskHtml(d) {
     // 위험 점검(몬테카를로): 지금 보유의 '나쁜 날' 손실과 하루 한도, 지금까지의 거래를 다시 뽑아 본 앞날
@@ -3005,6 +3006,7 @@ atAttrHtml(st) {
     el.onclick = async (e) => {
       const pb = e.target.closest("[data-prep]");
       if (pb) {
+        if (pb.dataset.prep === "my") return this.mySheet();
         if (pb.dataset.prep === "scan") await run(() => api("POST", "/api/prep/scan"), "훑기 시작했어요. 1~3분 걸려요");
         else await run(() => api("PUT", "/api/prep", { brief: pb.dataset.on !== "1" }), pb.dataset.on === "1" ? "장 시작 전 리서치를 껐어요" : "장 시작 전 리서치를 켰어요");
         A.d = await api("GET", `/api/auto/runs/${A.d.run.id}`);
@@ -3350,6 +3352,7 @@ atAttrHtml(st) {
             <span class="hint">적으면 그 테마의 재료가 아직 유효한지부터 따지고 관련 종목을 찾아 평가해요. 비우면 AI가 재료를 직접 찾아요.</span>
             <button type="button" class="btn sm" id="apBasket">이 테마를 여러 종목으로 나눠 담기(바구니 조사)</button></label>
           <label class="ap-web"><input type="checkbox" id="apWeb" ${A.web ? "checked" : ""}><span><b id="apWebT"></b><small id="apWebS"></small></span></label>
+          <button type="button" class="btn sm ap-my" id="apMy">내 의견 넣기: 메모 · 제외 종목</button>
           <button type="button" class="btn ap-go wide" id="apGo">지금 추천 받기</button>
           <div id="apMeter" class="cm-slot"></div>
           <div class="tiny" id="apWarn"></div>
@@ -3369,6 +3372,7 @@ atAttrHtml(st) {
       };
       $("#apTheme").oninput = (e) => { A.theme = e.target.value; };
       $("#apBasket").onclick = (e) => { e.preventDefault(); this.apBasket(); };
+      $("#apMy").onclick = () => this.mySheet();
       this.apKind();
       $("#apWeb").onchange = (e) => { A.web = e.target.checked; store.set("apWeb", A.web ? "" : "0"); this.apModels(); };
       $("#apModels").onclick = (e) => { const b = e.target.closest("[data-model]"); if (b) { A.model = b.dataset.model; store.set("apModel", A.model); this.apModels(); } };
@@ -3435,7 +3439,7 @@ atAttrHtml(st) {
   async apRun() {
     const A = this.ap;
     if (A.busy) return;
-    A.busy = true; A.res = null; A.text = ""; A.shown = false; A.used = null; A.src = []; A.status = A.h === "day" ? "실시간 순위와 분봉을 모으는 중" : "순위·관심종목의 일봉 흐름을 모으는 중";
+    A.busy = true; A.res = null; A.votes = {}; A.text = ""; A.shown = false; A.used = null; A.src = []; A.status = A.h === "day" ? "실시간 순위와 분봉을 모으는 중" : "순위·관심종목의 일봉 흐름을 모으는 중";
     this.apModels(); this.apDraw();
     let raf = 0;
     try {
@@ -3483,9 +3487,59 @@ atAttrHtml(st) {
       ${b.risks.length ? `<ul class="at-notes">${b.risks.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
       <div class="tiny">${b.check ? `다시 확인할 때: ${esc(b.check)} · ` : ""}AI가 조사한 구성안이에요. 비중은 참고용이고 주문은 내지 않아요.</div></section>`;
   },
+  // 내 의견: 메모 · 제외 종목(팝업). AI 추천이 메모를 함께 읽고, 제외 종목은 AI가 골라도 사지 않는다
+  async mySheet() {
+    let V;
+    try { V = await GET("/api/myview"); } catch (e) { return toast(e.message, true); }
+    const mk = this.ap ? this.ap.m : "kr";
+    const draw = () => `<div class="my">
+        <div class="hx-sub">메모 <small>${V.notes.filter((n) => n.live).length}/${V.max_notes}</small></div>
+        <p class="tiny">AI 추천(자동매매 포함)이 매번 함께 읽어요. 참고 자료로만 쓰고, 사실과 다르면 따르지 않도록 일러 뒀어요. 예: "이번 주 조선·방산 관심", "실적 발표 앞둔 종목은 조심", "바이오는 당분간 빼 줘"</p>
+        ${V.notes.map((n) => `<div class="my-row ${n.live ? "" : "off"}"><span><b>${esc(n.text)}</b><small>${n.mkt === "all" ? "국내·미국" : n.mkt === "kr" ? "국내" : "미국"} · ${n.until ? (n.live ? `${esc(n.until.slice(5).replace("-", "/"))}까지` : "기한 지남") : "계속"}</small></span>
+          <button type="button" class="my-x" data-dn="${n.id}" aria-label="메모 지우기">지우기</button></div>`).join("") || `<div class="empty small">아직 메모가 없어요</div>`}
+        <label class="field">새 메모<input id="myText" maxlength="${V.note_len}" placeholder="짧게 한 줄" autocomplete="off"></label>
+        <div class="fields"><label class="field">시장<select id="myMkt"><option value="all">국내·미국</option><option value="kr" ${mk === "kr" ? "selected" : ""}>국내만</option><option value="us" ${mk === "us" ? "selected" : ""}>미국만</option></select></label>
+          <label class="field">기한<select id="myDays"><option value="7">1주</option><option value="30">1달</option><option value="0">계속</option></select></label></div>
+        <button type="button" class="btn dark wide" id="myAdd">메모 넣기</button>
+        <div class="hx-sub" style="margin-top:8px">제외 종목 <small>${V.block.length}</small></div>
+        <p class="tiny">여기 넣은 종목은 추천 후보에서 빼고, AI가 골라도 자동매매가 사지 않아요(모의·실전 모두).</p>
+        ${V.block.map((b) => `<div class="my-row"><span><b>${esc(b.name)}</b><small>${b.mkt === "kr" ? "국내" : "미국"} · ${esc(b.sym)}${b.why ? " · " + esc(b.why) : ""}</small></span>
+          <button type="button" class="my-x" data-db="${b.mkt}|${esc(b.sym)}" aria-label="${esc(b.name)} 제외 풀기">풀기</button></div>`).join("") || `<div class="empty small">제외한 종목이 없어요</div>`}
+        <div class="fields"><label class="field">종목 이름·코드<input id="myBq" placeholder="예: 삼성전자, 005930, TSLA" autocomplete="off" autocapitalize="off"></label>
+          <label class="field">시장<select id="myBm"><option value="kr" ${mk === "kr" ? "selected" : ""}>국내</option><option value="us" ${mk === "us" ? "selected" : ""}>미국</option></select></label></div>
+        <button type="button" class="btn wide" id="myBadd">제외 종목에 넣기</button></div>`;
+    const mount = () => {
+      const again = (v) => { V = v; $("#sheetBody").innerHTML = draw(); mount(); };
+      $("#myAdd").onclick = async () => { try { again(await api("POST", "/api/myview/note", { text: $("#myText").value, mkt: $("#myMkt").value, days: Number($("#myDays").value) })); toast("메모를 넣었어요. 다음 추천부터 읽어요"); } catch (e) { toast(e.message, true); } };
+      $("#myBadd").onclick = async () => { try { again(await api("POST", "/api/myview/block", { q: $("#myBq").value, mkt: $("#myBm").value })); toast("제외 종목에 넣었어요"); } catch (e) { toast(e.message, true); } };
+      $("#sheetBody").onclick = async (e) => {
+        const dn = e.target.closest("[data-dn]"), db = e.target.closest("[data-db]");
+        try {
+          if (dn) again(await api("DELETE", `/api/myview/note/${dn.dataset.dn}`));
+          else if (db) { const [m, s] = db.dataset.db.split("|"); again(await api("DELETE", `/api/myview/block/${m}/${encodeURIComponent(s)}`)); }
+        } catch (err) { toast(err.message, true); }
+      };
+    };
+    openSheet("내 의견", draw(), mount);
+  },
   apDraw() {
     const A = this.ap, el = $("#apOut");
     if (!el) return;
+    if (!el.dataset.myBound) {
+      el.dataset.myBound = "1";
+      el.addEventListener("click", async (e) => {
+        const v = e.target.closest("[data-vote]"), bk = e.target.closest("[data-blk]"), R = this.ap.res;
+        if (v && R && R.id) {
+          const cur = (A.votes || (A.votes = {}))[v.dataset.sym], want = cur === Number(v.dataset.vote) ? 0 : Number(v.dataset.vote);
+          try { await api("POST", "/api/ai/vote", { pick_id: R.id, sym: v.dataset.sym, vote: want }); A.votes[v.dataset.sym] = want; A.shown = true; this.apDraw(); toast(want ? "내 판단을 적어 뒀어요. 결과가 나오면 성적표에서 비교해요" : "내 판단을 지웠어요"); }
+          catch (err) { toast(err.message, true); }
+        } else if (bk) {
+          if (!confirmTap(bk, "한 번 더 누르면 제외 종목에 넣어요")) return;
+          try { await api("POST", "/api/myview/block", { q: bk.dataset.blk, mkt: (R && R.mkt) || A.m, why: "추천에서 뺌" }); toast(`${bk.dataset.name}을(를) 제외 종목에 넣었어요`); bk.disabled = true; }
+          catch (err) { toast(err.message, true); }
+        }
+      });
+    }
     const body = A.text.split("```")[0];
     const R = A.res, us = (R ? R.mkt : A.m) === "us";
     const P = (n) => n == null ? "-" : us ? usd(n) : won(Math.round(n)) + "원";
@@ -3518,6 +3572,10 @@ atAttrHtml(st) {
         ${sw ? `<div class="ap-cat"><div class="ap-ct"><span class="tag c-${esc(p.catalyst_type)}">${esc(p.catalyst_type)}</span>${p.theme ? `<span class="tag">${esc(p.theme)}</span>` : ""}${p.in_cand ? "" : `<span class="tag y">뉴스에서 찾음</span>`}</div>
           ${p.catalyst ? `<b>${esc(p.catalyst)}</b>` : ""}${p.catalyst_date ? `<small>확인 시기: ${esc(p.catalyst_date)}</small>` : ""}</div>
           ${p.daily ? `<div class="ap-daily">${dchip("5일", dl["5일%"])}${dchip("20일", dl["20일%"])}${dchip("20일선", dl["20일선대비%"])}${dchip("고점 대비", dl["60일고점대비%"])}${dchip("거래량", dl["5일거래량배수"], "배", false)}${dchip("하루 변동", dl["하루변동폭%"], "%", false)}</div>` : ""}` : ""}
+        ${R.id && !p.auto ? `<div class="ap-vote" role="group" aria-label="${esc(p.name)} 추천에 대한 내 판단"><span>내 판단</span>
+          <button type="button" data-vote="1" data-sym="${esc(p.sym)}" aria-pressed="${(A.votes || {})[p.sym] === 1}">동의</button>
+          <button type="button" data-vote="-1" data-sym="${esc(p.sym)}" aria-pressed="${(A.votes || {})[p.sym] === -1}">반대</button>
+          <button type="button" class="blk" data-blk="${esc(p.sym)}" data-name="${esc(p.name)}">이 종목 빼기</button></div>` : ""}
         <div class="ap-bar"><i class="sl" style="width:${(p.stop_pct / (p.stop_pct + p.target_pct) * 100).toFixed(1)}%"></i><i class="tp"></i></div>
         <div class="ap-lv">
           <div><span>손절</span><b class="down">−${p.stop_pct}%</b><small>${P(px * (1 - p.stop_pct / 100))}</small></div>

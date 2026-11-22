@@ -488,6 +488,9 @@ class Market:
     def junk(self, mkt, sym, name=""):
         """자동매매에서 뺄 종목이면 그 이유, 아니면 빈 글."""
         from .trading.universe import junk_reason
+        mv = getattr(self.rt, "myview", None)
+        if mv is not None and mv.blocked(mkt, sym):
+            return "내가 뺀 종목"
         return junk_reason(mkt, sym, name, self.kr_info(str(sym)) if mkt == "kr" else None)
 
     def kr_market(self, code):

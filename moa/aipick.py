@@ -848,6 +848,8 @@ class AIPick:
                     x.update(exit_by=str(p.get("exit_by") or "")[:5], feat=_feat_of(cand or {}, ss))
                 if ns is not None and isinstance(x.get("feat"), dict):
                     x["feat"]["news"] = ns                 # 뉴스 점수별 성적을 나중에 가른다
+                if isinstance(x.get("feat"), dict) and getattr(self.rt, "myview", None) and self.rt.myview.notes(mkt):
+                    x["feat"]["note"] = True               # 사용자 메모가 실린 추천(메모가 도움이 됐는지 나중에 가른다)
                 picks.append(x)
             except Exception:
                 continue
@@ -1639,6 +1641,15 @@ def _roe_bucket(r):
     return None if v is None else "마이너스" if v < 0 else "0~10%" if v < 10 else "10% 이상"
 
 
+def _vote_bucket(r):
+    v = r.get("vote")
+    return None if not v else "내가 동의한 추천" if v > 0 else "내가 반대한 추천"
+
+
+def _note_bucket(r):
+    return "메모가 실린 추천" if r["f"].get("note") else None
+
+
 def _flow_bucket(r):
     a, b = r["f"].get("ff5"), r["f"].get("fo5")
     if a is None or b is None:
@@ -1682,7 +1693,9 @@ def _done_rows(self, mkt=None, h="day"):
     # 학습(통계·승률 보정·자동 조정·복기·과거성적 가산점)은 정밀 추천만 쓴다. 빠른 재추천(가장 싼 엔진, 뉴스 없이)은 성적표에서만 따로 본다
     rows = self.rt.db.q("SELECT * FROM ai_outcomes WHERE status='done' AND net_pct IS NOT NULL AND COALESCE(horizon,'day')=? AND COALESCE(lite,0)=0 ORDER BY ts", (hz(h),))
     rows = [r for r in rows if r["result"] in FIN]
+    votes = self.rt.myview.votes() if getattr(self.rt, "myview", None) else {}
     for r in rows:
+        r["vote"] = votes.get((r["pick_id"], str(r["sym"]).upper()))
         try:
             r["f"] = json.loads(r.get("feat") or "{}")
         except ValueError:
@@ -1742,6 +1755,8 @@ def _defs(h):
             ("추천 시점", lambda r: None if "open" not in r["f"] else ("정규장 중" if r["f"]["open"] else "정규장 밖"), True),
             ("수급(5일)", _flow_bucket, True),
             ("뉴스 점수", _news_bucket, False),
+            ("내 판단", _vote_bucket, False),
+            ("내 메모", _note_bucket, False),
             ("남은 장 시간", lambda r: None if not r["f"].get("open") or r["f"].get("left") is None else ("2시간 이상" if r["f"]["left"] >= 120 else "2시간 미만"), True),
             ("목표 크기", lambda r: None if not r.get("target_pct") else "2% 이하" if r["target_pct"] <= 2 else "2~3%" if r["target_pct"] <= 3 else "3% 초과", False),
             ("AI 태도", lambda r: None if "stance" not in r else "지표 자동 선정" if r.get("auto") else (r.get("stance") or "-"), False),
@@ -1753,6 +1768,8 @@ def _defs(h):
         ("재료 유형", lambda r: r["f"].get("cat") or None, True),
         ("종목 출처", lambda r: None if "cand" not in r["f"] else "넓게 훑기 후보" if r["f"].get("scan") else ("순위 후보 안" if r["f"]["cand"] else "AI가 뉴스에서 찾음"), True),
         ("수급(5일)", _flow_bucket, True),
+        ("내 판단", _vote_bucket, False),
+        ("내 메모", _note_bucket, False),
         ("PER", _per_bucket, True),
         ("검색량", _split("srch", [1.2, 2], ["비슷하거나 줄어듦", "늘어남(1.2~2배)", "급증(2배 이상)"]), False),
         ("ROE", _roe_bucket, True),

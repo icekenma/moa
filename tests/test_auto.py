@@ -2559,3 +2559,44 @@ def test_rate_and_sector_factors_join_scenarios():
     assert "은행 업종 −15%" not in rows and ic["칩"] < ic["성장"] and ic["칩"] < -8 and "반도체 업종(시장 대비)" in chip["shock_txt"]     # 든 업종만 시나리오로
     assert "미 10년 금리" in S["factors"] and "반도체 업종" in S["factors"]
     assert [round(v, 6) for v in _fit([3, 5, 8, 10, 14], [[1, 2, 3, 4, 5], [0, 0, 1, 1, 3]])] == [2.0, 1.0]
+
+
+# ---------- 내 의견: 메모 · 제외 목록 · 추천 평가 ----------
+def test_my_notes_block_list_and_votes(env, monkeypatch):
+    from moa.aipick import _defs
+    rt, mv = env.rt, env.rt.myview
+    c = create_app(rt).test_client()
+    assert c.post("/api/myview/note", json={"text": "  "}).status_code == 400
+    v = c.post("/api/myview/note", json={"text": "이번 주  조선·방산 관심", "mkt": "kr", "days": 7}).get_json()
+    c.post("/api/myview/note", json={"text": "미국 빅테크 실적 주간", "mkt": "us", "days": 0})
+    assert v["notes"][0]["text"] == "이번 주 조선·방산 관심" and v["notes"][0]["until"] and v["notes"][0]["live"]
+    ask, data = mv.into("골라 줘.", {}, "kr")
+    assert data["사용자 메모(사용자가 직접 적은 관심·주의 사항)"] == ["이번 주 조선·방산 관심"] and "win_prob를 올리지 말고" in ask and "사실과 맞는지" in ask
+    assert mv.into("x", {}, "us")[1] != {} and mv.notes("kr", today=__import__("datetime").date(2099, 1, 1)) == []          # 기한이 지나면 싣지 않는다
+    nid = v["notes"][0]["id"]
+    assert len(c.delete(f"/api/myview/note/{nid}").get_json()["notes"]) == 1 and mv.into("x", {}, "kr") == ("x", {})
+    # 제외 목록: 이름이나 코드로 넣고, 기존 '경고·특수 종목' 거르기로 걸러진다
+    info = {"005930": {"name": "삼성전자", "market": "코스피", "warn": "0", "audit": "정상", "state": ""}, "000660": {"name": "SK하이닉스", "market": "코스피", "warn": "0", "audit": "정상", "state": ""}}
+    monkeypatch.setattr(rt.market, "kr_info", lambda code: info.get(code, {}))
+    monkeypatch.setattr(rt.market, "kr_market", lambda code: "코스피")
+    monkeypatch.setattr(rt.market, "kr_search", lambda q: [{"sym": k, "name": x["name"]} for k, x in info.items() if q in x["name"]])
+    assert c.post("/api/myview/block", json={"q": "없는회사", "mkt": "kr"}).status_code == 400
+    b = c.post("/api/myview/block", json={"q": "SK하이닉스", "mkt": "kr"}).get_json()["block"]
+    c.post("/api/myview/block", json={"q": "tsla", "mkt": "us"})
+    assert b == [dict(b[0], mkt="kr", sym="000660", name="SK하이닉스")] and rt.market.junk("kr", "000660", "SK하이닉스") == "내가 뺀 종목" and rt.market.junk("us", "TSLA") == "내가 뺀 종목" and not rt.market.junk("kr", "005930", "삼성전자")
+    rid = env.run()
+    assert env.enter(rid, [env.pick("000660"), env.pick("005930")]) == 1 and [t["sym"] for t in env.at._open(rid)] == ["005930"]
+    dec = json.loads(rt.db.q("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' ORDER BY id DESC LIMIT 1", (rid,))[0]["data"])["decisions"]
+    assert dec[0]["code"] == "junk" and "내가 뺀 종목" in dec[0]["why"]
+    assert c.delete("/api/myview/block/kr/000660").get_json()["block"][0]["sym"] == "TSLA" and not rt.market.junk("kr", "000660", "SK하이닉스")
+    # 추천 평가: 추천마다·종목마다 하나, 다시 누르면 바뀌고 0이면 지운다. 성적표 기준으로 갈린다
+    pid = rt.db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text,horizon,theme,lv,lite) VALUES('2026-11-18T10:00:00','kr','m',0,'보통','','[]','','day','',0,0)")
+    assert c.post("/api/ai/vote", json={"pick_id": 99999, "sym": "005930", "vote": 1}).status_code == 400
+    assert c.post("/api/ai/vote", json={"pick_id": pid, "sym": "005930", "vote": 1}).get_json()["vote"] == 1
+    c.post("/api/ai/vote", json={"pick_id": pid, "sym": "005930", "vote": -1})
+    assert mv.votes() == {(pid, "005930"): -1}
+    d = {k: fn for k, fn, _ in _defs("day")}
+    assert d["내 판단"]({"vote": -1, "f": {}}) == "내가 반대한 추천" and d["내 판단"]({"vote": None, "f": {}}) is None and d["내 메모"]({"f": {"note": True}}) == "메모가 실린 추천"
+    assert "내 판단" in {k for k, _, _ in _defs("swing")}
+    c.post("/api/ai/vote", json={"pick_id": pid, "sym": "005930", "vote": 0})
+    assert mv.votes() == {}

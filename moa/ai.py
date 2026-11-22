@@ -307,7 +307,9 @@ class AI:
                 raise AIError(str(e))
         if kind == "pick":
             try:
-                return self.rt.aipick.context(d)
+                title, ask, data = self.rt.aipick.context(d)
+                ask, data = self.rt.myview.into(ask, data, "us" if d.get("mkt") == "us" else "kr")     # 사용자 메모를 함께 싣는다
+                return title, ask, data
             except ValueError as e:
                 raise AIError(str(e))
         if kind == "divplan":

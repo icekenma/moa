@@ -863,6 +863,40 @@ def create_app(rt, updater=None):
         return app.response_class(json.dumps(rt.market.diag(), ensure_ascii=False, default=str, indent=1),
                                   mimetype="application/json")
 
+    # ---------- 내 의견: 메모 · 제외 목록 · 추천 평가 ----------
+    @app.get("/api/myview")
+    def myview_get():
+        return jsonify(rt.myview.view())
+
+    @app.post("/api/myview/note")
+    def myview_note():
+        try:
+            return jsonify(rt.myview.add_note(body()))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+
+    @app.delete("/api/myview/note/<int:nid>")
+    def myview_note_del(nid):
+        return jsonify(rt.myview.del_note(nid))
+
+    @app.post("/api/myview/block")
+    def myview_block():
+        try:
+            return jsonify(rt.myview.add_block(body()))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+
+    @app.delete("/api/myview/block/<mkt>/<sym>")
+    def myview_block_del(mkt, sym):
+        return jsonify(rt.myview.del_block(mkt, sym))
+
+    @app.post("/api/ai/vote")
+    def ai_vote():
+        try:
+            return jsonify(rt.myview.vote(body()))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+
     # ---------- 챙길 일 · 캘린더 내보내기 ----------
     @app.get("/api/agenda")
     def agenda_get():

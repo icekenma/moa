@@ -2,7 +2,7 @@
 html[data-sec="photo"] .top,html[data-sec="photo"] .tabbar{display:none}
 html[data-sec="photo"] #view{padding:0;max-width:none}
 .px-app{height:100dvh;display:flex;flex-direction:column;padding-top:var(--safe-t,0px);background:#0B0C0E;color:#1C2128}
-.px-app:has(.px-note){background:#fff}
+.px-app:has(.px-note){background:#fff;overflow-y:auto}
 .px-bar{flex:none;height:36px;display:flex;align-items:center;gap:4px;padding:0 4px;background:#0B0C0E;border-bottom:1px solid #1E2126;font-size:13px;color:#E8EAED}
 .px-bar b{font-weight:700}
 .px-bar span{flex:1;min-width:0;color:#9AA2AE;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

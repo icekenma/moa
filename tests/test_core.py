@@ -2893,21 +2893,52 @@ def test_health_gym_photos(rt):
 # ---------- 사진편집(우석World): 노트북의 PhotoGrader 웹 프로그램으로 가는 문 ----------
 def test_photo_app_door(rt):
     from moa.album import Album, AlbumError
-    pages = {}
-    al = rt.album = Album(rt.db, fetch=lambda url: pages.get(url.split(":8790")[1], (0, None)))
+    pages, ts, ran = {}, {}, []
+    web = lambda url, timeout=2: pages.get(url.replace("http://127.0.0.1:8790", ""), (0, None))
+
+    def tsrun(*a, timeout=20):
+        ran.append(a)
+        return ts.get(a[:2] if a[0] == "serve" and a[1] == "status" else a[:1], (-1, ""))
+    al = rt.album = Album(rt.db, fetch=web, ts=tsrun)
     c = create_app(rt).test_client()
     st = c.get("/api/photo/app").get_json()
     assert st["running"] is False and st["urls"] == [] and c.get("/api/world").get_json()["apps"]["photo"] is None     # 꺼져 있을 때
+    H = "https://pc.tail1234.ts.net"
     pages["/api/version"] = (200, {"app": "AWS Album", "version": "1.4"})
     pages["/api/state"] = (200, {"pin": False, "counts": {"all": 120, "best": 7, "fav": 3, "albums": 2, "trash": 1},
-                                 "urls": [{"kind": "같은 와이파이", "url": "http://192.168.0.5:8790"}, {"kind": "Tailscale https (추천)", "url": "https://pc.tail1234.ts.net"},
+                                 "urls": [{"kind": "같은 와이파이", "url": "http://192.168.0.5:8790"}, {"kind": "Tailscale https (추천)", "url": H},
                                           {"kind": "x", "url": "javascript:alert(1)"}, "junk"]})
-    st = c.get("/api/photo/app").get_json()
-    assert st["running"] and st["name"] == "AWS Album" and st["version"] == "1.4" and not st["pin"]
-    assert st["urls"] == ["https://pc.tail1234.ts.net", "http://192.168.0.5:8790"]                 # https 먼저, 이상한 주소는 버린다
+    # ① 프로그램이 알려 준 주소(443)가 실제로는 다른 서버(우석World)이고, 프로그램은 8443에 걸려 있는 경우 → 8443을 고른다
+    ts[("status",)] = (0, json.dumps({"Self": {"DNSName": "pc.tail1234.ts.net."}}))
+    ts[("serve", "status")] = (0, json.dumps({"Web": {"pc.tail1234.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8780"}}},
+                                                       "pc.tail1234.ts.net:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8790"}}}}}))
+    pages[H + "/api/version"] = (404, None)
+    pages[H + ":8443/api/version"] = (200, {"app": "AWS Album", "version": "1.4"})
+    st = c.get("/api/photo/app?fresh=1").get_json()
+    assert st["running"] and st["name"] == "AWS Album" and not st["pin"] and st["tailscale"] and not st["can_serve"]
+    assert st["urls"] == [H + ":8443", "http://192.168.0.5:8790"]                                   # 다른 서버로 확인된 443은 뺀다, 이상한 주소도 버린다
+    assert {x["url"]: x["what"] for x in st["checked"]} == {H + ":8443": "album", H: "other", H + ":10000": "fail"}
     assert c.get("/api/world").get_json()["apps"]["photo"] == {"count": 120, "best": 7}
+    # ② 노트북에서 자기 https 주소로 물어볼 수 없는 경우에도 Tailscale에 걸린 연결은 믿는다
+    pages.pop(H + ":8443/api/version")
+    assert c.get("/api/photo/app?fresh=1").get_json()["urls"][0] == H + ":8443"
+    # ③ 프로그램으로 가는 https 연결이 아예 없을 때: 빈 포트에 하나 만든다(있는 연결은 그대로)
+    ts[("serve", "status")] = (0, json.dumps({"Web": {"pc.tail1234.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8780"}}}}}))
+    st = c.get("/api/photo/app?fresh=1").get_json()
+    assert st["can_serve"] and st["urls"] == ["http://192.168.0.5:8790"]
+    ts[("serve",)] = (0, "ok")
+    ran.clear()
+    c.post("/api/photo/app/https")
+    assert ("serve", "--bg", "--https=8443", "http://127.0.0.1:8790") in ran
+    ts[("serve",)] = (1, "error: HTTPS is not enabled")
+    assert "HTTPS is not enabled" in c.post("/api/photo/app/https").get_json()["error"]
+    # ④ Tailscale 정보를 못 읽을 때는 프로그램이 알려 준 주소를 그대로 써 본다
+    ts.clear()
+    pages.pop(H + "/api/version")
+    st = c.get("/api/photo/app?fresh=1").get_json()
+    assert st["urls"][0] == H and not st["tailscale"] and not st["can_serve"]
     pages["/api/state"] = (401, None)                                                               # 잠금 번호를 쓰는 경우
-    st = c.get("/api/photo/app").get_json()
+    st = c.get("/api/photo/app?fresh=1").get_json()
     assert st["running"] and st["pin"] and st["urls"] == [] and al.brief() is None
     assert c.put("/api/photo/app", json={"url": " https://pc.tail1234.ts.net/ "}).get_json()["url"] == "https://pc.tail1234.ts.net"
     assert c.put("/api/photo/app", json={"url": "pc.ts.net/x"}).status_code == 400 and c.put("/api/photo/app", json={"url": ""}).get_json()["url"] == ""

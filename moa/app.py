@@ -1256,7 +1256,11 @@ def create_app(rt, updater=None):
 
     @app.get("/api/photo/app")
     def photo_app():
-        return jsonify(rt.album.status())
+        return jsonify(rt.album.status(fresh=request.args.get("fresh") == "1"))
+
+    @app.post("/api/photo/app/https")
+    def photo_app_https():
+        return jsonify(rt.album.make_https())
 
     @app.put("/api/photo/app")
     def photo_app_url():

@@ -38,6 +38,17 @@ PICK_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 당
   "reasons":["근거1","근거2","근거3"],"risks":["위험1","위험2"]}]}
 picks는 최소 1개·최대 3개, 기대수익(승률×목표 − (1−승률)×손절)이 큰 순서로."""
 
+# 테마 바구니: 테마 하나를 여러 종목으로 나눠 담는 구성을 조사해 보여 준다(주문은 내지 않는다)
+BASKET_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 테마 조사 담당이야. 사용자가 준 테마를 한 종목에 걸지 않고 여러 종목으로 나눠 담는 '바구니'를 구성한다.
+- 먼저 웹에서 이 테마의 재료가 지금도 살아 있는지(일정·예산·실적, 이미 반영됐는지, 번복 위험)를 확인해.
+- 그 다음 테마에서 실제로 매출·이익이 나는 종목을 역할이 겹치지 않게 4~7개 골라(대장주, 핵심 부품·소재, 장비, 수혜가 뒤늦게 오는 종목 등). 이름만 테마주이고 사업이 닿지 않는 종목, 관리종목·투자경고 종목은 빼.
+- 비중(weight_pct)은 합이 100. 사업이 테마와 직접 닿고 덩치가 큰 종목에 더 주고, 한 종목이 35를 넘지 않게.
+- 확인한 사실만 써. 없는 숫자·뉴스를 지어내지 마. 테마가 이미 끝났거나 살 만한 종목이 없으면 stocks를 비우고 view에 이유를 써.
+출력 형식: 먼저 한국어로 5~8줄 판단('- ' 항목). 그 다음 마지막에 아래 JSON 하나를 ```json 코드 블록으로.
+{"theme":"테마 이름","alive":true 또는 false,"view":"한 줄 결론","stocks":[
+ {"sym":"종목코드 또는 기호","name":"이름","role":"테마 안에서의 역할(짧게)","weight_pct":숫자,"why":"담는 이유 한 줄","risk":"이 종목의 위험 한 줄"}],
+ "risks":["바구니 전체의 위험1","위험2"],"check":"재료를 다시 확인할 날짜나 일정"}"""
+
 KR_FEE = 0.2  # 왕복 비용(%) 대략
 
 # 추천 종류(보유 기간). day=오늘 안에 정리, swing=약 1주(5거래일), month=약 1달(20거래일)
@@ -462,6 +473,43 @@ class AIPick:
             ask += " (지금은 정규장이 아니야. 다음 정규장 시작 직후 기준으로 판단하고, 그 점을 첫 줄에 밝혀.)"
         return f"AI 종목 추천({'국내' if mkt == 'kr' else '미국'})", ask, data
 
+    # ----- 테마 바구니(조사만, 주문 없음)
+    def basket_context(self, d):
+        mkt = "us" if d.get("mkt") == "us" else "kr"
+        theme = str(d.get("theme") or "").strip()[:60]
+        if not theme:
+            raise ValueError("테마를 적어 주세요")
+        try:
+            idx = [{k: i.get(k) for k in ("name", "price", "change_pct")} for i in (self.rt.market.kr_indices() if mkt == "kr" else self.rt.market.us_indices())]
+        except Exception:
+            idx = []
+        where = "국내" if mkt == "kr" else "미국"
+        return (f"테마 바구니({where}) · {theme}", f"'{theme}' 테마를 {where} 상장 종목으로 나눠 담는 바구니를 구성해 줘.",
+                {"시장": "국내(KRX)" if mkt == "kr" else "미국", "기준시각(한국)": kst_now().strftime("%Y-%m-%d %H:%M"), "테마": theme, "지수": idx})
+
+    def basket_parse(self, text, mkt, theme, model, usd):
+        m = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S) or re.findall(r"(\{\s*\"theme\".*\})", text, re.S)
+        if not m:
+            raise ValueError("AI 답에서 구성표를 읽지 못했어요")
+        j = json.loads(m[-1])
+        stocks = []
+        for p in (j.get("stocks") or [])[:8]:
+            sym, q = self._resolve(mkt, p.get("sym"), p.get("name"))
+            if not sym or not q.get("price") or any(s_["sym"] == sym for s_ in stocks):
+                continue                                   # 실제로 없는 종목·겹친 종목은 뺀다
+            stocks.append({"sym": sym, "name": q.get("name") or p.get("name") or sym, "price": q["price"], "change_pct": q.get("change_pct"),
+                           "role": str(p.get("role") or "")[:30], "w": max(0.0, float(p.get("weight_pct") or 0)), "why": str(p.get("why") or "")[:120],
+                           "risk": str(p.get("risk") or "")[:120], "warn": self.rt.market.junk(mkt, sym, q.get("name") or p.get("name"))})
+        tot = sum(x["w"] for x in stocks) or 0
+        for x in stocks:
+            x["w"] = round(x["w"] / tot * 100, 1) if tot else round(100 / len(stocks), 1)
+        out = {"theme": str(j.get("theme") or theme or "")[:60], "alive": bool(j.get("alive", True)), "view": str(j.get("view") or "")[:200], "stocks": stocks,
+               "risks": [str(r)[:120] for r in (j.get("risks") or [])][:4], "check": str(j.get("check") or "")[:60], "mkt": mkt,
+               "text": text.split("```json")[0].strip()[:1500], "ts": datetime.now().isoformat(timespec="seconds"), "model": model, "usd": usd}
+        self.rt.db.x("CREATE TABLE IF NOT EXISTS ai_baskets(id INTEGER PRIMARY KEY, ts TEXT, mkt TEXT, theme TEXT, data TEXT)")
+        out["id"] = self.rt.db.x("INSERT INTO ai_baskets(ts,mkt,theme,data) VALUES(?,?,?,?)", (out["ts"], mkt, out["theme"], json.dumps(out, ensure_ascii=False)))
+        return out
+
     def _dart_into(self, row, sym):
         """전자공시 인증키가 있으면 그 종목의 최근 공시 제목을 붙인다."""
         try:
@@ -613,6 +661,14 @@ class AIPick:
             deep.append(row)
         if not deep:
             raise ValueError("지금은 순위 자료가 비어 있어요. 잠시 뒤 다시 받아 보세요")
+        if mkt == "kr" and getattr(rt, "trend", None) and rt.trend.configured():
+            try:
+                tr = rt.trend.ratios([r["name"] for r in deep])
+                for r in deep:
+                    if r["name"] in tr:
+                        r["검색량배수(최근7일/이전3주)"] = tr[r["name"]]
+            except Exception:
+                pass
         self._cands[_ck(mkt, h)] = deep
         self._sess[mkt] = ss
         try:
@@ -1601,7 +1657,8 @@ def _feat_swing(c, x, ss, ix, in_cand):
     return {"chg": c.get("등락률%"), "r5": f.get("5일%"), "r20": f.get("20일%"), "ma20": f.get("20일선대비%"), "ma60": f.get("60일선대비%"),
             "hi60": f.get("60일고점대비%"), "volx5": f.get("5일거래량배수"), "atr": f.get("하루변동폭%"), "streak": f.get("연속상승일"),
             "idx20": (ix or {}).get("20일선대비%"), "idx5": (ix or {}).get("5일%"), "cand": bool(in_cand),
-            "cat": x.get("catalyst_type"), "open": bool(ss.get("open")), "scan": c.get("출처") == "넓게 훑기", **_flow_feat(c), **_fund_feat(c)}
+            "cat": x.get("catalyst_type"), "open": bool(ss.get("open")), "scan": c.get("출처") == "넓게 훑기", **_flow_feat(c), **_fund_feat(c),
+            **({"srch": c["검색량배수(최근7일/이전3주)"]} if c.get("검색량배수(최근7일/이전3주)") is not None else {})}
 
 
 GRADE_V = 3  # 채점 방식 버전(바뀌면 최근 추천을 다시 채점)
@@ -1697,6 +1754,7 @@ def _defs(h):
         ("종목 출처", lambda r: None if "cand" not in r["f"] else "넓게 훑기 후보" if r["f"].get("scan") else ("순위 후보 안" if r["f"]["cand"] else "AI가 뉴스에서 찾음"), True),
         ("수급(5일)", _flow_bucket, True),
         ("PER", _per_bucket, True),
+        ("검색량", _split("srch", [1.2, 2], ["비슷하거나 줄어듦", "늘어남(1.2~2배)", "급증(2배 이상)"]), False),
         ("ROE", _roe_bucket, True),
         ("뉴스 점수", _news_bucket, False),
         ("20일선 위치", _split("ma20", [0], ["20일선 아래", "20일선 위"]), True),

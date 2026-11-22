@@ -2347,3 +2347,61 @@ def test_fundamentals_and_dart_titles_join_candidates(env, monkeypatch):
     assert row["최근 공시(전자공시 제목)"][0].endswith("공급계약체결")
     bad = Dart(rt, get=lambda p: {"status": "020", "message": "요청 제한 초과"})
     assert bad.titles("005930") == [] and bad.note["ok"] is False and "020" in bad.note["error"]
+
+
+# ---------- 5단계: 계좌 전체 위험 · 검색량 · 테마 바구니 ----------
+def test_account_risk_view_measures_concentration_and_swing(env, monkeypatch):
+    from moa.riskview import compute
+    import math
+    up = [0.01 * math.sin(i) for i in range(60)]
+    items = [{"name": "A", "value": 6_000_000, "sector": "전기/전자", "mkt": "kr", "rets": [2 * v for v in up]},
+             {"name": "B", "value": 3_000_000, "sector": "전기/전자", "mkt": "kr", "rets": [1.9 * v + 0.0001 * (i % 3) for i, v in enumerate(up)]},
+             {"name": "C", "value": 1_000_000, "sector": "", "mkt": "us", "rets": None}]
+    r = compute(items, {"kr": up, "us": None})
+    assert r["n"] == 3 and r["total"] == 10_000_000 and r["top"][0] == {"name": "A", "w": 60.0, "vol": r["top"][0]["vol"], "beta": 2.0, "sector": "전기/전자"}
+    assert r["sectors"][0] == {"name": "전기/전자", "w": 90.0} and r["cover"] == 90 and r["pairs"][0]["corr"] >= 0.99
+    assert 1.9 < r["beta"] < 2.0 and r["stress"]["loss"] < 0 and abs(r["stress"]["loss"] + 10_000_000 * 0.9 * r["beta"] * 0.05) < 3000      # 자료가 있는 종목(90%)만 셈한다
+    assert r["day_risk"] > 0 and any("한 종목(A)" in f for f in r["flags"]) and any("한 업종" in f for f in r["flags"])
+    assert compute([], {}) == {"n": 0}
+    monkeypatch.setattr(env.rt.account, "configured", lambda: False)
+    assert env.rt.riskview.snapshot() == {"configured": False}
+
+
+def test_search_trend_needs_user_keys_and_caches(env):
+    from moa.trend import Trend
+    from datetime import date
+    calls = []
+    def post(body, cid, sec):
+        calls.append((body, cid))
+        end = date.fromisoformat(body["endDate"])
+        return {"results": [{"title": g["groupName"], "data": [{"period": (end - timedelta(days=k)).isoformat(), "ratio": 30 if k < 7 else 10} for k in range(28)]} for g in body["keywordGroups"]]}
+    tr = Trend(env.rt, post=post)
+    assert tr.ratios(["삼성전자"]) == {} and not calls                                   # 키가 없으면 부르지 않는다
+    env.rt.settings.update({"naver": {"client_id": "id", "client_secret": "sec"}})
+    names = [f"종목{i}" for i in range(7)]
+    assert tr.ratios(names) == {n: 3.0 for n in names} and [len(c[0]["keywordGroups"]) for c in calls] == [5, 2] and calls[0][1] == "id"
+    assert tr.ratios(names[:3]) == {n: 3.0 for n in names[:3]} and len(calls) == 2      # 6시간 동안 다시 받지 않는다
+    assert env.rt.settings.public()["naver"]["client_secret"] == "********"
+    bad = Trend(env.rt, post=lambda b, c, s: {"errorMessage": "인증 실패"})
+    assert bad.ratios(["x"]) == {} and bad.note["ok"] is False
+
+
+def test_theme_basket_resolves_and_normalizes_weights(env, monkeypatch):
+    ap = env.rt.aipick
+    px = {"005930": 70000.0, "000660": 150000.0}
+    monkeypatch.setattr(ap, "quote", lambda m, s: {"price": px.get(s), "name": {"005930": "삼성전자", "000660": "SK하이닉스"}.get(s, s), "change_pct": 1.0})
+    monkeypatch.setattr(env.rt.market, "kr_search", lambda name: [])
+    body = {"theme": "반도체", "alive": True, "view": "수출 호조가 이어짐", "check": "12월 1일 수출 통계", "risks": ["가격 정점 우려"], "stocks": [
+        {"sym": "A005930", "name": "삼성전자", "role": "대장", "weight_pct": 30, "why": "메모리", "risk": "환율"},
+        {"sym": "000660", "name": "SK하이닉스", "role": "HBM", "weight_pct": 20, "why": "HBM", "risk": "고객 집중"},
+        {"sym": "999999", "name": "없는회사", "role": "x", "weight_pct": 50, "why": "x", "risk": "x"},
+        {"sym": "005930", "name": "삼성전자", "role": "겹침", "weight_pct": 10}]}
+    b = ap.basket_parse("- 판단\n```json\n" + json.dumps(body, ensure_ascii=False) + "\n```", "kr", "반도체", "claude-sonnet-5-5", 0.1)
+    assert [(x["sym"], x["w"]) for x in b["stocks"]] == [("005930", 60.0), ("000660", 40.0)] and b["alive"] and b["check"].startswith("12월")   # 없는 종목·겹친 종목은 빼고 비중을 다시 100으로
+    assert b["id"] and b["text"] == "- 판단" and env.rt.db.one("SELECT COUNT(*) n FROM ai_baskets")["n"] == 1
+    with pytest.raises(ValueError, match="테마"):
+        ap.basket_context({"mkt": "kr", "theme": " "})
+    title, ask, data = ap.basket_context({"mkt": "kr", "theme": "원전"})
+    assert "원전" in title and data["테마"] == "원전"
+    with pytest.raises(ValueError):
+        ap.basket_parse("표 없음", "kr", "x", "m", 0)

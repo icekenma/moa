@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261122.2220";
+const UI_VERSION = "261122.2226";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -3298,7 +3298,8 @@ atAttrHtml(st) {
         <section class="card"><div class="card-head"><h2>추천 엔진</h2><span class="tiny" id="apFx"></span></div>
           <div class="ap-models" id="apModels"><div class="empty small loading">불러오는 중</div></div>
           <label class="field ap-theme" id="apThemeBox" hidden>궁금한 테마(선택)<input id="apTheme" maxlength="60" autocomplete="off" placeholder="예: 시험장 전파 탐지, 원전, 방산" value="${esc(A.theme)}">
-            <span class="hint">적으면 그 테마의 재료가 아직 유효한지부터 따지고 관련 종목을 찾아 평가해요. 비우면 AI가 재료를 직접 찾아요.</span></label>
+            <span class="hint">적으면 그 테마의 재료가 아직 유효한지부터 따지고 관련 종목을 찾아 평가해요. 비우면 AI가 재료를 직접 찾아요.</span>
+            <button type="button" class="btn sm" id="apBasket">이 테마를 여러 종목으로 나눠 담기(바구니 조사)</button></label>
           <label class="ap-web"><input type="checkbox" id="apWeb" ${A.web ? "checked" : ""}><span><b id="apWebT"></b><small id="apWebS"></small></span></label>
           <button type="button" class="btn ap-go wide" id="apGo">지금 추천 받기</button>
           <div id="apMeter" class="cm-slot"></div>
@@ -3318,6 +3319,7 @@ atAttrHtml(st) {
         this.apKind(); this.apEstimate(); this.apScore();
       };
       $("#apTheme").oninput = (e) => { A.theme = e.target.value; };
+      $("#apBasket").onclick = (e) => { e.preventDefault(); this.apBasket(); };
       this.apKind();
       $("#apWeb").onchange = (e) => { A.web = e.target.checked; store.set("apWeb", A.web ? "" : "0"); this.apModels(); };
       $("#apModels").onclick = (e) => { const b = e.target.closest("[data-model]"); if (b) { A.model = b.dataset.model; store.set("apModel", A.model); this.apModels(); } };
@@ -3401,6 +3403,38 @@ atAttrHtml(st) {
     } catch (e) { if (e instanceof NeedConnect) { location.hash = "#connect"; return; } A.err = e.message; }
     finally { if (raf) cancelAnimationFrame(raf); A.busy = false; A.status = ""; this.apDraw(); this.apEstimate(); this.apHistory(); this.apScore(); }
   },
+  // 테마 바구니: 테마 하나를 여러 종목으로 나눠 담는 구성을 조사해 보여 준다(주문은 내지 않는다)
+  async apBasket() {
+    const A = this.ap, th = (A.theme || "").trim();
+    if (!th) return toast("테마를 먼저 적어 주세요", true);
+    if (A.busy) return;
+    A.busy = true; A.bk = null; A.res = null; A.err = ""; A.text = ""; A.used = null; A.src = []; A.status = "테마의 재료를 찾아보는 중";
+    this.apDraw();
+    try {
+      await aiStream({ kind: "basket", mkt: A.m, model: A.model, web_search: true, theme: th }, (ev) => {
+        if (ev.t === "status") { A.status = ev.msg; this.apDraw(); }
+        else if (ev.t === "text") { A.text += ev.text; A.status = "구성하는 중"; }
+        else if (ev.t === "reset") A.text = "";
+        else if (ev.t === "source") A.src.push(ev);
+        else if (ev.t === "basket") A.bk = ev;
+        else if (ev.t === "error") A.err = ev.msg;
+        else if (ev.t === "done") { A.used = ev; aiMeter.clear(); }
+      });
+    } catch (e) { if (e instanceof NeedConnect) { location.hash = "#connect"; return; } A.err = e.message; }
+    finally { A.busy = false; A.status = ""; this.apDraw(); }
+  },
+  basketHtml(b) {
+    const us = b.mkt === "us", P = (n) => (us ? usd(n) : won(Math.round(n)) + "원");
+    return `<section class="card bk"><div class="card-head"><h2>${esc(b.theme)} 바구니</h2><span class="tag ${b.alive ? "" : "warn"}">${b.alive ? "재료 유효" : "재료 약함"}</span></div>
+      ${b.view ? `<div class="small"><b>${esc(b.view)}</b></div>` : ""}
+      ${b.stocks.length ? `<div class="bk-list">${b.stocks.map((x) => `<a class="bk-row" href="#invest/stock?m=${b.mkt}&s=${encodeURIComponent(x.sym)}">
+          <span class="bk-w"><b>${x.w}%</b><i style="height:${Math.min(100, x.w * 2.5).toFixed(0)}%"></i></span>
+          <span class="bk-m"><b>${esc(x.name)}</b><small>${esc(x.role)} · 지금 ${P(x.price)}${x.change_pct == null ? "" : ` <em class="${tone(x.change_pct)}">${pct(x.change_pct, 2)}</em>`}</small>
+            <span>${esc(x.why)}</span>${x.risk ? `<span class="bk-r">위험: ${esc(x.risk)}</span>` : ""}${x.warn ? `<span class="tag warn">${esc(x.warn)}</span>` : ""}</span></a>`).join("")}</div>`
+        : `<div class="empty">담을 만한 종목을 찾지 못했어요</div>`}
+      ${b.risks.length ? `<ul class="at-notes">${b.risks.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+      <div class="tiny">${b.check ? `다시 확인할 때: ${esc(b.check)} · ` : ""}AI가 조사한 구성안이에요. 비중은 참고용이고 주문은 내지 않아요.</div></section>`;
+  },
   apDraw() {
     const A = this.ap, el = $("#apOut");
     if (!el) return;
@@ -3408,7 +3442,7 @@ atAttrHtml(st) {
     const R = A.res, us = (R ? R.mkt : A.m) === "us";
     const P = (n) => n == null ? "-" : us ? usd(n) : won(Math.round(n)) + "원";
     const cash = (() => { const h = memo.get("ihome"); return h && h.account ? (us ? (h.account.us || {}).usd : h.account.orderable) : null; })();
-    el.innerHTML = (A.busy || A.text || R || A.err) ? `<section class="card ap-res">
+    el.innerHTML = (A.busy || A.text || R || A.err || A.bk) ? `<section class="card ap-res">
       ${A.busy ? `<div class="ai-status"><i class="ai-dot"></i><span>${esc(A.status || "")}</span></div>` : ""}
       ${R && R.stance ? `<div class="ap-stance s-${esc(R.stance)}"><b>${esc(R.stance)}</b><span>${esc(R.view || "")}</span></div>` : ""}
       ${R && R.note ? `<div class="notice">${esc(R.note)}</div>` : ""}
@@ -3419,6 +3453,7 @@ atAttrHtml(st) {
       ${A.src.length ? `<details class="ap-src"><summary class="tiny">찾아본 뉴스·자료 ${A.src.length}건</summary>${A.src.map((x) => `<a href="${safeUrl(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>`).join("")}</details>` : ""}
       ${A.used ? meterHTML(A.meter || { fx: A.used.fx, credit: A.used.credit }, A.used) : ""}
     </section>
+    ${A.bk ? this.basketHtml(A.bk) : ""}
     ${R ? (R.picks.length ? R.picks.map((p, i) => {
       const fresh = A.shown ? "" : "fresh";
       const ev = (p.win_prob / 100 * p.target_pct - (1 - p.win_prob / 100) * p.stop_pct).toFixed(2);
@@ -3807,6 +3842,7 @@ atAttrHtml(st) {
         <span class="main"><b>${esc(x.name)}</b><span class="sub">${won(x.qty)}주 · 평균 ${x.market === "us" ? usd(x.avg_price) : won(x.avg_price)} · 현재 ${x.market === "us" ? usd(x.price) : won(x.price)}</span></span>
         <span class="end"><b>${won(x.value)}</b><span class="small ${tone(x.pnl)}" style="font-weight:700">${signed(x.pnl)} (${pct(x.pnl_pct, 1)})</span></span></button>`).join("")
         : `<div class="empty">보유 종목이 없어요</div>`}</div></section>
+      <div id="riskBox">${this.riskHtml(this.riskMemo)}</div>
       <div id="openBox">${this.openHtml(this.openMemo)}</div>
       <div class="sec-title">최근 주문</div>
       <section class="card tight"><div class="list">${d.orders.length ? d.orders.slice(0, 10).map((o) => {
@@ -3817,6 +3853,7 @@ atAttrHtml(st) {
         <span class="end"><b>${won(o.qty)}주</b><span class="tiny">${o.fill_price ? (isUsCode(o.code) ? usd(o.fill_price) + " " : won(o.fill_price) + "원 ") : ""}<span class="tag ${st[1]}">${esc(st[0])}</span></span></span></button>`; }).join("")
         : `<div class="empty">아직 주문이 없어요</div>`}</div></section>`;
     this.loadOpen();
+    this.loadRisk();
     fab("주문", () => orderSheet({}));
     box.onclick = async (e) => {
       const cx = e.target.closest("[data-cancel]");
@@ -3850,6 +3887,31 @@ atAttrHtml(st) {
     };
   },
 
+  // ---------- 계좌 전체 위험(읽기 전용) ----------
+  riskMemo: null, riskAt: 0,
+  async loadRisk() {
+    if (Date.now() - this.riskAt < 120000) return;          // 2분에 한 번만(일봉을 여러 종목 받는다)
+    this.riskAt = Date.now();
+    try {
+      this.riskMemo = await GET("/api/risk");
+      if (investState.tab === "trade" && $("#riskBox")) $("#riskBox").innerHTML = this.riskHtml(this.riskMemo);
+    } catch (e) { /* 다음 새로고침에 다시 */ }
+  },
+  riskHtml(r) {
+    if (!r || !r.configured || !r.n) return "";
+    const bar = (w) => `<span class="rk-bar"><i style="width:${Math.min(100, w).toFixed(1)}%"></i></span>`;
+    return `<div class="sec-title">계좌 전체 위험</div>
+      <section class="card tight rk"><div class="sc-kpi"><div><span>보통 하루 흔들림</span><b>${r.day_vol == null ? "–" : "±" + r.day_vol + "%"}</b></div>
+          <div><span>나쁜 날 하루 손실</span><b class="down">${r.day_risk == null ? "–" : "−" + won(r.day_risk)}</b></div>
+          <div><span>지수 −5%면</span><b class="down">${r.stress ? "−" + won(Math.abs(r.stress.loss)) : "–"}</b></div></div>
+        ${r.flags.length ? `<ul class="at-notes">${r.flags.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : ""}
+        <div class="rk-h">종목 비중</div>
+        <div class="rk-list">${r.top.map((x) => `<div><b>${esc(x.name)}</b>${bar(x.w)}<span>${x.w}%</span><small>${x.sector ? esc(x.sector) + " · " : ""}${x.vol == null ? "일봉 자료 없음" : "하루 ±" + x.vol + "%"}${x.beta == null ? "" : " · 지수 민감도 " + x.beta}</small></div>`).join("")}</div>
+        <div class="rk-h">업종 비중</div>
+        <div class="rk-list">${r.sectors.map((x) => `<div><b>${esc(x.name)}</b>${bar(x.w)}<span>${x.w}%</span></div>`).join("")}</div>
+        ${r.pairs.length ? `<div class="rk-h">같이 움직이는 종목</div><div class="tiny">${r.pairs.map((p) => `${esc(p.a)}–${esc(p.b)} ${p.corr}`).join(" · ")}</div>` : ""}
+        <div class="tiny">최근 ${r.days}거래일의 일간 등락으로 셈한 어림값이에요. '나쁜 날'은 스무 날에 한 번쯤 넘는 수준이고, 실제 손실은 더 클 수 있어요.${r.cover < 100 ? ` 자료가 있는 종목(비중 ${r.cover}%)만 셈했어요.` : ""}${r.beta == null ? "" : ` 계좌 전체의 지수 민감도는 ${r.beta}(지수가 1% 움직일 때 약 ${r.beta}%).`}</div></section>`;
+  },
   // ---------- 단타 ----------
   openMemo: null,
   async loadOpen() {
@@ -7006,6 +7068,12 @@ pages.settings = {
         <label class="field">인증키<input id="dartKey" type="password" placeholder="40자리 인증키" autocomplete="off" autocapitalize="off"></label>
         <div class="tiny" id="dartNote"></div>
         <div class="btns"><button class="btn dark" id="dartSave">저장하고 확인</button></div>
+        <details><summary class="tiny">검색량 추이도 붙이기(선택: 네이버 데이터랩 키) <span id="nvTag"></span></summary>
+          <div class="tiny">네이버 개발자센터에서 '데이터랩(검색어 트렌드)' 앱을 만들어 받은 값을 넣으면, 스윙·장기 후보에 종목 이름 검색량이 최근 7일에 얼마나 늘었는지 붙여요. 검색량이 실제로 도움이 되는지는 추천 성적에서 따로 재요.</div>
+          <div class="fields"><label class="field">Client ID<input id="nvId" autocomplete="off" autocapitalize="off"></label>
+            <label class="field">Client Secret<input id="nvSec" type="password" autocomplete="off" autocapitalize="off"></label></div>
+          <div class="tiny" id="nvNote"></div>
+          <div class="btns"><button class="btn" id="nvSave">저장하고 확인</button></div></details>
       </section>
       <section class="card tight"><div class="card-head" style="padding-top:8.5px"><h2>최근 사용</h2></div><div class="list">
         ${st.recent.length ? st.recent.map((r) => `<div class="item"><span class="ico">${esc({ stock: "종목", portfolio: "점검", review: "복기", sweep: "훑기", chat: "질문", test: "확인", pick: "추천", pickw: "중기", learn: "복기", divplan: "배당" }[r.kind] || r.kind)}</span>
@@ -7020,7 +7088,18 @@ pages.settings = {
       $("#dartNote").textContent = !s.configured ? "" : n.ok ? `최근 4일 공시 ${n.n}건 · 상장 종목 ${n.codes}개 (${String(n.at || "").slice(11, 16)} 기준)` : n.error || "";
       if (s.configured) $("#dartKey").placeholder = "저장돼 있어요(바꿀 때만 입력)";
     };
-    api("GET", "/api/dart").then(dartShow).catch(() => {});
+    const nvShow = (t) => {
+      const n = (t || {}).note || {};
+      $("#nvTag").textContent = !t || !t.configured ? "" : n.ok === false ? "· 오류" : "· 켜짐";
+      $("#nvNote").textContent = t && t.configured && n.ok === false ? n.error || "" : t && t.sample && t.sample["삼성전자"] != null ? `확인: 삼성전자 검색량 ${t.sample["삼성전자"]}배` : "";
+    };
+    api("GET", "/api/dart").then((s) => { dartShow(s); nvShow(s.trend); }).catch(() => {});
+    $("#nvSave").onclick = async () => {
+      const id = $("#nvId").value.trim(), sec = $("#nvSec").value.trim();
+      if (id && sec) await run(() => api("PUT", "/api/settings", { naver: { client_id: id, client_secret: sec } }), "저장했어요");
+      nvShow(await api("POST", "/api/trend/test"));
+      $("#nvSec").value = "";
+    };
     $("#dartSave").onclick = async () => {
       const k = $("#dartKey").value.trim();
       if (k) await run(() => api("PUT", "/api/settings", { dart: { api_key: k } }), "저장했어요");

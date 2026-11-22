@@ -863,10 +863,20 @@ def create_app(rt, updater=None):
         return app.response_class(json.dumps(rt.market.diag(), ensure_ascii=False, default=str, indent=1),
                                   mimetype="application/json")
 
+    # ---------- 계좌 전체 위험 보기(읽기 전용) ----------
+    @app.get("/api/risk")
+    def risk_view():
+        return jsonify(rt.riskview.snapshot())
+
     # ---------- 전자공시(DART): 연결 상태 ----------
     @app.get("/api/dart")
     def dart_status():
-        return jsonify(rt.dart.status(fresh=request.args.get("fresh") == "1"))
+        return jsonify(dict(rt.dart.status(fresh=request.args.get("fresh") == "1"), trend=rt.trend.status()))
+
+    @app.post("/api/trend/test")
+    def trend_test():
+        r = rt.trend.ratios(["삼성전자"])
+        return jsonify(dict(rt.trend.status(), sample=r))
 
     # ---------- 장 시작 전 준비: 넓게 훑기 · 리서치 메모 ----------
     @app.get("/api/prep")

@@ -63,6 +63,10 @@ class Runtime:
         self.health = Health(db)
         from .album import Album
         self.album = Album(db)
+        from .riskview import RiskView
+        self.riskview = RiskView(self)  # 계좌 전체 위험 보기(읽기 전용)
+        from .trend import Trend
+        self.trend = Trend(self)        # 검색량 추이(사용자가 네이버 키를 넣었을 때만)
         from .dart import Dart
         self.dart = Dart(self)          # 전자공시 제목(사용자가 인증키를 넣었을 때만)
         from .prep import Prep

@@ -427,6 +427,43 @@ class Market:
         except Exception:
             return {}
 
+    def kr_flow(self, code):
+        """수급: 외국인·기관의 최근 5·20거래일 순매수(억원)와 연속 순매수 일수(순매도면 음수). 못 받으면 None.
+        키움 ka10059(금액 기준, 백만원)를 종목마다 3시간에 한 번만 받는다."""
+        cl = self.kr_client()
+        if cl is None:
+            return None
+
+        def n(v):
+            t = str(v or "").replace(",", "").replace("+", "").strip()
+            neg = t.startswith("-")
+            try:
+                return (-1 if neg else 1) * float(t.lstrip("-") or 0)
+            except ValueError:
+                return 0.0
+
+        def load():
+            d = cl.call("investor", {"dt": datetime.now().strftime("%Y%m%d"), "stk_cd": code, "amt_qty_tp": "1", "trde_tp": "0", "unit_tp": "1000"})
+            rows = sorted((r for r in (d.get("stk_invsr_orgn") or []) if r.get("dt")), key=lambda r: str(r["dt"]), reverse=True)[:20]
+            if not rows:
+                return None
+            f, o = [n(r.get("frgnr_invsr")) for r in rows], [n(r.get("orgn")) for r in rows]
+
+            def run(xs):
+                k = 0
+                for v in xs:
+                    if v == 0 or (k and (v > 0) != (k > 0)):
+                        break
+                    k += 1 if v > 0 else -1
+                return k
+            eok = lambda xs: round(sum(xs) / 100, 1)          # 백만원 → 억원
+            return {"외국인5일": eok(f[:5]), "기관5일": eok(o[:5]), "외국인20일": eok(f), "기관20일": eok(o),
+                    "외국인연속일": run(f), "기관연속일": run(o), "기준일": str(rows[0]["dt"]), "일수": len(rows)}
+        try:
+            return self.cache.get(("flow", code), 3 * 3600, load, stale=24 * 3600)
+        except Exception:
+            return None
+
     def junk(self, mkt, sym, name=""):
         """자동매매에서 뺄 종목이면 그 이유, 아니면 빈 글."""
         from .trading.universe import junk_reason
@@ -606,6 +643,8 @@ class Market:
                          ("국내 일봉", lambda: len(self.kr_chart("005930", "1m")["points"])),
                          ("종목 목록 수", lambda: len(self.kr_master())),
                          ("종목 목록 경고·업종 정보", self._master_check),
+                         ("수급(외국인·기관 순매수, 삼성전자)", lambda: self.kr_flow("005930") or "받지 못함"),
+                         ("넓게 훑기 · 장 시작 전 리서치", lambda: self.rt.prep.status("kr") if getattr(self.rt, "prep", None) else "없음"),
                          ("미국 현재가(AAPL)", lambda: self.yh_quote("AAPL")),
                          ("미국 현재가 키움(AAPL)", lambda: self.kr_client().us_quote("AAPL")),
                          ("미국 잔고 키움", lambda: self.kr_client().us_holdings()),

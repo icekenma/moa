@@ -183,7 +183,8 @@ class AI:
 
     # 화면 공통 비용 표시: 예상 비용 + 현재 잔액
     KIND_TOK = {"stock": (9000, 1500), "portfolio": (7000, 1600), "review": (9000, 1500), "sweep": (7000, 1500),
-                "chat": (6000, 1200), "pick": (16000, 2200), "pickw": (18000, 2600), "pickq": (4500, 650), "learn": (14000, 1500), "divplan": (15000, 2600), "dca": (5000, 1500), "auto": (12000, 1800), "test": (30, 10)}
+                "chat": (6000, 1200), "pick": (16000, 2200), "pickw": (18000, 2600), "pickq": (4500, 650), "learn": (14000, 1500), "divplan": (15000, 2600), "dca": (5000, 1500), "auto": (12000, 1800), "test": (30, 10),
+                "brief": (3000, 900), "hold": (2500, 600)}
 
     def fx(self):
         try:
@@ -319,6 +320,10 @@ class AI:
                 return self.rt.dividend.dca_ai_context()
             except ValueError as e:
                 raise AIError(str(e))
+        if kind == "brief":
+            return self.rt.prep.brief_context(d)
+        if kind == "hold":
+            return self.rt.autotrade.hold_context(d)
         if kind == "auto":
             try:
                 return self.rt.autotrade.review_context(d)
@@ -376,6 +381,12 @@ class AI:
             from .dividend import DIV_SYSTEM
         body = {"model": model, "max_tokens": 1500 if lite else 9000 if pick else 8000 if div else 4000 if kind == "auto" else 2500,
                 "system": system_prompt(hzn, lite) if pick else DIV_SYSTEM if div else SYSTEM, "messages": messages, "stream": True}
+        if kind == "brief":
+            from .prep import BRIEF_SYSTEM
+            body.update(system=BRIEF_SYSTEM, max_tokens=1800)
+        elif kind == "hold":
+            from .autotrade import HOLD_SYSTEM
+            body.update(system=HOLD_SYSTEM, max_tokens=1500)
         web = d["web_search"] if isinstance(d.get("web_search"), bool) else c.get("web_search", True)
         if web and not lite and kind not in ("sweep", "learn", "dca", "auto"):    # 적립 점검은 앱 자료만으로 충분해 검색을 쓰지 않는다
             body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": (3 if hzn == "day" else 6) if pick else 4,

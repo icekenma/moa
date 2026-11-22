@@ -63,6 +63,8 @@ class Runtime:
         self.health = Health(db)
         from .album import Album
         self.album = Album(db)
+        from .prep import Prep
+        self.prep = Prep(self)          # 넓게 훑기 · 장 시작 전 리서치(돌리는 것은 run.py에서 시작)
         self.ship = None                       # run.py가 붙인다(저장소·data 폴더가 있어야 해서)
         self.feed = None
         self.brokers = {}

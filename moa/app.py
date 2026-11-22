@@ -863,6 +863,24 @@ def create_app(rt, updater=None):
         return app.response_class(json.dumps(rt.market.diag(), ensure_ascii=False, default=str, indent=1),
                                   mimetype="application/json")
 
+    # ---------- 장 시작 전 준비: 넓게 훑기 · 리서치 메모 ----------
+    @app.get("/api/prep")
+    def prep_status():
+        return jsonify(rt.prep.status("us" if request.args.get("mkt") == "us" else "kr"))
+
+    @app.post("/api/prep/scan")
+    def prep_scan():
+        if rt.market.kr_client() is None:
+            return jsonify(error="키움 계좌를 연결해야 훑을 수 있어요"), 400
+        started = rt.prep._spawn("scan", lambda: rt.prep.scan("kr"))
+        return jsonify(ok=True, started=started)
+
+    @app.put("/api/prep")
+    def prep_conf():
+        d = request.get_json(silent=True) or {}
+        rt.settings.update({"prep": {k: bool(d[k]) for k in ("scan", "brief") if k in d}})
+        return jsonify(rt.prep.status("kr"))
+
     # ---------- 노트북의 공인 IP(키움 IP 등록용) ----------
     @app.get("/api/net/ip")
     def net_ip():

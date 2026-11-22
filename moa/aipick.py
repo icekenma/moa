@@ -34,6 +34,7 @@ PICK_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 당
   "entry_type":"limit|market","entry_price":숫자(지정가 추천가, 현재가 근처),
   "target_pct":숫자,"stop_pct":숫자(양수),"trail_pct":숫자 또는 0,
   "exit_by":"HH:MM(한국 시간, 이때까지 안 닿으면 정리)","weight_pct":주문가능금액 중 권장 비중(5~40),
+  "news_score":-2~2 정수(검색으로 확인한 뉴스·공시가 이 종목 주가에 주는 영향. -2 큰 악재, -1 악재, 0 없음·중립, 1 호재, 2 큰 호재. 확인 못 했으면 0),"news":"그 뉴스·공시 한 줄(없으면 빈 문자열)",
   "reasons":["근거1","근거2","근거3"],"risks":["위험1","위험2"]}]}
 picks는 최소 1개·최대 3개, 기대수익(승률×목표 − (1−승률)×손절)이 큰 순서로."""
 
@@ -79,6 +80,7 @@ SWING_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 �
   "hold_days":예상 보유 거래일(1~<DAYS>),"weight_pct":주문가능금액 중 권장 비중(5~30),
   "theme":"테마 이름(짧게)","catalyst":"재료 한 줄","catalyst_type":"정책|실적|수급|이벤트|업황|기술적",
   "catalyst_date":"재료가 확인될 날짜나 시기(모르면 빈 문자열)",
+  "news_score":-2~2 정수(검색으로 확인한 뉴스·공시가 이 종목 주가에 주는 영향. -2 큰 악재, -1 악재, 0 없음·중립, 1 호재, 2 큰 호재. 확인 못 했으면 0),"news":"그 뉴스·공시 한 줄(없으면 빈 문자열)",
   "reasons":["근거1","근거2","근거3"],"risks":["위험1","위험2"]}]}
 picks는 최소 1개·최대 3개, 기대수익(승률×목표 − (1−승률)×손절)이 큰 순서로."""
 
@@ -395,6 +397,10 @@ class AIPick:
                     row["호가_매수잔량/매도잔량"] = round(b["tot_bid"] / b["tot_ask"], 2) if b.get("tot_ask") else None
                 except Exception:
                     pass
+            if mkt == "kr":
+                fl = rt.market.kr_flow(it["sym"])
+                if fl:
+                    row["수급(억원)"] = fl
             sc = self.learn_score(_feat_of(row, ss), "day", mkt)
             if sc is not None:
                 row["과거성적_가산점"] = sc
@@ -419,7 +425,9 @@ class AIPick:
                     "후보": _table(deep, (("sym", lambda r: r["sym"]), ("이름", lambda r: r["name"]), ("현재가", lambda r: r["현재가"]), ("등락률%", lambda r: r.get("등락률%")),
                                          ("시가대비%", f("시가대비%")), ("VWAP대비%", f("VWAP대비%")), ("고점대비%", f("고점대비%")), ("저점대비%", f("저점대비%")),
                                          ("최근30분%", f("최근30분%")), ("최근30분_거래량배수", f("최근30분_거래량배수")),
-                                         ("호가_매수/매도잔량", lambda r: r.get("호가_매수잔량/매도잔량")), ("과거성적_가산점", lambda r: r.get("과거성적_가산점"))))}
+                                         ("호가_매수/매도잔량", lambda r: r.get("호가_매수잔량/매도잔량")),
+                                         ("외국인5일(억)", lambda r: (r.get("수급(억원)") or {}).get("외국인5일")), ("기관5일(억)", lambda r: (r.get("수급(억원)") or {}).get("기관5일")),
+                                         ("과거성적_가산점", lambda r: r.get("과거성적_가산점"))))}
             memo = self.memo(mkt, "day")
             if memo:
                 data["앞선 정밀 추천 메모"] = memo
@@ -438,8 +446,10 @@ class AIPick:
                 "후보_상세(오늘 흐름)": deep, "실시간 순위": rank_dump}
         if dropped:
             data["앱이 뺀 종목(추천하지 마)"] = dropped[:20]
+        self._brief_into(data, mkt)
         ask = (f"지금({ss['kst']} 한국시간) {'국내' if mkt == 'kr' else '미국'} 시장에서 바로 매수해 오늘 안에 수익으로 끝낼 "
-               "확률이 가장 높은 종목을 골라 줘. 후보_상세를 중심으로 판단하고, 필요하면 오늘 뉴스·공시를 확인해.")
+               "확률이 가장 높은 종목을 골라 줘. 후보_상세를 중심으로 판단하고, 필요하면 오늘 뉴스·공시를 확인해."
+               + (" '수급(억원)'은 외국인·기관의 최근 순매수야(연속일이 음수면 연속 순매도)." if mkt == "kr" else ""))
         if ex:
             data["이미 다룬 종목(빼고 골라)"] = sorted(ex)[:30]
             ask += " '이미 다룬 종목'은 이미 샀거나 오늘 거래했으니 빼고 골라."
@@ -450,6 +460,15 @@ class AIPick:
         if not ss["open"]:
             ask += " (지금은 정규장이 아니야. 다음 정규장 시작 직후 기준으로 판단하고, 그 점을 첫 줄에 밝혀.)"
         return f"AI 종목 추천({'국내' if mkt == 'kr' else '미국'})", ask, data
+
+    def _brief_into(self, data, mkt):
+        """오늘 장 시작 전에 받아 둔 리서치 메모가 있으면 정밀 추천 자료에 넣는다."""
+        try:
+            b = self.rt.prep.brief_get(mkt) if getattr(self.rt, "prep", None) else None
+        except Exception:
+            b = None
+        if b and b.get("text"):
+            data["장 시작 전 리서치 메모(오늘 아침, 참고)"] = b["text"][:1500]
 
     def memo(self, mkt, h):
         """가장 최근 정밀 추천(당일은 오늘, 중기는 최근 4일)이 찾은 시장 판단과 재료. 빠른 재추천이 뉴스를 다시 찾지 않고 이어받는다."""
@@ -534,6 +553,22 @@ class AIPick:
                 seen.add(it["sym"])
                 cand.append(dict(it, src=src_name[k]))
                 n += 1
+        if mkt == "kr" and getattr(rt, "prep", None):      # 장이 끝난 뒤 넓게 훑어 고른 종목도 후보에(최대 6)
+            try:
+                n = 0
+                for r in rt.prep.scan_latest("kr")[1]:
+                    if n >= 6:
+                        break
+                    if r["sym"] in seen or str(r["sym"]).upper() in ex or rt.market.junk("kr", r["sym"], r["name"]):
+                        continue
+                    q = self.quote(mkt, r["sym"])
+                    if not q.get("price") or (cap and q["price"] > cap) or (q.get("change_pct") or 0) >= 29.5:
+                        continue
+                    seen.add(r["sym"])
+                    cand.append({"sym": r["sym"], "name": r["name"] or q.get("name") or r["sym"], "price": q["price"], "change_pct": q.get("change_pct"), "src": "넓게 훑기", "scan": r["score"]})
+                    n += 1
+            except Exception:
+                pass
         try:  # 내 관심종목도 후보에
             for sym in (rt.market.watch().get(mkt) or [])[:5]:
                 if sym not in seen and str(sym).upper() not in ex:
@@ -546,12 +581,18 @@ class AIPick:
         ix = self.index_state(mkt)
         self._idx[mkt] = ix
         deep = []
-        for it in cand[:20]:
+        for it in cand[:26]:
             row = {"sym": it["sym"], "name": it["name"], "현재가": it["price"], "등락률%": it.get("change_pct"), "출처": it["src"]}
             try:
                 row["일봉"] = daily_features(inv.candles(mkt, it["sym"], "d").get("bars"))
             except Exception as e:
                 row["일봉"] = f"없음({e})"
+            if mkt == "kr":
+                fl = rt.market.kr_flow(it["sym"])
+                if fl:
+                    row["수급(억원)"] = fl
+            if it.get("scan") is not None:
+                row["훑기_점수"] = it["scan"]
             sc = self.learn_score(_feat_swing(row, {}, ss, ix, True), h, mkt)
             if sc is not None:
                 row["과거성적_가산점"] = sc
@@ -576,7 +617,9 @@ class AIPick:
             data = {"시장": "국내(KRX)" if mkt == "kr" else "미국", "기준시각(한국)": ss["kst"], "보유 기간": f"약 {H['days']}거래일({H['label']})",
                     "지수": idx, "지수_추세(일봉)": ix,
                     "후보": _table(deep, [("sym", lambda r: r["sym"]), ("이름", lambda r: r["name"]), ("현재가", lambda r: r["현재가"]), ("등락률%", lambda r: r.get("등락률%"))]
-                                   + [(k, f(k)) for k in keys[:12]] + [("과거성적_가산점", lambda r: r.get("과거성적_가산점"))])}
+                                   + [(k, f(k)) for k in keys[:12]]
+                                   + [("외국인5일(억)", lambda r: (r.get("수급(억원)") or {}).get("외국인5일")), ("기관5일(억)", lambda r: (r.get("수급(억원)") or {}).get("기관5일")),
+                                      ("과거성적_가산점", lambda r: r.get("과거성적_가산점"))])}
             memo = self.memo(mkt, h)
             if memo:
                 data["앞선 정밀 추천 메모"] = memo
@@ -596,10 +639,12 @@ class AIPick:
                 "보유 기간": f"약 {H['days']}거래일({H['label']})", "정규장_진행중": ss["open"], "지수": idx, "지수_추세(일봉)": ix,
                 "주문가능금액": cash, "통화": "원" if mkt == "kr" else "달러", "계좌(참고)": acct,
                 "후보_상세(일봉 흐름)": deep, "실시간 순위": rank_dump}
+        self._brief_into(data, mkt)
         ask = (f"지금({ss['kst']} 한국시간) {where} 시장에서 매수해 앞으로 약 {H['days']}거래일({H['label']}) 들고 갈 종목을 골라 줘. "
                f"먼저 앞으로 {H['label']} 안에 주가를 움직일 재료(정책·예산·실적·수주·일정이 정해진 이벤트·수급)를 찾고, 그 수혜 종목을 골라. "
                "후보_상세는 지금 돈이 몰리는 종목일 뿐이니, 재료가 더 좋은 종목이 있으면 후보 밖에서 골라도 돼. "
-               "이미 며칠 급등해 재료가 가격에 반영된 종목은 감점해.")
+               "이미 며칠 급등해 재료가 가격에 반영된 종목은 감점해."
+               + (" '수급(억원)'은 외국인·기관의 최근 순매수야(연속일이 음수면 연속 순매도). 출처가 '넓게 훑기'인 후보는 앱이 장이 끝난 뒤 거래가 많은 종목 수백 개를 일봉·수급으로 훑어 고른 것이야." if mkt == "kr" else ""))
         if ex:
             data["이미 다룬 종목(빼고 골라)"] = sorted(ex)[:30]
             ask += " '이미 다룬 종목'은 이미 샀거나 오늘 거래했으니 빼고 골라."
@@ -708,6 +753,12 @@ class AIPick:
                      "weight_pct": float(p.get("weight_pct") or 10),
                      "reasons": [str(r) for r in (p.get("reasons") or [])][:4],
                      "risks": [str(r) for r in (p.get("risks") or [])][:3]}
+                try:
+                    ns = None if lite or p.get("news_score") is None else max(-2, min(2, int(round(float(p.get("news_score"))))))
+                except (TypeError, ValueError):
+                    ns = None
+                if ns is not None:
+                    x.update(news_score=ns, news=str(p.get("news") or "")[:140])
                 if swing:
                     row = cand
                     if row is None:  # 후보 밖(뉴스에서 찾은 종목): 일봉을 받아 특징을 붙인다
@@ -725,6 +776,8 @@ class AIPick:
                     x["feat"] = _feat_swing(row, x, ss, ix, cand is not None)
                 else:
                     x.update(exit_by=str(p.get("exit_by") or "")[:5], feat=_feat_of(cand or {}, ss))
+                if ns is not None and isinstance(x.get("feat"), dict):
+                    x["feat"]["news"] = ns                 # 뉴스 점수별 성적을 나중에 가른다
                 picks.append(x)
             except Exception:
                 continue
@@ -1491,7 +1544,24 @@ def _feat_of(c, ss):
     f = c.get("오늘_5분봉") if isinstance(c.get("오늘_5분봉"), dict) else {}
     return {"chg": c.get("등락률%"), "vwap": f.get("VWAP대비%"), "hi": f.get("고점대비%"), "m30": f.get("최근30분%"),
             "volx": f.get("최근30분_거래량배수"), "ob": c.get("호가_매수잔량/매도잔량"),
-            "left": ss.get("left_min"), "open": bool(ss.get("open"))}
+            "left": ss.get("left_min"), "open": bool(ss.get("open")), **_flow_feat(c)}
+
+
+def _flow_feat(c):
+    fl = c.get("수급(억원)") if isinstance(c.get("수급(억원)"), dict) else None
+    return {"ff5": fl.get("외국인5일"), "fo5": fl.get("기관5일")} if fl else {}
+
+
+def _flow_bucket(r):
+    a, b = r["f"].get("ff5"), r["f"].get("fo5")
+    if a is None or b is None:
+        return None
+    return "외국인·기관 둘 다 순매수" if a > 0 and b > 0 else "둘 다 순매도" if a < 0 and b < 0 else "엇갈림"
+
+
+def _news_bucket(r):
+    v = r["f"].get("news")
+    return None if v is None else "악재" if v < 0 else "없음·중립" if v == 0 else "호재" if v == 1 else "큰 호재"
 
 
 def _feat_swing(c, x, ss, ix, in_cand):
@@ -1500,7 +1570,7 @@ def _feat_swing(c, x, ss, ix, in_cand):
     return {"chg": c.get("등락률%"), "r5": f.get("5일%"), "r20": f.get("20일%"), "ma20": f.get("20일선대비%"), "ma60": f.get("60일선대비%"),
             "hi60": f.get("60일고점대비%"), "volx5": f.get("5일거래량배수"), "atr": f.get("하루변동폭%"), "streak": f.get("연속상승일"),
             "idx20": (ix or {}).get("20일선대비%"), "idx5": (ix or {}).get("5일%"), "cand": bool(in_cand),
-            "cat": x.get("catalyst_type"), "open": bool(ss.get("open"))}
+            "cat": x.get("catalyst_type"), "open": bool(ss.get("open")), "scan": c.get("출처") == "넓게 훑기", **_flow_feat(c)}
 
 
 GRADE_V = 3  # 채점 방식 버전(바뀌면 최근 추천을 다시 채점)
@@ -1582,6 +1652,8 @@ def _defs(h):
             ("고점 대비", lambda r: None if r["f"].get("hi") is None else ("고점 근처(−1% 안)" if r["f"]["hi"] > -1 else "고점에서 밀림"), True),
             ("호가 잔량", lambda r: None if not r["f"].get("ob") else ("매수 우위" if r["f"]["ob"] >= 1 else "매도 우위"), True),
             ("추천 시점", lambda r: None if "open" not in r["f"] else ("정규장 중" if r["f"]["open"] else "정규장 밖"), True),
+            ("수급(5일)", _flow_bucket, True),
+            ("뉴스 점수", _news_bucket, False),
             ("남은 장 시간", lambda r: None if not r["f"].get("open") or r["f"].get("left") is None else ("2시간 이상" if r["f"]["left"] >= 120 else "2시간 미만"), True),
             ("목표 크기", lambda r: None if not r.get("target_pct") else "2% 이하" if r["target_pct"] <= 2 else "2~3%" if r["target_pct"] <= 3 else "3% 초과", False),
             ("AI 태도", lambda r: None if "stance" not in r else "지표 자동 선정" if r.get("auto") else (r.get("stance") or "-"), False),
@@ -1591,7 +1663,9 @@ def _defs(h):
         ]
     return [
         ("재료 유형", lambda r: r["f"].get("cat") or None, True),
-        ("종목 출처", lambda r: None if "cand" not in r["f"] else ("순위 후보 안" if r["f"]["cand"] else "AI가 뉴스에서 찾음"), True),
+        ("종목 출처", lambda r: None if "cand" not in r["f"] else "넓게 훑기 후보" if r["f"].get("scan") else ("순위 후보 안" if r["f"]["cand"] else "AI가 뉴스에서 찾음"), True),
+        ("수급(5일)", _flow_bucket, True),
+        ("뉴스 점수", _news_bucket, False),
         ("20일선 위치", _split("ma20", [0], ["20일선 아래", "20일선 위"]), True),
         ("60일선 위치", _split("ma60", [0], ["60일선 아래", "60일선 위"]), True),
         ("최근 5일 등락", _split("r5", [0, 10, 25], ["내림", "0~10% 오름", "10~25% 오름", "25% 넘게 급등"]), True),

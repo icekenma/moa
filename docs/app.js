@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261122.2155";
+const UI_VERSION = "261122.2206";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2641,6 +2641,24 @@ atAttrHtml(st) {
     const bench = b && b.run_pct != null ? `<div class="tiny">같은 기간(${esc(b.since)}부터 ${b.days}거래일) ${esc(b.name)}를 그냥 들고 있었다면 <b class="${tone(b.idx_pct)}">${pct(b.idx_pct, 2)}</b>, 이 자동매매의 확정 손익은 굴리는 돈 대비 <b class="${tone(b.run_pct)}">${pct(b.run_pct, 2)}</b>예요(AI 비용 전).</div>` : "";
     return `<section class="card tight"><div class="card-head" style="padding-top:8px"><h2>수익이 어디서 왔나</h2></div>${part}${bench}</section>`;
   },
+  atPrepHtml(d) {
+    // 장 시작 전 준비: 넓게 훑기(국내) · 장 시작 전 리서치 메모 · 보유 종목 재료 확인
+    const P = d.prep;
+    if (!P) return "";
+    const sc = P.scan || {}, b = P.brief, kr = d.run.mkt === "kr", cf = P.conf || {};
+    const num = (v) => (v == null ? "–" : (v > 0 ? "+" : "") + Number(v).toLocaleString("ko-KR"));
+    const scan = !kr ? "" : `<div class="at-prep-h"><b>넓게 훑기</b><span class="tiny">${sc.busy ? esc((sc.note || {}).msg || "훑는 중") : sc.day ? `${esc(sc.day.slice(5))} 장 마감 기준${sc.fresh ? "" : " · 오래돼서 쓰지 않아요"}` : "아직 없어요"}</span>
+        <button type="button" class="btn sm" data-prep="scan" ${sc.busy ? "disabled" : ""}>${sc.busy ? "훑는 중" : "지금 훑기"}</button></div>
+      ${(sc.top || []).length ? `<details class="at-more"><summary>상위 ${sc.top.length}종목 보기</summary><div class="at-prep-t">${sc.top.map((x) => `<div><span>${x.rank}</span><b>${esc(x.name || x.sym)}</b><span>점수 ${x.score}</span><span>20일 ${pct(x.r20, 1)}</span><span>외국인 ${num(x.f5)}억 · 기관 ${num(x.o5)}억</span></div>`).join("")}</div></details>` : ""}
+      <div class="tiny">장이 끝나면 거래대금이 큰 종목 200개의 일봉과 수급을 훑어, 위쪽 종목을 스윙·장기 추천 후보에 6개까지 보태요. 점수는 어림값이라 추천 성적의 '종목 출처'에서 따로 재요.</div>`;
+    const brief = `<div class="at-prep-h"><b>장 시작 전 리서치</b><span class="tiny">${P.brief_busy ? "받는 중" : !cf.brief ? "꺼 둠" : b && b.today ? `${esc(b.ts.slice(11, 16))} 받음 · $${(b.usd || 0).toFixed(3)}` : "오늘은 아직 없어요"}</span>
+        <button type="button" class="btn sm" data-prep="brief" data-on="${cf.brief ? 1 : 0}">${cf.brief ? "끄기" : "켜기"}</button></div>
+      ${b && b.text ? `<details class="at-more"${b.today ? " open" : ""}><summary>${b.today ? "오늘" : esc(b.day.slice(5))} 메모 보기</summary><div class="ai-ans">${mdLite(b.text)}</div></details>` : ""}
+      <div class="tiny">자동매매가 도는 시장만, 장이 열리기 30~90분 전에 하루 한 번 AI가 밤사이 뉴스·일정을 찾아 메모를 남기고, 그날 정밀 추천이 함께 읽어요. 주문은 내지 않아요.</div>`;
+    const hold = (P.hold || []).length ? `<div class="at-prep-h"><b>보유 종목 재료 확인</b><span class="tiny">오늘</span></div>
+      <div class="at-prep-t">${P.hold.map((x) => `<div><b>${esc(x.sym)}</b><span class="tag ${x.verdict === "무효" ? "warn" : ""}">${esc(x.verdict)}</span><span>${esc(x.why || "")}</span></div>`).join("")}</div>` : "";
+    return `<section class="card tight at-prep"><div class="card-head" style="padding-top:8px"><h2>장 시작 전 준비</h2></div>${scan}${brief}${hold}</section>`;
+  },
   atSlipHtml(st) {
     // 체결 품질: 사기로·팔기로 정했을 때 본 값과 실제로 체결된 값의 차이
     const s = st.slip || {};
@@ -2855,7 +2873,7 @@ atAttrHtml(st) {
           ${sz.warm ? `<span class="tag">검증 단계 ×${sz.warm_mult} · ${sz.warm_left}건 남음</span>` : ""}
           ${sz.skip_watch ? `<span class="tag">관망이면 안 삼</span>` : `<span class="tag">관망이면 ×${sz.watch_mult}</span>`}
           ${sz.min_one ? `<span class="tag">모의: 모자라도 1주</span>` : ""}
-          ${sz.scale_in ? `<span class="tag y">분할 매수: 확신만큼 먼저, 오르면 나머지</span>` : ""}${sz.vol_stop ? `<span class="tag y">흔들림 맞춤 손절</span>` : ""}
+          ${sz.scale_in ? `<span class="tag y">분할 매수: 확신만큼 먼저, 오르면 나머지</span>` : ""}${sz.vol_stop ? `<span class="tag y">흔들림 맞춤 손절</span>` : ""}${sz.hold_watch ? `<span class="tag y">재료 감시: 무효면 정리</span>` : ""}
           ${sz.risk_pct ? `<span class="tag y">손절하면 굴리는 돈의 ${sz.risk_pct}%만 잃게</span>` : ""}${sz.edge_size ? `<span class="tag y">확신만큼 0.5~1.5배</span>` : ""}
           ${sz.group_max ? `<span class="tag y">같은 업종·테마 ${sz.group_max}종목까지</span>` : ""}${sz.corr_max ? `<span class="tag y">같이 움직이는 종목 제외</span>` : ""}</div>
         <div class="fl-facts"><span>익절·손절 폭 = AI가 정한 폭 × ${sz.exit_mult}(최대 +${sz.tp_cap}% / −${sz.sl_cap}%)</span><span>남은 현금 ${M(sz.cash)}</span></div></div>`;
@@ -2938,6 +2956,7 @@ atAttrHtml(st) {
         </section>
         ${this.atAttrHtml(d.stats)}
         ${this.atSlipHtml(d.stats)}
+        ${this.atPrepHtml(d)}
         ${(d.stats.groups || []).filter((g) => g.rows.length > 1 || g.label === "파는 사유").map((g) => `<section class="card tight"><div class="card-head" style="padding-top:8px"><h2>${esc(g.label)}별</h2></div>
           <div class="at-tbl"><div class="at-tr at-th"><span></span><span>거래</span><span>승률</span><span>평균</span></div>${g.rows.sort((a, b) => b.n - a.n).map((x) => `<div class="at-tr"><span>${esc(x.key)}</span><span>${x.n}</span><span>${x.win_rate}%</span><span class="${tone(x.avg_pct)}">${pct(x.avg_pct, 2)}</span></div>`).join("")}</div></section>`).join("")}
         ${this.atOppHtml(d)}
@@ -2966,6 +2985,13 @@ atAttrHtml(st) {
       };
     }
     el.onclick = async (e) => {
+      const pb = e.target.closest("[data-prep]");
+      if (pb) {
+        if (pb.dataset.prep === "scan") await run(() => api("POST", "/api/prep/scan"), "훑기 시작했어요. 1~3분 걸려요");
+        else await run(() => api("PUT", "/api/prep", { brief: pb.dataset.on !== "1" }), pb.dataset.on === "1" ? "장 시작 전 리서치를 껐어요" : "장 시작 전 리서치를 켰어요");
+        A.d = await api("GET", `/api/auto/runs/${A.d.run.id}`);
+        return this.atTab();
+      }
       const b = e.target.closest("[data-dec]");
       if (!b) return;
       const pid = b.closest("[data-prop]").dataset.prop, a = b.dataset.dec;
@@ -5238,6 +5264,7 @@ const mkt = {
       <div class="tiny">${esc(p.ts.slice(5, 16).replace("T", " "))} 추천 · ${esc(p.model.replace("claude-", ""))} · 예측 승률 ${x.win_prob}%${o.end_ts ? ` · 평가 마감 ${esc(String(o.end_ts).slice(5, 16).replace("T", " "))}` : ""}</div>
       <div class="pk-lv"><div class="en"><span>추천가</span><b>${M(D.mark.entry)}</b></div><div class="tp"><span>익절 +${x.target_pct}%</span><b>${M(D.mark.tp)}</b></div><div class="sl"><span>손절 −${x.stop_pct}%</span><b>${M(D.mark.sl)}</b></div>
         ${o.exit ? `<div><span>가상 청산</span><b>${M(o.exit)}</b></div>` : ""}</div>
+      ${x.news_score != null && (x.news_score || x.news) ? `<div class="tiny">뉴스 <b class="${tone(x.news_score)}">${x.news_score > 0 ? "+" : ""}${x.news_score}</b>${x.news ? " · " + esc(x.news) : ""}</div>` : ""}
       ${sw ? `<div class="pk-sw">${x.catalyst ? `<div><span class="tag c-${esc(x.catalyst_type)}">${esc(x.catalyst_type)}</span><b>${esc(x.catalyst)}</b></div>` : ""}
         ${path ? `<div class="pk-path">${Object.entries(path).map(([k, v]) => `<span><small>${k.slice(1)}일째</small><b class="${tone(v)}">${pct(v, 1)}</b></span>`).join("")}</div><div class="tiny">추천가에 사서 그냥 들고 있었다면(비용 빼기 전)${o.bench != null ? ` · 같은 기간 지수 ${pct(o.bench, 2)}` : ""}</div>` : ""}</div>` : ""}
       ${o.alt_result ? `<div class="tiny">추천 순간 가격에 바로 샀을 때 기준이에요. AI 지정가 ${M(x.entry_price)}를 기다렸다면 <b class="${tone(o.alt_net)}">${esc(o.alt_result)}${o.alt_net == null ? "" : " " + pct(o.alt_net, 2)}</b></div>` : ""}

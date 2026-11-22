@@ -39,7 +39,16 @@ SKIP = {"winprob": "승률 기준 미달", "score": "점수 기준 미달", "rr"
 _SKIP_TEXT = (("경고·특수", "junk"), ("쏠림", "crowd"), ("승률", "winprob"), ("점수", "score"), ("손익비", "rr"), ("비용", "fee"), ("쫓아가지", "chase"), ("1주를 못", "qty"),
               ("꽉 참", "full"), ("이미 거래", "dup"), ("예비 종목", "auto"), ("시세", "quote"), ("매수 실패", "fail"))
 # 파는 이유 전부. 매매 규칙 대장(moa/evolution.py RULES)과 항상 같아야 한다(테스트가 확인)
-EXITS = ("익절", "손절", "추적 익절", "시간 정리", "기간 정리", "종료 정리", "분할 익절", "이익 지키기", "본전 정리")
+EXITS = ("익절", "손절", "추적 익절", "시간 정리", "기간 정리", "종료 정리", "분할 익절", "이익 지키기", "본전 정리", "재료 무효")
+# 보유 종목 재료 감시(켠 플랜만, 스윙·장기): 하루 한 번 AI가 살 때의 재료가 아직 유효한지 확인한다
+HOLD_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 보유 종목 점검 담당이야. 종목마다 '살 때의 재료'가 지금도 유효한지 최근 뉴스·공시를 웹에서 확인해 판정한다.
+판정은 셋 중 하나:
+- "무효": 재료가 번복·부인·취소·무기한 연기됐거나, 재료가 이미 발표·실현되어 더 기대할 것이 없거나, 회사에 중대한 악재(횡령·배임, 거래정지, 관리종목 지정, 대규모 유상증자·전환사채, 실적 충격)가 확인된 경우. 출처로 확인한 사실이 있을 때만.
+- "약화": 재료는 살아 있지만 일정이 밀리거나 기대가 줄어든 경우.
+- "유효": 재료가 그대로이거나, 바뀐 것을 찾지 못한 경우.
+주가가 내렸다는 것만으로 '무효'로 하지 마. 확인하지 못했으면 '유효'로 두고 why에 '새 소식 없음'이라고 적어. 없는 뉴스를 지어내지 마.
+출력: 설명 글 없이 아래 JSON 하나만 ```json 코드 블록으로.
+{"checks":[{"sym":"종목코드 또는 기호","verdict":"유효|약화|무효","why":"확인한 사실 한 줄(날짜 포함)"}]}"""
 SHARE_SEC = 600        # 같은 조건의 추천을 함께 쓰는 시간(초)
 QUICK_MIN = 10         # 빠른 재추천의 가장 짧은 간격(분)
 # 정밀 추천 엔진 사다리. 성과가 나쁘면 한 칸씩 올린다(Sonnet → Opus → Fable). 하루 AI 비용 한도는 그대로 지킨다(필요하면 횟수를 줄여서)
@@ -89,6 +98,7 @@ PLAN_KEYS = {
     "corr_max": (0.0, 0.95, float, "보유 종목과 같이 움직이는 정도가 이보다 크면 사지 않음(0=끔)"),
     "risk_pct": (0.0, 2.0, float, "한 번 손절에 잃는 돈(굴리는 돈의 %, 0=1회 비중대로)"),
     "edge_size": (None, None, bool, "확신만큼 크기: 보정 승률·손익비로 본 기대값이 클수록 크게(0.5~1.5배)"),
+    "hold_watch": (None, None, bool, "보유 종목 재료 감시: 하루 한 번 AI가 재료를 확인하고, 무효면 정리(스윙·장기)"),
 }
 
 
@@ -169,6 +179,7 @@ VARIANTS = {
     "div": ("쏠림 줄이기", "같은 업종·테마는 한 종목만, 보유 종목과 20일 동안 같이 움직인 종목(상관 0.8 이상)은 사지 않음", {"group_max": 1, "corr_max": 0.8}),
     "risk": ("위험 기준 수량", "손절하면 굴리는 돈의 0.5%만 잃도록 수량을 정함(손절이 넓으면 적게, 좁으면 많이 · 1회 비중의 1.5배까지)", {"risk_pct": 0.5}),
     "edge": ("확신만큼 크기", "보정 승률과 손익비로 본 기대값이 클수록 크게, 작을수록 작게(0.5~1.5배)", {"edge_size": True}),
+    "hold": ("재료 감시", "하루 한 번 AI가 보유 종목의 재료가 아직 유효한지 뉴스로 확인하고, 무효가 된 종목은 손절·기한을 기다리지 않고 정리", {"hold_watch": True}),
     "vol": ("흔들림 맞춤 손절", "최근 봉의 평균 흔들림(ATR)에 맞춰 손절을 넓히고, 잃는 돈은 같도록 수량을 줄임", {"vol_stop": True}),
 }
 # 분할 매도·매수는 '힘'(0~1: 보정 승률·지수·오른 속도·남은 시간)으로 비율과 시점을 그때그때 정한다 → AutoTrade._strength
@@ -181,6 +192,13 @@ SCALE_IN_AT = (0.5, 0.2)       # 나머지를 사는 확인 폭: 손절폭의 50
 SCALE_IN_MIN = {"day": 30, "swing": 360, "month": 360}   # 분할 매수: 이 시간(분) 안에 오르지 않으면 나머지는 사지 않는다
 EDGE_MID, EDGE_K = 0.35, 3.0   # 확신만큼 크기: 켈리 비율이 이 값이면 1배, 0.1 차이마다 0.3배씩
 VOL_K = {"day": 2.0, "swing": 1.5, "month": 1.5}   # 손절 = 최근 봉 평균 흔들림(ATR, 단타는 5분봉·스윙은 일봉) × 이 배수보다 좁게는 잡지 않는다
+VARIANT_STYLES = {"hold": ("swing", "month")}      # 이 방식에서만 뜻이 있는 실험(단타는 보유가 하루를 넘지 않는다)
+
+
+def variant_ok(key, style):
+    return style in VARIANT_STYLES.get(key, (style,))
+
+
 def apply_variant(p, key, keep=()):
     """플랜 값에 실험 플랜의 차이를 입힌다. '*1.5'는 곱하기, '+5'·'-7'은 더하기·빼기, 그 밖은 그 값으로."""
     for k, v in VARIANTS[key][2].items():
@@ -375,6 +393,10 @@ class AutoTrade:
         # 사기로 정했을 때·팔기로 정했을 때 본 값: 실제 체결가와 견줘 체결 품질(미끄러짐)을 잰다
         AP._col(db, "at_trades", (("q_in", "REAL"), ("q_out", "REAL")))
         self._ret = {}        # (시장, 종목) → (날짜, 최근 일간 수익률들): 쏠림(상관) 계산용
+        # 보유 종목 재료 감시: 하루·종목마다 한 번만 묻고, 같은 종목을 든 플랜이 함께 쓴다
+        db.x("""CREATE TABLE IF NOT EXISTS at_holdwatch(id INTEGER PRIMARY KEY, day TEXT NOT NULL, mkt TEXT NOT NULL, sym TEXT NOT NULL,
+                verdict TEXT NOT NULL, why TEXT, usd REAL, model TEXT, ts TEXT, UNIQUE(day, mkt, sym))""")
+        self._hw = {}         # 시장 → 묻는 중인 스레드
         AP._col(db, "at_runs", (("last_review_day", "TEXT"), ("lab_id", "INTEGER"), ("variant", "TEXT"), ("last_full", "REAL NOT NULL DEFAULT 0")))
         self._lvl = {}        # 시장 → (받은 시각, 지수 줄들)
         self._idx = {}        # 시장 → (받은 시각, 지수 등락률)
@@ -841,6 +863,7 @@ class AutoTrade:
             self._reconcile(run)
         past_end = today > run["end_date"]
         last_day = today >= run["end_date"]
+        hv = self._hold_verdicts(run, opens, ss) if p.get("hold_watch") and run["style"] != "day" and opens else {}
         if ss["open"]:
             close_soon = ss["left_min"] <= 8
             now_hm = AP.kst_now().strftime("%H:%M")
@@ -872,6 +895,9 @@ class AutoTrade:
                         reason = "시간 정리"
                 elif t["exit_date"] and today >= t["exit_date"] and close_soon:
                     reason = "기간 정리"
+                elif hv.get(t["sym"], {}).get("verdict") == "무효" and t["entry_day"] < today:
+                    reason = "재료 무효"                     # 켠 플랜만: 살 때의 재료가 사라졌다고 AI가 뉴스로 확인함
+                    self.log(run["id"], "control", f"{t['name']} 재료 무효 · {hv[t['sym']].get('why') or ''}"[:200], {"trade": t["id"]})
                 if reason:
                     self._sell(run, t, price, reason)
                 elif p.get("scale_out") and t["part"] in (0, 2, 3) and t["qty"] >= 2:
@@ -1182,6 +1208,74 @@ class AutoTrade:
         if not row or not row.get("price"):
             return None, None
         return str(row.get("name") or ""), float(row["price"])
+
+    # ----- 보유 종목 재료 감시
+    def hold_context(self, d):
+        mkt = "us" if d.get("mkt") == "us" else "kr"
+        items = d.get("items") or []
+        if not items:
+            raise ValueError("확인할 보유 종목이 없어요")
+        data = {"시장": "국내(KRX)" if mkt == "kr" else "미국", "기준시각(한국)": AP.kst_now().strftime("%Y-%m-%d %H:%M"), "보유 종목": items}
+        return (f"보유 종목 재료 확인({'국내' if mkt == 'kr' else '미국'})",
+                "아래 '보유 종목'마다, 살 때의 재료가 지금도 유효한지 최근 며칠의 뉴스·공시를 웹에서 확인해 판정해 줘.", data)
+
+    def _hold_verdicts(self, run, opens, ss):
+        """오늘의 판정 {종목: {verdict, why}}. 아직 묻지 않은 종목이 있으면 뒤에서 한 번 묻는다(장이 열려 있을 때만, 종목마다 하루 한 번)."""
+        mkt, today = run["mkt"], AP.mkt_date(run["mkt"])
+        rows = {r["sym"]: r for r in self.rt.db.q("SELECT sym, verdict, why FROM at_holdwatch WHERE day=? AND mkt=?", (today, mkt))}
+        miss = {}
+        for t in opens:
+            if t["sym"] not in rows and t["entry_day"] < today and t["fill_ok"]:
+                miss.setdefault(t["sym"], t)
+        th = self._hw.get(mkt)
+        if miss and ss.get("open") and self.rt.ai.configured() and not (th and th.is_alive()):
+            th = threading.Thread(target=self._hold_ask, args=(run["id"], mkt, today, list(miss.values())[:8]), daemon=True, name=f"hold-{mkt}")
+            self._hw[mkt] = th
+            th.start()
+        return rows
+
+    def _hold_ask(self, rid, mkt, day, trades):
+        from .ai import LITE_MODEL
+        items = []
+        for t in trades:
+            w = json.loads(t["why"] or "{}")
+            items.append({"sym": t["sym"], "name": t["name"], "산 날": t["entry_day"], "테마": w.get("theme"), "살 때의 재료": w.get("catalyst"),
+                          "살 때의 근거": (w.get("reasons") or [])[:3], "그때 본 위험": (w.get("risks") or [])[:2],
+                          "산 뒤 등락%": round((float(t["last"] or t["entry_price"]) / t["entry_price"] - 1) * 100, 2)})
+        buf, done, err = [], {}, None
+        try:
+            for ev in self.rt.ai.stream("hold", {"mkt": mkt, "items": items, "model": LITE_MODEL, "web_search": True}):
+                if ev.get("t") == "text":
+                    buf.append(ev.get("text") or "")
+                elif ev.get("t") == "error":
+                    err = ev.get("msg")
+                elif ev.get("t") == "done":
+                    done = ev
+        except Exception as e:
+            err = str(e)
+        got = {}
+        m = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", "".join(buf), re.S) or re.findall(r"(\{\s*\"checks\".*\})", "".join(buf), re.S)
+        try:
+            for c in (json.loads(m[-1]).get("checks") or []) if m else []:
+                sym = str(c.get("sym") or "").strip().upper()
+                sym = re.sub(r"\D", "", sym)[-6:] if mkt == "kr" else sym
+                v = str(c.get("verdict") or "").strip()
+                if sym and v in ("유효", "약화", "무효"):
+                    got[sym] = (v, str(c.get("why") or "")[:160])
+        except ValueError:
+            pass
+        usd, now = float(done.get("usd") or 0), self._now()
+        with self.rt._lock:
+            for i, t in enumerate(trades):
+                # 답을 못 받은 종목도 '모름'으로 적어 오늘은 다시 묻지 않는다(비용이 되풀이되지 않게). '모름'으로는 팔지 않는다
+                v, why = got.get(t["sym"], ("모름", err or "AI가 판정을 주지 않았어요"))
+                self.rt.db.x("INSERT OR IGNORE INTO at_holdwatch(day,mkt,sym,verdict,why,usd,model,ts) VALUES(?,?,?,?,?,?,?,?)",
+                             (day, mkt, t["sym"], v, why, usd if i == 0 else 0.0, done.get("model"), now))
+            txt = " · ".join(f"{t['name']} {got.get(t['sym'], ('모름',))[0]}" for t in trades)
+            self.log(rid, "control", f"보유 종목 재료 확인 · {txt}"[:240], {"hold_watch": {s_: {"verdict": v[0], "why": v[1]} for s_, v in got.items()}, "usd": usd})
+
+    def hold_today(self, mkt):
+        return self.rt.db.q("SELECT sym, verdict, why, ts FROM at_holdwatch WHERE day=? AND mkt=? ORDER BY id", (AP.mkt_date(mkt), mkt))
 
     def _day_returns(self, mkt, sym):
         """최근 20거래일의 일간 수익률(쏠림 계산용). 하루에 한 번만 받는다. 못 받으면 None."""
@@ -2706,7 +2800,7 @@ class AutoTrade:
             have = {r["variant"]: r for r in self._runs("WHERE lab_id=?", (lab,))}
             b = have.get("base")
             for k in VARIANTS:
-                if k in have or not b or b["status"] == "ended":
+                if k in have or not b or b["status"] == "ended" or not variant_ok(k, b["style"]):
                     continue
                 p = apply_variant(copy.deepcopy(b["params"]), k)
                 rid = self.rt.db.x(
@@ -2807,7 +2901,7 @@ class AutoTrade:
             raise ValueError("설정 → AI에서 Claude API 키를 먼저 넣어 주세요")
         if not rd["data"]:
             raise ValueError("실시간 순위가 필요해요. 설정 → 계좌에서 키움 계좌를 먼저 연결해 주세요")
-        keys = [k for k in (d.get("variants") or list(VARIANTS)) if k in VARIANTS]
+        keys = [k for k in (d.get("variants") or list(VARIANTS)) if k in VARIANTS and variant_ok(k, pv["style"])]
         if "base" not in keys:
             keys.insert(0, "base")
         if len(keys) < 2:
@@ -3364,6 +3458,7 @@ class AutoTrade:
                 "watch_mult": float(p.get("watch_mult") or 0.5), "skip_watch": bool(p.get("skip_watch")), "min_one": run["mode"] == "paper" and bool(p.get("min_one", True)),
                 "exit_mult": float(p.get("exit_mult") or 1), "tp_cap": p["tp_cap"], "sl_cap": p["sl_cap"],
                 "scale_in": bool(p.get("scale_in")), "scale_out": bool(p.get("scale_out")), "vol_stop": bool(p.get("vol_stop")),
+                "hold_watch": bool(p.get("hold_watch")) and run["style"] != "day",
                 "risk_pct": float(p.get("risk_pct") or 0), "edge_size": bool(p.get("edge_size")),
                 "group_max": int(p.get("group_max") or 0), "corr_max": float(p.get("corr_max") or 0)}
         # 5) 주문 · 6) 들고 있기
@@ -3429,6 +3524,7 @@ class AutoTrade:
                 "now": self.now(run) if run["status"] != "ended" else None, "ready": self.ready(),
                 "opp": dict({k: v for k, v in O.items() if k != "items"}, notes=self.opp_changes(run, O, self._since_ver(run))[1]),
                 "broker": getattr(b, "label", None), "session": self._session(run["mkt"]),
+                "prep": dict(self.rt.prep.status(run["mkt"]), hold=self.hold_today(run["mkt"]) if run["params"].get("hold_watch") else []) if getattr(self.rt, "prep", None) else None,
                 "keys": [[k, v[3]] for k, v in PLAN_KEYS.items()]}      # 순서를 지키려고 목록으로(사전은 JSON에서 이름순으로 바뀐다)
 
     def export_csv(self, rid):

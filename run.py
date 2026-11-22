@@ -30,6 +30,7 @@ def main():
     app = create_app(rt, updater)
     updater.start()
     rt.ship.start()
+    rt.prep.start()                                   # 장 마감 뒤 넓게 훑기 · 장 시작 전 리서치
     url = f"http://127.0.0.1:{a.port}"
     print(f"moa 실행 중: {url}  (끄려면 이 창을 닫으세요)")
     print(f"휴대폰 접속 토큰: {access_token(db)}")

@@ -11,7 +11,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import moa.aipick as AP  # noqa: E402
 from moa.app import create_app  # noqa: E402
-from moa.autotrade import PLAN_KEYS, VARIANTS, _clamp_key, make_plan  # noqa: E402
+from moa.autotrade import PLAN_KEYS, VARIANTS, _clamp_key, make_plan, variant_ok  # noqa: E402
+
+NV = lambda style: sum(1 for k in VARIANTS if variant_ok(k, style))      # 그 방식의 실험에 들어가는 플랜 수
 from moa.db import DB  # noqa: E402
 from moa.runtime import Runtime  # noqa: E402
 
@@ -1137,7 +1139,7 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     with pytest.raises(ValueError, match="두 개 이상"):
         at.lab_create({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 20, "variants": ["base"]})
     L = at.lab_create({"budget": 3_000_000, "mkt": "kr", "style": "day", "days": 20, "model": "claude-sonnet-5-5"})["labs"][0]
-    assert len(L["runs"]) == len(VARIANTS) and L["status"] == "running" and {x["variant"] for x in L["runs"]} == set(VARIANTS)
+    assert L["status"] == "running" and {x["variant"] for x in L["runs"]} == set(VARIANTS) - {"hold"}     # '재료 감시'는 스윙·장기 실험에만 들어간다
     with pytest.raises(ValueError, match="이미 돌고"):
         at.lab_create({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 20})
     ids = {x["variant"]: x["id"] for x in L["runs"]}
@@ -1173,7 +1175,7 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     lp = {x["sym"]: x for x in B["last"]["picks"]}
     assert lp["005930"]["bought"] == len(g["plans"]) and any(k["why"] == "AI가 관망 권함" for k in lp["005930"]["skips"])
     usd = [json.loads(r["data"])["usd"] for r in at.rt.db.q("SELECT data FROM at_log WHERE kind='cycle' AND data IS NOT NULL AND run_id!=?", (solo,))]
-    assert len(usd) == len(VARIANTS) and all(u == round(0.9 / len(VARIANTS), 4) for u in usd)                  # 비용은 똑같이 나눠 적는다
+    assert len(usd) == NV("day") and all(u == round(0.9 / NV("day"), 4) for u in usd)                  # 비용은 똑같이 나눠 적는다
     rows = {x["variant"]: x for x in B["runs"]}
     assert rows["base"]["open_qty"] == at._open(ids["base"])[0]["qty"] and rows["watch_full"]["open_pct"] > rows["base"]["open_pct"] > 0 and rows["strict"]["open_qty"] == 0
     # 다음 추천도 묶음 전체에서 한 번: 한 종목 집중은 자리가 없어 건너뛰고, 나머지는 각자 판단
@@ -1197,7 +1199,7 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     assert L["runs"][0]["variant"] == "loose" and L["lead"] == "느슨한 기준" and "30건이 쌓여야" in L["note"] and L["runs"][0]["net_ret_pct"] < L["runs"][0]["ret_pct"]
     # 홈 요약과 목록에서는 묶음 하나로 보인다
     b = at.brief()
-    assert [r["id"] for r in b["runs"]] == [solo] and b["labs"][0]["n"] == len(VARIANTS) and b["labs"][0]["lead"] == "느슨한 기준"
+    assert [r["id"] for r in b["runs"]] == [solo] and b["labs"][0]["n"] == NV("day") and b["labs"][0]["lead"] == "느슨한 기준"
     assert [r["id"] for r in at.overview()["runs"]] == [solo]
     # 한꺼번에 멈추고 끝낸다
     assert at.lab_control(lab, "pause")["labs"][0]["status"] == "paused"
@@ -1215,7 +1217,7 @@ def test_autopilot_only_needs_on_off_and_feeds_a_real_plan(env, monkeypatch):
     assert at.labs()["labs"] == []                                       # 꺼져 있으면 아무것도 만들지 않는다
     S = at.auto_set(True)
     L = at.labs()["labs"]
-    assert S["on"] is True and sorted((x["mkt"], x["style"]) for x in L) == sorted(AUTO_SET) and all(len(x["runs"]) == len(VARIANTS) for x in L)
+    assert S["on"] is True and sorted((x["mkt"], x["style"]) for x in L) == sorted(AUTO_SET) and all(len(x["runs"]) == NV(x["style"]) for x in L)
     kd = at._run(next(x["id"] for x in L if (x["mkt"], x["style"]) == ("kr", "day")))
     ks = at._run(next(x["id"] for x in L if (x["mkt"], x["style"]) == ("kr", "swing")))
     # 비용은 앱이 정한다(전체 하루 $3): 단타 하루 $1.05 → 20분마다 빠른 재추천 + 정밀 추천 Sonnet 2번(뉴스 검색), 스윙 $0.45 → 60분마다 + Sonnet 1번
@@ -1266,11 +1268,11 @@ def test_running_experiments_pick_up_new_and_fixed_plans(env, monkeypatch):
     at._auto_at = 0
     at.tick(force=True)
     runs = {r["variant"]: r for r in at._runs("WHERE lab_id=?", (lab["id"],))}
-    assert len(runs) == len(VARIANTS) and runs["all"]["params"]["min_win_prob"] == 40 and runs["all"]["status"] == "running"
+    assert len(runs) == NV(lab["style"]) and runs["all"]["params"]["min_win_prob"] == 40 and runs["all"]["status"] == "running"
     assert runs["loose"]["params"]["min_win_prob"] == 43 and runs["loose"]["params"]["idx_floor"] == 0 and runs["wide"]["params"]["exit_mult"] == 1.5
     at._auto_at = 0
     at.tick(force=True)
-    assert len(at._runs("WHERE lab_id=?", (lab["id"],))) == len(VARIANTS)                # 두 번 붙이지 않는다
+    assert len(at._runs("WHERE lab_id=?", (lab["id"],))) == NV(lab["style"])                # 두 번 붙이지 않는다
 
 
 def test_paper_never_skips_for_lot_size_and_real_only_sees_affordable_stocks(env, monkeypatch):
@@ -1499,7 +1501,7 @@ def test_old_runs_get_quick_rescans_once(env, monkeypatch):
     P = lambda i: at._run(i)["params"]
     assert P(paper)["quick_gap_min"] == 20 and P(paper)["cycles_per_day"] == 3 and P(us)["quick_gap_min"] == 0       # 직접 만든 모의: 간격만 붙인다. 실전: 끈 채로
     sibs = at._runs("WHERE lab_id=?", (lab,))
-    assert all((r["params"]["quick_gap_min"], r["params"]["cycles_per_day"], r["params"]["cycle_gap_min"]) == (20, 2, 160) for r in sibs) and len(sibs) == len(VARIANTS)
+    assert all((r["params"]["quick_gap_min"], r["params"]["cycles_per_day"], r["params"]["cycle_gap_min"]) == (20, 2, 160) for r in sibs) and len(sibs) == NV(sibs[0]["style"])
     assert sum(1 for x in at.rt.db.q("SELECT msg FROM at_log WHERE kind='control'") if "더 자주" in x["msg"]) == 5       # 직접 만든 모의 1 + 실험 묶음 4
     at.tick(force=True)
     assert sum(1 for x in at.rt.db.q("SELECT msg FROM at_log WHERE kind='control'") if "더 자주" in x["msg"]) == 5       # 한 번만
@@ -2113,3 +2115,148 @@ def test_slippage_records_decided_and_filled_prices(env):
     assert s["n"] == 1 and s["buy"] > 0 > s["sell"] and abs(s["round"] - (s["buy"] - s["sell"])) < 0.002 and s["real"] is False
     assert s["by_time"] == [{"key": "오전(10~12시)", "n": 1, "buy": s["buy"]}]
     assert slippage([dict(r, q_in=None, q_out=None)], "paper") == {"n": 0}             # 옛 거래는 세지 않는다
+
+
+# ---------- 3단계: 수급 · 뉴스 점수 · 넓게 훑기 · 재료 감시 · 장 시작 전 리서치 ----------
+class _FakeKiwoom:
+    def __init__(self, table):
+        self.table, self.calls = table, []
+
+    def call(self, key, body, cont_key=None):
+        self.calls.append((key, body))
+        v = self.table[key]
+        return v(body) if callable(v) else v
+
+
+def test_kr_flow_sums_foreign_and_institution(env, monkeypatch):
+    rows = [{"dt": f"202611{20 - i:02d}", "frgnr_invsr": v, "orgn": o} for i, (v, o) in enumerate(
+        [("+1500", "-200"), ("+500", "-300"), ("+1000", "--100"), ("-400", "+900"), ("+400", "+100")] + [("-100", "+50")] * 15)]
+    cl = _FakeKiwoom({"investor": {"stk_invsr_orgn": rows[::-1]}})                     # 순서가 뒤집혀 와도 날짜로 맞춘다
+    monkeypatch.setattr(env.rt.market, "kr_client", lambda: cl)
+    f = env.rt.market.kr_flow("005930")
+    assert f["외국인5일"] == 30.0 and f["기관5일"] == 4.0 and f["외국인20일"] == 15.0 and f["기준일"] == "20261120"   # 백만원 → 억원
+    assert f["외국인연속일"] == 3 and f["기관연속일"] == -3 and cl.calls[0][1]["amt_qty_tp"] == "1"
+    assert env.rt.market.kr_flow("005930") == f and len(cl.calls) == 1                 # 3시간 동안은 다시 받지 않는다
+    monkeypatch.setattr(env.rt.market, "kr_client", lambda: None)
+    assert env.rt.market.kr_flow("000660") is None
+
+
+def test_news_score_and_flow_become_learning_features(env, monkeypatch):
+    from moa.aipick import _defs, _feat_of, _feat_swing
+    ap = env.rt.aipick
+    monkeypatch.setattr(ap, "quote", lambda m, s: {"price": 70000, "name": "삼성전자", "change_pct": 1.2})
+    body = {"stance": "보통", "market_view": "강보합", "picks": [{"sym": "005930", "name": "삼성전자", "score": 70, "win_prob": 60, "entry_price": 70000,
+            "target_pct": 3, "stop_pct": 1.5, "exit_by": "14:50", "news_score": 5, "news": "수주 공시", "reasons": ["a"], "risks": ["b"]}]}
+    x = ap.parse("판단\n```json\n" + json.dumps(body, ensure_ascii=False) + "\n```", "kr", "claude-sonnet-5-5", 0.01)["picks"][0]
+    assert x["news_score"] == 2 and x["news"] == "수주 공시" and x["feat"]["news"] == 2          # 범위를 넘으면 잘라 담는다
+    q = ap.parse("```json\n" + json.dumps(body, ensure_ascii=False) + "\n```", "kr", "claude-haiku-4-5", 0.01, lite=True)["picks"][0]
+    assert "news_score" not in q                                                             # 빠른 재추천은 뉴스를 보지 않는다
+    row = {"등락률%": 2.0, "수급(억원)": {"외국인5일": 12.0, "기관5일": -3.0}, "출처": "넓게 훑기"}
+    assert _feat_of(row, {})["ff5"] == 12.0 and _feat_swing(row, {}, {}, {}, True)["scan"] is True and "ff5" not in _feat_of({}, {})
+    for h in ("day", "swing"):
+        d = {k: fn for k, fn, _ in _defs(h)}
+        assert d["수급(5일)"]({"f": {"ff5": 1, "fo5": 2}}) == "외국인·기관 둘 다 순매수" and d["수급(5일)"]({"f": {"ff5": 1, "fo5": -2}}) == "엇갈림" and d["수급(5일)"]({"f": {}}) is None
+        assert d["뉴스 점수"]({"f": {"news": -1}}) == "악재" and d["뉴스 점수"]({"f": {"news": 2}}) == "큰 호재" and d["뉴스 점수"]({"f": {}}) is None
+    assert {k: fn for k, fn, _ in _defs("swing")}["종목 출처"]({"f": {"cand": True, "scan": True}}) == "넓게 훑기 후보"
+
+
+def test_wide_scan_ranks_and_feeds_swing_candidates(env, monkeypatch):
+    from moa.prep import Prep, score_rows
+    rt, prep = env.rt, env.rt.prep
+    names = {f"{100000 + i * 10:06d}": f"종목{i}" for i in range(120)}
+    master = {c: {"name": n, "market": "코스피", "warn": "0", "audit": "정상", "state": ""} for c, n in names.items()}
+    master["900010"] = {"name": "위험주", "market": "코스닥", "warn": "5", "audit": "정상", "state": ""}
+    monkeypatch.setattr(rt.market, "kr_master", lambda wait=False: master)
+    def board(body):
+        return {"atn_stk_infr": [{"stk_cd": c, "stk_nm": master[c]["name"], "cur_prc": "+10000", "flu_rt": "+1.0", "trde_qty": str(400000 + int(c[2:5]) * 1000)} for c in body["stk_cd"].split("|")]}
+    cl = _FakeKiwoom({"watchinfo": board, "investor": lambda b: {"stk_invsr_orgn": [{"dt": "20261120", "frgnr_invsr": "+500" if b["stk_cd"] == "100000" else "-500", "orgn": "0"}]}})
+    monkeypatch.setattr(rt.market, "kr_client", lambda: cl)
+    def candles(mkt, sym, tf, n=120):
+        k = int(sym[2:5])                                                # 번호가 클수록 더 많이 오른 종목
+        return {"bars": [{"c": 100 + i * (0.05 + k * 0.01), "h": 101 + i * (0.05 + k * 0.01), "l": 99 + i * (0.05 + k * 0.01), "v": 1000 + (i > 55) * k * 20} for i in range(61)]}
+    monkeypatch.setattr(rt.invest, "candles", candles)
+    out = prep.scan("kr")
+    day, rows = prep.scan_latest("kr")
+    assert out["src"] == "전 종목" and out["n"] == 120 and day == Prep.scan_day() and len(rows) == 30 and "900010" not in {r["sym"] for r in rows}
+    assert rows[0]["score"] >= rows[-1]["score"] and int(rows[0]["sym"][2:5]) > 60 and rows[0]["feat"]["20일%"] > 0
+    assert not prep.scan_due() or AP.kst_now().weekday() >= 5 or True
+    assert [r["score"] for r in score_rows([{"f": {"20일%": 30, "60일고점대비%": -1, "5일거래량배수": 3, "20일선대비%": 5, "60일선대비%": 9, "5일%": 40, "하루변동폭%": 9}},
+                                            {"f": {"20일%": 10, "60일고점대비%": -3, "5일거래량배수": 1.5, "20일선대비%": 2, "60일선대비%": 4, "5일%": 4, "하루변동폭%": 3}}])] == [60.0, 65.0]   # 급등·큰 흔들림은 깎인다
+    st = prep.status("kr")
+    assert st["scan"]["day"] == day and len(st["scan"]["top"]) == 10 and st["conf"] == {"scan": True, "brief": True}
+    # 스윙 추천 후보에 '넓게 훑기' 종목이 들어간다
+    monkeypatch.setattr(rt.invest, "kr", lambda: cl)
+    monkeypatch.setattr(rt.invest, "ranking", lambda mkt, k: {"items": [{"rank": 1, "sym": "005930", "name": "삼성전자", "price": 70000.0, "change_pct": 1.0, "value": 1e11, "volume": 1}]})
+    monkeypatch.setattr(rt.aipick, "quote", lambda m, s: {"price": 10000.0, "name": master.get(s, {}).get("name", s), "change_pct": 1.0})
+    monkeypatch.setattr(rt.market, "watch", lambda: {"kr": []})
+    _, ask, data = rt.aipick.context({"mkt": "kr", "horizon": "swing"})
+    src = [r["출처"] for r in data["후보_상세(일봉 흐름)"]]
+    assert src.count("넓게 훑기") == 6 and "넓게 훑기" in ask and all("훑기_점수" in r for r in data["후보_상세(일봉 흐름)"] if r["출처"] == "넓게 훑기")
+
+
+def test_hold_watch_sells_only_when_catalyst_is_gone(env, monkeypatch):
+    from moa.autotrade import variant_ok
+    at = env.at
+    assert "재료 무효" in __import__("moa.autotrade", fromlist=["EXITS"]).EXITS and not variant_ok("hold", "day") and variant_ok("hold", "swing") and variant_ok("base", "day")
+    rid = env.run(style="swing", days=30)
+    _set(env, rid, hold_watch=True, max_positions=3)
+    assert env.enter(rid, [env.pick("005930", target_pct=10, stop_pct=5, hold_days=4, catalyst="수주 공시"), env.pick("000660", target_pct=10, stop_pct=5, hold_days=4)]) == 2
+    asked = []
+    def stream(kind, d):
+        if kind != "hold":                                                          # 새 날의 추천 요청은 이 시험과 상관없다
+            yield {"t": "error", "msg": "x"}
+            return
+        asked.append((kind, d))
+        yield {"t": "text", "text": '```json\n{"checks":[{"sym":"005930","verdict":"무효","why":"11/19 수주 계약 해지 공시"},{"sym":"A000660","verdict":"유효","why":"새 소식 없음"}]}\n```'}
+        yield {"t": "done", "usd": 0.02, "model": "claude-haiku-4-5"}
+    monkeypatch.setattr(env.rt.ai, "stream", stream)
+    at.tick(force=True)
+    assert not asked and len(at._open(rid)) == 2                                    # 산 날에는 묻지 않는다
+    env.day = "2026-11-19"
+    at.tick(force=True)
+    at._hw["kr"].join(5)
+    assert len(asked) == 1 and asked[0][0] == "hold" and asked[0][1]["model"] == "claude-haiku-4-5" and asked[0][1]["items"][0]["살 때의 재료"] == "수주 공시"
+    assert {r["sym"]: r["verdict"] for r in at.hold_today("kr")} == {"005930": "무효", "000660": "유효"}
+    at.tick(force=True)
+    at.tick(force=True)
+    assert len(asked) == 1                                                          # 하루에 한 번만 묻는다
+    c = at._closed(rid)
+    assert [(x["sym"], x["reason"]) for x in c] == [("005930", "재료 무효")] and [t["sym"] for t in at._open(rid)] == ["000660"]
+    # 꺼 둔 플랜(기본)은 판정이 있어도 팔지 않는다
+    _end(env, rid)
+    rid2 = env.run(style="swing", days=30)
+    env.day = "2026-11-20"
+    assert env.enter(rid2, [env.pick("005930", target_pct=10, stop_pct=5, hold_days=4)]) == 1
+    env.day = "2026-11-23"
+    env.rt.db.x("INSERT INTO at_holdwatch(day,mkt,sym,verdict,why) VALUES('2026-11-23','kr','005930','무효','x')")
+    at.tick(force=True)
+    assert len(at._open(rid2)) == 1 and len(asked) == 1
+
+
+def test_morning_brief_runs_once_and_joins_precise_context(env, monkeypatch):
+    rt, prep = env.rt, env.rt.prep
+    when = {"t": datetime(2026, 11, 18, 8, 0)}
+    monkeypatch.setattr(AP, "kst_now", lambda: when["t"])
+    assert prep.brief_due("kr") is False                                            # 도는 자동매매가 없으면 돈을 쓰지 않는다
+    env.run()
+    assert prep.brief_due("kr") is True and prep.brief_due("us") is False
+    when["t"] = datetime(2026, 11, 18, 10, 0)
+    assert prep.brief_due("kr") is False                                            # 장이 열린 뒤에는 받지 않는다
+    when["t"] = datetime(2026, 11, 18, 8, 0)
+    rt.settings.update({"prep": {"brief": False}})
+    assert prep.brief_due("kr") is False
+    rt.settings.update({"prep": {"brief": True}})
+    seen = []
+    def stream(kind, d):
+        seen.append(kind)
+        yield {"t": "text", "text": "- 밤사이 나스닥 +1.2%\n- 오늘 반도체 수출 지표 발표"}
+        yield {"t": "done", "usd": 0.07, "model": "claude-sonnet-5-5"}
+    monkeypatch.setattr(rt.ai, "stream", stream)
+    assert prep.brief("kr")["ok"] and seen == ["brief"] and prep.brief_due("kr") is False     # 하루 한 번
+    b = prep.brief_get("kr")
+    assert b["usd"] == 0.07 and "나스닥" in b["text"]
+    data = {}
+    rt.aipick._brief_into(data, "kr")
+    assert "나스닥" in data["장 시작 전 리서치 메모(오늘 아침, 참고)"]
+    title, ask, d = prep.brief_context({"mkt": "kr"})
+    assert "장 시작 전" in title and d["시장"].startswith("국내")

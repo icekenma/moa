@@ -3688,3 +3688,14 @@ html:not(.dark-theme):not(.gm-on) .lab-nm i:not(.few){color:color-mix(in srgb,va
 html:not(.dark-theme):not(.gm-on) .lab-tr:nth-child(2) .lab-nm i:not(.few){color:#fff;background:color-mix(in srgb,var(--mk,var(--sec)) 78%,#000)}
 .seg button{min-height:30px}
 .ap-past summary,.ap-hist summary{min-height:32px;display:flex;align-items:center;flex-wrap:wrap;gap:0 6px}
+
+/* 자동매매 · 장 시작 전 준비(넓게 훑기 · 리서치 메모 · 재료 확인) */
+.at-prep-h{display:flex;align-items:center;gap:8px;padding:8px 0 2px}
+.at-prep-h b{font-size:13px;white-space:nowrap}
+.at-prep-h .tiny{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.at-prep-h + .at-more,.at-prep .tiny + .at-prep-h{margin-top:2px}
+.at-prep .at-prep-h ~ .at-prep-h{border-top:1px solid var(--line);margin-top:8px;padding-top:10px}
+.at-prep-t{display:grid;gap:2px;padding:4px 0}
+.at-prep-t > div{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;font-size:11px;color:var(--ink2);padding:3px 0;font-variant-numeric:tabular-nums}
+.at-prep-t > div > b{color:var(--ink);font-size:12px}
+.at-prep-t > div > span:first-child{min-width:14px;color:var(--ink3)}

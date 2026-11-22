@@ -3038,3 +3038,18 @@ def test_agenda_collects_dated_items_and_serves_readonly_calendar(rt):
     assert client.get("/cal/wrong.ics").status_code == 404
     r2 = client.put("/api/agenda", json={"renew": True, "amount": False}).get_json()
     assert r2["path"] != r["path"] and client.get(r["path"]).status_code == 404 and client.get(r2["path"]).status_code == 200 and r2["conf"]["amount"] is False
+
+
+def test_gym_photos_import_from_local_folder(rt, tmp_path):
+    jpg = b"\xff\xd8\xff\xe0" + b"0" * 200
+    (tmp_path / "chest.jpg").write_bytes(jpg)
+    (tmp_path / "chest.thumb.jpg").write_bytes(jpg)
+    (tmp_path / "legext.jpg").write_bytes(jpg)                       # 작은 사진이 없는 것
+    (tmp_path / "BAD KEY.jpg").write_bytes(jpg)
+    (tmp_path / "BAD KEY.thumb.jpg").write_bytes(jpg)
+    (tmp_path / "pulley.jpg").write_bytes(b"not a jpeg")
+    (tmp_path / "pulley.thumb.jpg").write_bytes(jpg)
+    r = rt.health.import_folder(tmp_path)
+    assert r["keys"] == ["chest"] and {x["file"] for x in r["skipped"]} == {"legext.jpg", "BAD KEY.jpg", "pulley.jpg"}
+    assert rt.health.photo("chest") == jpg and "chest" in rt.health.photos() and not (tmp_path / "chest.jpg").exists() and (tmp_path / "legext.jpg").exists()   # 넣은 것만 지운다
+    assert rt.health.import_folder(tmp_path / "none")["found"] is False

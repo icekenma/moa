@@ -1309,6 +1309,11 @@ def create_app(rt, updater=None):
         rt.health.delete_follow(fid)
         return jsonify(ok=True)
 
+    @app.post("/api/health/photo-folder")
+    def health_photo_folder():
+        # 이 컴퓨터의 '사진\\moa_gym_photos' 폴더에 놓인 기구 사진을 한꺼번에 넣는다(폴더는 정해져 있고 바깥에서 고를 수 없다)
+        return jsonify(rt.health.import_folder())
+
     @app.get("/api/health/photo/<key>")
     def health_photo(key):
         b = rt.health.photo(key, thumb=request.args.get("s") == "thumb")

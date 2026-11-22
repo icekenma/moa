@@ -330,6 +330,33 @@ class Health:
                   "full=excluded.full, thumb=excluded.thumb, updated=excluded.updated", (key, full, thumb, now))
         return now
 
+    def import_folder(self, folder=None):
+        """이 컴퓨터의 폴더(기본: 사진\\moa_gym_photos)에 놓인 기구 사진을 한꺼번에 넣는다. 파일 이름은 <기구>.jpg 와 <기구>.thumb.jpg 한 쌍.
+        사진을 저장소에 올리지 않고 노트북으로 바로 건네기 위한 길이다. 넣은 파일은 폴더에서 지운다."""
+        from pathlib import Path
+        d = Path(folder) if folder else Path.home() / "Pictures" / "moa_gym_photos"
+        done, skipped = [], []
+        if not d.is_dir():
+            return {"n": 0, "keys": [], "skipped": [], "folder": str(d), "found": False}
+        for f in sorted(d.glob("*.jpg")):
+            if f.name.endswith(".thumb.jpg"):
+                continue
+            key, th = f.stem, f.with_name(f.stem + ".thumb.jpg")
+            try:
+                if not th.exists():
+                    raise HealthError("작은 사진이 없어요")
+                self.save_photo(key, {"full": base64.b64encode(f.read_bytes()).decode(), "thumb": base64.b64encode(th.read_bytes()).decode()})
+                done.append(key)
+                f.unlink()
+                th.unlink()
+            except (HealthError, OSError) as e:
+                skipped.append({"file": f.name, "why": str(e)})
+        try:
+            d.rmdir()                                    # 다 넣어서 비었으면 폴더도 치운다
+        except OSError:
+            pass
+        return {"n": len(done), "keys": done, "skipped": skipped, "folder": str(d), "found": True}
+
     def photo(self, key, thumb=False):
         r = self.db.one(f"SELECT {'thumb' if thumb else 'full'} AS b FROM hl_photo WHERE key=?", (str(key),))
         return bytes(r["b"]) if r else None

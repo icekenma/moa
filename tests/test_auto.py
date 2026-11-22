@@ -1139,7 +1139,7 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     with pytest.raises(ValueError, match="두 개 이상"):
         at.lab_create({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 20, "variants": ["base"]})
     L = at.lab_create({"budget": 3_000_000, "mkt": "kr", "style": "day", "days": 20, "model": "claude-sonnet-5-5"})["labs"][0]
-    assert L["status"] == "running" and {x["variant"] for x in L["runs"]} == set(VARIANTS) - {"hold"}     # '재료 감시'는 스윙·장기 실험에만 들어간다
+    assert L["status"] == "running" and {x["variant"] for x in L["runs"]} == set(VARIANTS) - {"hold", "counter"}     # '재료 감시'·'반대 의견 확인'은 스윙·장기 실험에만 들어간다
     with pytest.raises(ValueError, match="이미 돌고"):
         at.lab_create({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 20})
     ids = {x["variant"]: x["id"] for x in L["runs"]}
@@ -2260,3 +2260,90 @@ def test_morning_brief_runs_once_and_joins_precise_context(env, monkeypatch):
     assert "나스닥" in data["장 시작 전 리서치 메모(오늘 아침, 참고)"]
     title, ask, d = prep.brief_context({"mkt": "kr"})
     assert "장 시작 전" in title and d["시장"].startswith("국내")
+
+
+# ---------- 4단계: 국면별 비중 · 반대 의견 확인 · 재무 지표 · 전자공시 ----------
+def test_regime_sizing_scales_with_index_trend(env, monkeypatch):
+    ix = {"20일선대비%": -4.0, "5일%": -2.0, "name": "코스피"}
+    monkeypatch.setattr(env.rt.aipick, "index_state", lambda mkt, sym="": ix)
+    def cost(**kw):
+        rid = env.run()
+        _set(env, rid, warmup_trades=0, **kw)
+        assert env.enter(rid, [env.pick("005930")]) == 1
+        t = env.at._open(rid)[0]
+        _end(env, rid)
+        return t["qty"]
+    base = cost()
+    weak = cost(regime_size=True)
+    ix.update({"20일선대비%": -1.0})
+    soft = cost(regime_size=True)
+    ix.update({"20일선대비%": 3.0, "5일%": 1.5})
+    strong = cost(regime_size=True)
+    ix.update({"20일선대비%": None})
+    unknown = cost(regime_size=True)
+    assert weak == base // 2 and weak < soft < base < strong <= base * 1.2 + 1 and unknown == base      # 지수 자료가 없으면 그대로
+    assert env.at._regime("kr") is None
+
+
+def test_counter_check_vetoes_only_confirmed_objections(env, monkeypatch):
+    at = env.at
+    rid = env.run(style="swing", days=30)
+    _set(env, rid, counter_check=True, max_positions=3)
+    res = {"id": 77, "stance": "보통", "view": "강보합", "picks": [env.pick("005930", target_pct=10, stop_pct=5, catalyst="수주"), env.pick("000660", target_pct=10, stop_pct=5), env.pick("035420", target_pct=10, stop_pct=5)]}
+    asked = []
+    def stream(kind, d):
+        asked.append((kind, d))
+        yield {"t": "text", "text": '```json\n{"checks":[{"sym":"005930","verdict":"반대","why":"11/20 해당 수주는 회사가 부인 공시"},{"sym":"000660","verdict":"주의","why":"전환사채 발행"}]}\n```'}
+        yield {"t": "done", "usd": 0.03}
+    monkeypatch.setattr(env.rt.ai, "stream", stream)
+    at._counter_ask(rid, "kr", res)
+    at._counter_ask(rid, "kr", res)
+    assert len(asked) == 1 and asked[0][0] == "counter" and asked[0][1]["items"][0]["재료"] == "수주"      # 추천 한 번에 한 번만
+    assert {k: v["verdict"] for k, v in at._counter_get(77).items()} == {"005930": "반대", "000660": "주의", "035420": "모름"}
+    assert at._enter(at._run(rid), res, {"usd": 0.1}) == 2
+    assert sorted(t["sym"] for t in at._open(rid)) == ["000660", "035420"]                                  # '반대'만 거르고, 못 받은 판정으로는 거르지 않는다
+    dec = json.loads(env.rt.db.q("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' ORDER BY id DESC LIMIT 1", (rid,))[0]["data"])["decisions"]
+    assert [(d["sym"], d["code"]) for d in dec if d.get("act") == "skip"] == [("005930", "counter")] and "부인" in dec[0]["why"]
+    _end(env, rid)
+    rid2 = env.run(style="swing", days=30)                                                                  # 꺼 둔 플랜은 같은 추천을 그대로 산다
+    _set(env, rid2, max_positions=3)
+    assert at._enter(at._run(rid2), res, {"usd": 0.1}) == 3
+    assert not variant_ok("counter", "day") and "counter" in dict(at.FILTERS)
+
+
+def test_fundamentals_and_dart_titles_join_candidates(env, monkeypatch):
+    from moa.aipick import _defs, _feat_swing
+    from moa.dart import Dart
+    rt = env.rt
+    cl = _FakeKiwoom({"quote": {"per": "12.50", "pbr": "1.10", "roe": "9.8", "mac": "4200000"}})
+    monkeypatch.setattr(rt.market, "kr_client", lambda: cl)
+    f = rt.market.kr_fund("005930")
+    assert f == {"PER": 12.5, "PBR": 1.1, "ROE": 9.8, "시총(억)": 4200000.0} and rt.market.kr_fund("005930") == f and len(cl.calls) == 1
+    feat = _feat_swing({"재무": f}, {}, {}, {}, True)
+    d = {k: fn for k, fn, _ in _defs("swing")}
+    assert (feat["per"], feat["roe"]) == (12.5, 9.8) and d["PER"]({"f": feat}) == "10~25" and d["ROE"]({"f": feat}) == "0~10%"
+    assert d["PER"]({"f": {"per": None}}) == "적자·없음" and d["PER"]({"f": {}}) is None
+    # 전자공시: 키가 없으면 부르지 않고, 있으면 종목별 제목을 묶는다
+    calls = []
+    def get(params):
+        calls.append(params)
+        if params["pblntf_ty"] == "I":
+            return {"status": "013", "message": "조회된 데이타가 없습니다."}
+        return {"status": "000", "total_page": 1, "list": [
+            {"stock_code": "005930", "report_nm": "단일판매ㆍ공급계약체결", "rcept_dt": "20261120"},
+            {"stock_code": "005930", "report_nm": "주요사항보고서(유상증자결정)", "rcept_dt": "20261119"},
+            {"stock_code": "", "report_nm": "비상장사 공시", "rcept_dt": "20261120"}]}
+    dart = Dart(rt, get=get)
+    assert dart.titles("005930") == [] and not calls and dart.status()["configured"] is False
+    rt.settings.update({"dart": {"api_key": "k" * 40}})
+    assert dart.titles("005930") == ["11-20 단일판매ㆍ공급계약체결", "11-19 주요사항보고서(유상증자결정)"] and dart.titles("000660") == []
+    assert len(calls) == 2 and calls[0]["crtfc_key"] == "k" * 40 and calls[0]["page_count"] == 100
+    dart.titles("005930")
+    assert len(calls) == 2 and dart.note["ok"] and dart.note["codes"] == 1                                 # 30분 동안 다시 받지 않는다
+    assert rt.settings.all()["dart"]["api_key"] == "k" * 40 and "k" * 40 not in json.dumps(rt.settings.public()) and rt.settings.public()["dart"]["api_key"] == "********"   # 화면에는 가려서 준다
+    monkeypatch.setattr(rt, "dart", dart)
+    row = {}
+    rt.aipick._dart_into(row, "005930")
+    assert row["최근 공시(전자공시 제목)"][0].endswith("공급계약체결")
+    bad = Dart(rt, get=lambda p: {"status": "020", "message": "요청 제한 초과"})
+    assert bad.titles("005930") == [] and bad.note["ok"] is False and "020" in bad.note["error"]

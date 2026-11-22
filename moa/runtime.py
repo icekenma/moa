@@ -63,6 +63,8 @@ class Runtime:
         self.health = Health(db)
         from .album import Album
         self.album = Album(db)
+        from .dart import Dart
+        self.dart = Dart(self)          # 전자공시 제목(사용자가 인증키를 넣었을 때만)
         from .prep import Prep
         self.prep = Prep(self)          # 넓게 훑기 · 장 시작 전 리서치(돌리는 것은 run.py에서 시작)
         self.ship = None                       # run.py가 붙인다(저장소·data 폴더가 있어야 해서)

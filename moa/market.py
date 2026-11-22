@@ -427,6 +427,27 @@ class Market:
         except Exception:
             return {}
 
+    def kr_fund(self, code):
+        """재무 지표(키움 주식기본정보): PER·PBR·ROE·시가총액(억원). 못 받으면 None. 종목마다 12시간에 한 번."""
+        cl = self.kr_client()
+        if cl is None:
+            return None
+
+        def f(v):
+            try:
+                return float(str(v or "").replace(",", "").replace("+", "").strip() or "x")
+            except ValueError:
+                return None
+
+        def load():
+            d = cl.call("quote", {"stk_cd": code})
+            out = {"PER": f(d.get("per")), "PBR": f(d.get("pbr")), "ROE": f(d.get("roe")), "시총(억)": f(d.get("mac"))}
+            return out if any(v is not None for v in out.values()) else None
+        try:
+            return self.cache.get(("fund", code), 12 * 3600, load, stale=72 * 3600)
+        except Exception:
+            return None
+
     def kr_flow(self, code):
         """수급: 외국인·기관의 최근 5·20거래일 순매수(억원)와 연속 순매수 일수(순매도면 음수). 못 받으면 None.
         키움 ka10059(금액 기준, 백만원)를 종목마다 3시간에 한 번만 받는다."""
@@ -643,6 +664,8 @@ class Market:
                          ("국내 일봉", lambda: len(self.kr_chart("005930", "1m")["points"])),
                          ("종목 목록 수", lambda: len(self.kr_master())),
                          ("종목 목록 경고·업종 정보", self._master_check),
+                         ("재무 지표(삼성전자)", lambda: self.kr_fund("005930") or "받지 못함"),
+                         ("전자공시(DART)", lambda: self.rt.dart.status() if getattr(self.rt, "dart", None) else "없음"),
                          ("수급(외국인·기관 순매수, 삼성전자)", lambda: self.kr_flow("005930") or "받지 못함"),
                          ("넓게 훑기 · 장 시작 전 리서치", lambda: self.rt.prep.status("kr") if getattr(self.rt, "prep", None) else "없음"),
                          ("미국 현재가(AAPL)", lambda: self.yh_quote("AAPL")),

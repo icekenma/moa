@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261122.2206";
+const UI_VERSION = "261122.2220";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2873,7 +2873,7 @@ atAttrHtml(st) {
           ${sz.warm ? `<span class="tag">검증 단계 ×${sz.warm_mult} · ${sz.warm_left}건 남음</span>` : ""}
           ${sz.skip_watch ? `<span class="tag">관망이면 안 삼</span>` : `<span class="tag">관망이면 ×${sz.watch_mult}</span>`}
           ${sz.min_one ? `<span class="tag">모의: 모자라도 1주</span>` : ""}
-          ${sz.scale_in ? `<span class="tag y">분할 매수: 확신만큼 먼저, 오르면 나머지</span>` : ""}${sz.vol_stop ? `<span class="tag y">흔들림 맞춤 손절</span>` : ""}${sz.hold_watch ? `<span class="tag y">재료 감시: 무효면 정리</span>` : ""}
+          ${sz.scale_in ? `<span class="tag y">분할 매수: 확신만큼 먼저, 오르면 나머지</span>` : ""}${sz.vol_stop ? `<span class="tag y">흔들림 맞춤 손절</span>` : ""}${sz.hold_watch ? `<span class="tag y">재료 감시: 무효면 정리</span>` : ""}${sz.regime_size ? `<span class="tag y">국면별 비중 0.5~1.2배</span>` : ""}${sz.counter_check ? `<span class="tag y">반대 의견 확인</span>` : ""}
           ${sz.risk_pct ? `<span class="tag y">손절하면 굴리는 돈의 ${sz.risk_pct}%만 잃게</span>` : ""}${sz.edge_size ? `<span class="tag y">확신만큼 0.5~1.5배</span>` : ""}
           ${sz.group_max ? `<span class="tag y">같은 업종·테마 ${sz.group_max}종목까지</span>` : ""}${sz.corr_max ? `<span class="tag y">같이 움직이는 종목 제외</span>` : ""}</div>
         <div class="fl-facts"><span>익절·손절 폭 = AI가 정한 폭 × ${sz.exit_mult}(최대 +${sz.tp_cap}% / −${sz.sl_cap}%)</span><span>남은 현금 ${M(sz.cash)}</span></div></div>`;
@@ -7001,12 +7001,32 @@ pages.settings = {
           <div class="tiny">moa 밖(콘솔 플레이그라운드 등)에서 쓴 금액까지 빼려면 넣어요. 개인 계정은 조직을 만들어야 발급돼요. 없으면 moa 사용분만 빼요.</div></details>
         <div class="btns"><button class="btn" id="aiTest">연결 확인</button><button class="btn dark" id="aiSave">저장</button></div>
       </section>
+      <section class="card" id="dartCard"><div class="card-head"><h2>전자공시(DART)</h2><span class="tag" id="dartTag">확인 중</span></div>
+        <div class="tiny">금융감독원 전자공시 인증키를 넣으면 AI 추천 후보와 보유 종목에 최근 공시 제목(공급계약·증자·실적 등)을 붙여 줘요. 인증키는 opendart.fss.or.kr에서 무료로 받아요. 없어도 다른 기능은 그대로 돌아요.</div>
+        <label class="field">인증키<input id="dartKey" type="password" placeholder="40자리 인증키" autocomplete="off" autocapitalize="off"></label>
+        <div class="tiny" id="dartNote"></div>
+        <div class="btns"><button class="btn dark" id="dartSave">저장하고 확인</button></div>
+      </section>
       <section class="card tight"><div class="card-head" style="padding-top:8.5px"><h2>최근 사용</h2></div><div class="list">
         ${st.recent.length ? st.recent.map((r) => `<div class="item"><span class="ico">${esc({ stock: "종목", portfolio: "점검", review: "복기", sweep: "훑기", chat: "질문", test: "확인", pick: "추천", pickw: "중기", learn: "복기", divplan: "배당" }[r.kind] || r.kind)}</span>
           <span class="main"><b>${esc(r.ts.slice(5, 16).replace("T", " "))}</b><span class="sub">${esc(r.model.replace("claude-", ""))} · 입력 ${won(r.in_tok)} · 출력 ${won(r.out_tok)}${r.searches ? ` · 검색 ${r.searches}` : ""}</span></span>
           <span class="end"><b>$${Number(r.usd).toFixed(4)}</b></span></button>`).join("") : `<div class="empty">아직 사용 기록이 없어요</div>`}</div></section>`;
     const body = () => ({ ai: { api_key: $("#aiKey").value.trim(), admin_key: $("#aiAdmin").value.trim(), model: $("#aiModel").value, review_model: $("#aiReview").value, budget_usd: Number($("#aiBudget").value) || 0, web_search: $("#aiWeb").checked } });
     bindCredit($("#crCard"), () => this.ai());
+    const dartShow = (s) => {
+      const n = s.note || {};
+      $("#dartTag").textContent = !s.configured ? "키 없음" : n.ok ? "연결됨" : n.ok === false ? "오류" : "확인 중";
+      $("#dartTag").className = "tag" + (s.configured && n.ok === false ? " warn" : "");
+      $("#dartNote").textContent = !s.configured ? "" : n.ok ? `최근 4일 공시 ${n.n}건 · 상장 종목 ${n.codes}개 (${String(n.at || "").slice(11, 16)} 기준)` : n.error || "";
+      if (s.configured) $("#dartKey").placeholder = "저장돼 있어요(바꿀 때만 입력)";
+    };
+    api("GET", "/api/dart").then(dartShow).catch(() => {});
+    $("#dartSave").onclick = async () => {
+      const k = $("#dartKey").value.trim();
+      if (k) await run(() => api("PUT", "/api/settings", { dart: { api_key: k } }), "저장했어요");
+      dartShow(await api("GET", "/api/dart?fresh=1"));
+      $("#dartKey").value = "";
+    };
     $("#aiSave").onclick = async () => { await run(() => api("PUT", "/api/settings", body()), "저장했어요"); this.ai(); };
     $("#aiTest").onclick = async () => {
       await run(() => api("PUT", "/api/settings", body()));

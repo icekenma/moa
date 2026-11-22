@@ -401,6 +401,7 @@ class AIPick:
                 fl = rt.market.kr_flow(it["sym"])
                 if fl:
                     row["수급(억원)"] = fl
+                self._dart_into(row, it["sym"])
             sc = self.learn_score(_feat_of(row, ss), "day", mkt)
             if sc is not None:
                 row["과거성적_가산점"] = sc
@@ -460,6 +461,15 @@ class AIPick:
         if not ss["open"]:
             ask += " (지금은 정규장이 아니야. 다음 정규장 시작 직후 기준으로 판단하고, 그 점을 첫 줄에 밝혀.)"
         return f"AI 종목 추천({'국내' if mkt == 'kr' else '미국'})", ask, data
+
+    def _dart_into(self, row, sym):
+        """전자공시 인증키가 있으면 그 종목의 최근 공시 제목을 붙인다."""
+        try:
+            t = self.rt.dart.titles(sym) if getattr(self.rt, "dart", None) else []
+        except Exception:
+            t = []
+        if t:
+            row["최근 공시(전자공시 제목)"] = t
 
     def _brief_into(self, data, mkt):
         """오늘 장 시작 전에 받아 둔 리서치 메모가 있으면 정밀 추천 자료에 넣는다."""
@@ -591,6 +601,10 @@ class AIPick:
                 fl = rt.market.kr_flow(it["sym"])
                 if fl:
                     row["수급(억원)"] = fl
+                fu = rt.market.kr_fund(it["sym"])
+                if fu:
+                    row["재무"] = fu
+                self._dart_into(row, it["sym"])
             if it.get("scan") is not None:
                 row["훑기_점수"] = it["scan"]
             sc = self.learn_score(_feat_swing(row, {}, ss, ix, True), h, mkt)
@@ -644,7 +658,7 @@ class AIPick:
                f"먼저 앞으로 {H['label']} 안에 주가를 움직일 재료(정책·예산·실적·수주·일정이 정해진 이벤트·수급)를 찾고, 그 수혜 종목을 골라. "
                "후보_상세는 지금 돈이 몰리는 종목일 뿐이니, 재료가 더 좋은 종목이 있으면 후보 밖에서 골라도 돼. "
                "이미 며칠 급등해 재료가 가격에 반영된 종목은 감점해."
-               + (" '수급(억원)'은 외국인·기관의 최근 순매수야(연속일이 음수면 연속 순매도). 출처가 '넓게 훑기'인 후보는 앱이 장이 끝난 뒤 거래가 많은 종목 수백 개를 일봉·수급으로 훑어 고른 것이야." if mkt == "kr" else ""))
+               + (" '수급(억원)'은 외국인·기관의 최근 순매수야(연속일이 음수면 연속 순매도). '재무'는 PER·PBR·ROE·시가총액(억원)이고, '최근 공시'가 있으면 전자공시 제목이야(본문은 필요하면 검색으로 확인해). 출처가 '넓게 훑기'인 후보는 앱이 장이 끝난 뒤 거래가 많은 종목 수백 개를 일봉·수급으로 훑어 고른 것이야." if mkt == "kr" else ""))
         if ex:
             data["이미 다룬 종목(빼고 골라)"] = sorted(ex)[:30]
             ask += " '이미 다룬 종목'은 이미 샀거나 오늘 거래했으니 빼고 골라."
@@ -1552,6 +1566,23 @@ def _flow_feat(c):
     return {"ff5": fl.get("외국인5일"), "fo5": fl.get("기관5일")} if fl else {}
 
 
+def _fund_feat(c):
+    fu = c.get("재무") if isinstance(c.get("재무"), dict) else None
+    return {"per": fu.get("PER"), "roe": fu.get("ROE"), "pbr": fu.get("PBR")} if fu else {}
+
+
+def _per_bucket(r):
+    if "per" not in r["f"]:
+        return None
+    v = r["f"]["per"]
+    return "적자·없음" if not v or v <= 0 else "10 미만" if v < 10 else "10~25" if v < 25 else "25 이상"
+
+
+def _roe_bucket(r):
+    v = r["f"].get("roe")
+    return None if v is None else "마이너스" if v < 0 else "0~10%" if v < 10 else "10% 이상"
+
+
 def _flow_bucket(r):
     a, b = r["f"].get("ff5"), r["f"].get("fo5")
     if a is None or b is None:
@@ -1570,7 +1601,7 @@ def _feat_swing(c, x, ss, ix, in_cand):
     return {"chg": c.get("등락률%"), "r5": f.get("5일%"), "r20": f.get("20일%"), "ma20": f.get("20일선대비%"), "ma60": f.get("60일선대비%"),
             "hi60": f.get("60일고점대비%"), "volx5": f.get("5일거래량배수"), "atr": f.get("하루변동폭%"), "streak": f.get("연속상승일"),
             "idx20": (ix or {}).get("20일선대비%"), "idx5": (ix or {}).get("5일%"), "cand": bool(in_cand),
-            "cat": x.get("catalyst_type"), "open": bool(ss.get("open")), "scan": c.get("출처") == "넓게 훑기", **_flow_feat(c)}
+            "cat": x.get("catalyst_type"), "open": bool(ss.get("open")), "scan": c.get("출처") == "넓게 훑기", **_flow_feat(c), **_fund_feat(c)}
 
 
 GRADE_V = 3  # 채점 방식 버전(바뀌면 최근 추천을 다시 채점)
@@ -1665,6 +1696,8 @@ def _defs(h):
         ("재료 유형", lambda r: r["f"].get("cat") or None, True),
         ("종목 출처", lambda r: None if "cand" not in r["f"] else "넓게 훑기 후보" if r["f"].get("scan") else ("순위 후보 안" if r["f"]["cand"] else "AI가 뉴스에서 찾음"), True),
         ("수급(5일)", _flow_bucket, True),
+        ("PER", _per_bucket, True),
+        ("ROE", _roe_bucket, True),
         ("뉴스 점수", _news_bucket, False),
         ("20일선 위치", _split("ma20", [0], ["20일선 아래", "20일선 위"]), True),
         ("60일선 위치", _split("ma60", [0], ["60일선 아래", "60일선 위"]), True),

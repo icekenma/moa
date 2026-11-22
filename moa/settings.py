@@ -53,6 +53,7 @@ DEFAULTS = {
     "ai": {"api_key": "", "model": "claude-sonnet-5-5", "review_model": "claude-opus-5-5", "budget_usd": 10, "web_search": True,
            "admin_key": "",            # 선택: Admin API 키(sk-ant-admin...)면 콘솔 전체 사용액까지 반영
            "credit": {"usd": None, "at": None, "base_admin": 0.0}},  # 콘솔에서 본 잔액과 그 시각
+    "dart": {"api_key": ""},        # 금융감독원 전자공시(OpenDART) 인증키. 넣으면 추천 후보·보유 종목에 최근 공시 제목을 붙인다
     "inbox_auto": {"card": True, "income": False, "outflow": False},
     # 백업: 하루 한 번 자동(노트북이 켜져 있을 때), 자동 백업 보관 개수, 함께 복사해 둘 다른 폴더(클라우드·USB 등)
     "backup": {"auto": True, "keep": 14, "extra_dir": ""},
@@ -63,7 +64,7 @@ DEFAULTS = {
 }
 
 SECRET_PATHS = [("kiwoom", "scalp", "secretkey"), ("kiwoom", "dca", "secretkey"), ("kiwoom_view", "secretkey"),
-                ("ai", "api_key"), ("ai", "admin_key")]
+                ("ai", "api_key"), ("ai", "admin_key"), ("dart", "api_key")]
 MASK = "********"
 
 

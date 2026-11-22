@@ -644,6 +644,15 @@ class Market:
         except Exception:
             return None
 
+    def _risk_check(self):
+        """요인 기록(20년)이 받아지는지, 위기 재현·만약에가 실제 자료로 계산되는지. 계좌와 상관없는 가상의 보유로 본다."""
+        from .riskview import scenarios
+        lv = self.rt.riskview.levels()
+        bars = (self.rt.invest.candles("kr", "005930", "d", 600) or {}).get("bars") or []
+        S = scenarios([{"name": "삼성전자", "mkt": "kr", "value": 10_000_000, "closes": {b["t"]: b["c"] for b in bars if b.get("c")}}], lv)
+        return {"요인 기록": {k: [len(v), min(v), max(v)] if v else "받지 못함" for k, v in lv.items()}, "일봉 수": len(bars),
+                "민감도": S and S["betas"], "시나리오": S and [[x["name"], x["shock"], x["pct"]] for x in S["rows"]]}
+
     def _master_check(self):
         """자동매매의 '경고·특수 종목 제외'가 쓰는 정보가 실제로 들어오는지: 값의 종류와 걸러질 종목 예."""
         from .trading.universe import junk_reason
@@ -664,6 +673,7 @@ class Market:
                          ("국내 일봉", lambda: len(self.kr_chart("005930", "1m")["points"])),
                          ("종목 목록 수", lambda: len(self.kr_master())),
                          ("종목 목록 경고·업종 정보", self._master_check),
+                         ("위험 시나리오 점검(삼성전자 1,000만원을 들고 있다고 치고)", self._risk_check),
                          ("재무 지표(삼성전자)", lambda: self.kr_fund("005930") or "받지 못함"),
                          ("전자공시(DART)", lambda: self.rt.dart.status() if getattr(self.rt, "dart", None) else "없음"),
                          ("수급(외국인·기관 순매수, 삼성전자)", lambda: self.kr_flow("005930") or "받지 못함"),

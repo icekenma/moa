@@ -1993,7 +1993,8 @@ def test_junk_universe_rules():
     assert J("kr", "005935", "삼성전자우", ok) == "우선주" and J("kr", "00088K", "한화3우B") == "우선주"
     assert J("kr", "478390", "신한제15호스팩", dict(ok, market="코스닥")) == "스팩"
     assert J("kr", "122630", "KODEX 레버리지", dict(ok, market="ETF")) == "레버리지·인버스·ETN" and J("kr", "252670", "KODEX 200선물인버스2X", dict(ok, market="ETF")).startswith("레버리지")
-    assert J("kr", "069500", "KODEX 200", dict(ok, market="ETF")) == ""                               # 보통 ETF는 그대로
+    assert J("kr", "069500", "KODEX 200", dict(ok, market="ETF")) == "" and J("kr", "132030", "KODEX 골드선물(H)", dict(ok, market="ETF")) == ""   # 보통 ETF는 그대로
+    assert J("kr", "000020", "동화약품", dict(ok, audit="단기과열")) == "단기과열" and J("kr", "000020", "동화약품", dict(ok, audit="투자주의")) == ""
     assert J("kr", "000020", "동화약품", dict(ok, warn="5")) == "투자경고" and J("kr", "000020", "동화약품", dict(ok, warn="3")) == "단기과열"
     assert J("kr", "000020", "동화약품", dict(ok, audit="투자주의환기종목")) == "투자주의환기" and J("kr", "000020", "동화약품", dict(ok, state="관리종목|증거금100%")) == "관리종목"
     assert J("us", "TQQQ", "ProShares UltraPro QQQ") and J("us", "SOXL", "Direxion Daily Semiconductor Bull 3X Shares") and J("us", "AAPL", "Apple Inc") == ""
@@ -2036,3 +2037,79 @@ def test_attribution_splits_market_pick_and_cost(env, monkeypatch):
     assert prob_better([-2, -3, -1, -2, -2, -3, -1, -2], [2, 3, 1, 2, 2, 3, 1, 2]) > 0.99
     mixed = prob_better([-5, 6, -4, 5, -6, 4, -5, 5], [-4, 6, -5, 5, -3, 4, -6, 6])
     assert mixed < 0.9 and mixed == prob_better([-5, 6, -4, 5, -6, 4, -5, 5], [-4, 6, -5, 5, -3, 4, -6, 6]) and prob_better([], [1]) == 0.0
+
+
+# ---------- 2단계: 쏠림 · 위험 기준 수량 · 확신만큼 크기 · 체결 품질 ----------
+def _set(env, rid, **kw):
+    p = env.at._run(rid)["params"]
+    p.update(kw)
+    env.rt.db.x("UPDATE at_runs SET params=? WHERE id=?", (json.dumps(p, ensure_ascii=False), rid))
+
+
+def _end(env, rid):
+    env.at.control(rid, "end")
+    for _ in range(3):
+        r = env.at._run(rid)
+        if r["status"] == "ended":
+            return
+        env.at._manage(r)
+    env.at._finish(env.at._run(rid), "테스트 정리")
+
+
+def test_crowd_filter_blocks_same_sector_theme_and_correlated(env, monkeypatch):
+    info = {"005930": {"sector": "전기/전자"}, "000660": {"sector": "전기/전자"}, "035420": {"sector": "서비스"}}
+    monkeypatch.setattr(env.rt.market, "kr_info", lambda code: dict({"market": "코스피", "warn": "0", "audit": "정상", "state": ""}, **info.get(code, {})))
+    monkeypatch.setattr(env.rt.market, "kr_market", lambda code: "코스피")
+    up = [100 + i + (3 if i % 2 else 0) for i in range(22)]
+    bars = {"005930": up, "000660": [v * 2 for v in up], "035420": [100 + (5 if i % 3 == 0 else -2) * (1 if i % 2 else -1) for i in range(22)]}
+    monkeypatch.setattr(env.rt.invest, "candles", lambda mkt, sym, tf: {"bars": [{"c": c, "h": c, "l": c} for c in bars[sym]]})
+    rid = env.run()
+    assert env.enter(rid, [env.pick("005930"), env.pick("000660")]) == 2             # 꺼져 있으면 예전 그대로
+    _end(env, rid)
+    rid = env.run()
+    _set(env, rid, group_max=1)
+    assert env.enter(rid, [env.pick("005930", theme="반도체"), env.pick("000660"), env.pick("035420", theme="반도체")]) == 1
+    dec = json.loads(env.rt.db.q("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' ORDER BY id DESC LIMIT 1", (rid,))[0]["data"])["decisions"]
+    why = {d["sym"]: d["why"] for d in dec if d.get("code") == "crowd"}
+    assert set(why) == {"000660", "035420"} and "업종" in why["000660"] and "테마" in why["035420"]
+    _end(env, rid)
+    rid = env.run()
+    _set(env, rid, corr_max=0.8)
+    assert env.enter(rid, [env.pick("005930"), env.pick("000660"), env.pick("035420")]) == 2
+    assert [t["sym"] for t in env.at._open(rid)] == ["005930", "035420"]             # 똑같이 움직인 종목만 빠진다
+    assert "crowd" in dict(env.at.FILTERS) and {"div", "risk", "edge"} <= set(VARIANTS)
+    assert all(not make_plan(3_000_000, "kr", s, 30).get(k) for s in ("day", "swing", "month") for k in ("group_max", "corr_max", "risk_pct", "edge_size"))   # 기본은 모두 꺼짐
+
+
+def test_risk_and_edge_sizing(env):
+    def qty(pick, **kw):
+        rid = env.run()
+        _set(env, rid, warmup_trades=0, **kw)
+        assert env.enter(rid, [pick]) == 1
+        t, base = env.at._open(rid)[0], env.at.money(env.at._run(rid))["base"]
+        _end(env, rid)
+        return t["qty"] * t["entry_price"], base
+    flat, base = qty(env.pick("005930"))
+    wide, _ = qty(env.pick("005930", target_pct=4.0, stop_pct=2.0), risk_pct=0.5)
+    tight, _ = qty(env.pick("005930", target_pct=1.2, stop_pct=0.6), risk_pct=0.5)
+    assert abs(wide * 2.0 / 100 - base * 0.005) < 70000 * 1.5 * 0.02 + 1                # 손절에 닿으면 굴리는 돈의 0.5%쯤
+    assert tight > wide and tight <= flat * 1.5 + 70000                                # 좁은 손절은 더 사되 1회 비중의 1.5배까지
+    strong, _ = qty(env.pick("005930", win_prob=75, target_pct=4.5, stop_pct=1.5), edge_size=True)
+    weak, _ = qty(env.pick("005930", win_prob=56, target_pct=2.3, stop_pct=1.5), edge_size=True)
+    mid, _ = qty(env.pick("005930", win_prob=57, target_pct=3.0, stop_pct=1.5), edge_size=True)                    # 켈리 비율 0.355 → 1배
+    assert strong > flat > weak and strong <= flat * 1.5 + 70000 and weak >= flat * 0.5 - 70000 and abs(mid - flat) <= 70100
+
+
+def test_slippage_records_decided_and_filled_prices(env):
+    from moa.autotrade import slippage
+    rid = env.run()
+    assert env.enter(rid, [env.pick("005930")]) == 1
+    t = env.at._open(rid)[0]
+    assert t["q_in"] == 70000.0 and t["entry_price"] > t["q_in"]                       # 본 값보다 비싸게 산 만큼이 미끄러짐
+    env.at._sell(env.at._run(rid), t, 71000.0, "익절")
+    r = env.at._closed(rid)[0]
+    s = env.at.stats(rid)["slip"]
+    assert r["q_out"] == 71000.0 and r["exit_price"] < 71000.0
+    assert s["n"] == 1 and s["buy"] > 0 > s["sell"] and abs(s["round"] - (s["buy"] - s["sell"])) < 0.002 and s["real"] is False
+    assert s["by_time"] == [{"key": "오전(10~12시)", "n": 1, "buy": s["buy"]}]
+    assert slippage([dict(r, q_in=None, q_out=None)], "paper") == {"n": 0}             # 옛 거래는 세지 않는다

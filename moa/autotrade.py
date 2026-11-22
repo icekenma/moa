@@ -35,8 +35,8 @@ US_SLIP = 0.0005       # 모의 체결 슬리피지(미국)
 # 추천받은 종목을 사지 않은 이유(기회 분석에 쓴다)
 SKIP = {"winprob": "승률 기준 미달", "score": "점수 기준 미달", "rr": "손익비 기준 미달", "fee": "목표가 비용보다 작음",
         "chase": "추천가보다 올라 쫓지 않음", "qty": "배정 금액으로 1주를 못 삼", "full": "보유 자리 없음", "dup": "오늘 이미 거래",
-        "auto": "앱이 고른 예비 종목", "junk": "경고·특수 종목", "watch": "AI가 관망 권함", "quote": "시세 없음", "fail": "매수 실패", "market": "지수가 약해 쉼", "etc": "기타"}
-_SKIP_TEXT = (("경고·특수", "junk"), ("승률", "winprob"), ("점수", "score"), ("손익비", "rr"), ("비용", "fee"), ("쫓아가지", "chase"), ("1주를 못", "qty"),
+        "auto": "앱이 고른 예비 종목", "junk": "경고·특수 종목", "crowd": "같은 업종·테마가 이미 있음", "watch": "AI가 관망 권함", "quote": "시세 없음", "fail": "매수 실패", "market": "지수가 약해 쉼", "etc": "기타"}
+_SKIP_TEXT = (("경고·특수", "junk"), ("쏠림", "crowd"), ("승률", "winprob"), ("점수", "score"), ("손익비", "rr"), ("비용", "fee"), ("쫓아가지", "chase"), ("1주를 못", "qty"),
               ("꽉 참", "full"), ("이미 거래", "dup"), ("예비 종목", "auto"), ("시세", "quote"), ("매수 실패", "fail"))
 # 파는 이유 전부. 매매 규칙 대장(moa/evolution.py RULES)과 항상 같아야 한다(테스트가 확인)
 EXITS = ("익절", "손절", "추적 익절", "시간 정리", "기간 정리", "종료 정리", "분할 익절", "이익 지키기", "본전 정리")
@@ -85,6 +85,10 @@ PLAN_KEYS = {
     "vol_stop": (None, None, bool, "흔들림(ATR)에 맞춰 손절을 넓히고 수량을 줄임"),
     "scale_out": (None, None, bool, "분할 매도: 상황(승률·지수·오른 속도·남은 시간)에 맞춘 비율로 나눠 팔기"),
     "scale_in": (None, None, bool, "분할 매수: 확신(승률·지수)에 맞춘 비율로 먼저 사고 오르면 나머지"),
+    "group_max": (0, 3, int, "같은 업종·테마 동시 보유 수(0=제한 없음)"),
+    "corr_max": (0.0, 0.95, float, "보유 종목과 같이 움직이는 정도가 이보다 크면 사지 않음(0=끔)"),
+    "risk_pct": (0.0, 2.0, float, "한 번 손절에 잃는 돈(굴리는 돈의 %, 0=1회 비중대로)"),
+    "edge_size": (None, None, bool, "확신만큼 크기: 보정 승률·손익비로 본 기대값이 클수록 크게(0.5~1.5배)"),
 }
 
 
@@ -162,6 +166,9 @@ VARIANTS = {
     "calm": ("약한 날 쉬기", "지수가 -1% 아래면 사지 않음(실전 기본과 같은 지수 기준)", {"idx_floor": -1.0}),
     "out": ("분할 매도", "승률·지수·오른 속도·남은 시간으로 힘을 재서, 약하면 일찍 많이 팔고 강하면 늦게 조금만 팔아 나머지를 길게", {"scale_out": True}),
     "in": ("분할 매수", "확신이 높으면 많이(아주 높으면 한 번에), 낮으면 조금만 먼저 사고 오르는 걸 확인한 뒤 나머지", {"scale_in": True}),
+    "div": ("쏠림 줄이기", "같은 업종·테마는 한 종목만, 보유 종목과 20일 동안 같이 움직인 종목(상관 0.8 이상)은 사지 않음", {"group_max": 1, "corr_max": 0.8}),
+    "risk": ("위험 기준 수량", "손절하면 굴리는 돈의 0.5%만 잃도록 수량을 정함(손절이 넓으면 적게, 좁으면 많이 · 1회 비중의 1.5배까지)", {"risk_pct": 0.5}),
+    "edge": ("확신만큼 크기", "보정 승률과 손익비로 본 기대값이 클수록 크게, 작을수록 작게(0.5~1.5배)", {"edge_size": True}),
     "vol": ("흔들림 맞춤 손절", "최근 봉의 평균 흔들림(ATR)에 맞춰 손절을 넓히고, 잃는 돈은 같도록 수량을 줄임", {"vol_stop": True}),
 }
 # 분할 매도·매수는 '힘'(0~1: 보정 승률·지수·오른 속도·남은 시간)으로 비율과 시점을 그때그때 정한다 → AutoTrade._strength
@@ -172,6 +179,7 @@ SCALE_OUT_F2 = (0.6, 0.3)      # 2차에 (남은 것 중) 파는 비율
 SCALE_IN_F = (0.4, 0.8)        # 먼저 사는 비율: 40%(확신 낮음) ~ 80%(높음), 확신 0.85 이상이면 한 번에
 SCALE_IN_AT = (0.5, 0.2)       # 나머지를 사는 확인 폭: 손절폭의 50%(확신 낮음) ~ 20%(높음)
 SCALE_IN_MIN = {"day": 30, "swing": 360, "month": 360}   # 분할 매수: 이 시간(분) 안에 오르지 않으면 나머지는 사지 않는다
+EDGE_MID, EDGE_K = 0.35, 3.0   # 확신만큼 크기: 켈리 비율이 이 값이면 1배, 0.1 차이마다 0.3배씩
 VOL_K = {"day": 2.0, "swing": 1.5, "month": 1.5}   # 손절 = 최근 봉 평균 흔들림(ATR, 단타는 5분봉·스윙은 일봉) × 이 배수보다 좁게는 잡지 않는다
 def apply_variant(p, key, keep=()):
     """플랜 값에 실험 플랜의 차이를 입힌다. '*1.5'는 곱하기, '+5'·'-7'은 더하기·빼기, 그 밖은 그 값으로."""
@@ -292,6 +300,23 @@ def prob_better(worse, better, rounds=500):
     return hit / rounds
 
 
+def slippage(rows, mode):
+    """체결 품질: 사기로·팔기로 정했을 때 본 값과 실제 체결가의 차이(%). 살 때는 +가 비싸게 산 것, 팔 때는 −가 싸게 판 것.
+    모의는 앱이 가정한 미끄러짐이고, 실전은 증권사 체결가로 잰 값이다."""
+    ins = [(r["entry_price"] / r["q_in"] - 1) * 100 for r in rows if r.get("q_in") and r.get("entry_price") and r.get("fill_ok", 1)]
+    outs = [(r["exit_price"] / r["q_out"] - 1) * 100 for r in rows if r.get("q_out") and r.get("exit_price") and r.get("exit_ok", 1)]
+    if not ins and not outs:
+        return {"n": 0}
+    avg = lambda xs: round(sum(xs) / len(xs), 3) if xs else None
+    tod = {}
+    for r in rows:
+        if r.get("q_in") and r.get("entry_price") and r.get("fill_ok", 1):
+            k = "장 초반(~10시)" if r["entry_hm"] < "10:00" else "오전(10~12시)" if r["entry_hm"] < "12:00" else "오후(12시~)"
+            tod.setdefault(k, []).append((r["entry_price"] / r["q_in"] - 1) * 100)
+    return {"n": max(len(ins), len(outs)), "buy": avg(ins), "sell": avg(outs), "real": mode == "real",
+            "round": round((avg(ins) or 0) - (avg(outs) or 0), 3), "by_time": [{"key": k, "n": len(v), "buy": avg(v)} for k, v in tod.items()]}
+
+
 def attribution(rows):
     """성과 분해: 거래 한 번의 평균 수익(%)을 '지수가 움직여서', '종목을 골라서', '비용'으로 나눈다.
     살 때·팔 때의 지수 값이 적힌 거래만 쓴다(v5.10부터 적는다). giveback: 보유 중 최고에서 팔 때까지 되돌려 준 폭."""
@@ -347,6 +372,9 @@ class AutoTrade:
         AP._col(db, "at_trades", (("part", "INTEGER NOT NULL DEFAULT 0"), ("parent", "INTEGER"), ("add_qty", "INTEGER NOT NULL DEFAULT 0"), ("add_until", "TEXT"), ("add_at", "REAL")))
         # 살 때·팔 때의 지수 값: 번 돈을 '지수가 올라서'와 '종목을 잘 골라서'로 나눠 보려고(성과 분해)
         AP._col(db, "at_trades", (("idx_name", "TEXT"), ("idx_in", "REAL"), ("idx_out", "REAL")))
+        # 사기로 정했을 때·팔기로 정했을 때 본 값: 실제 체결가와 견줘 체결 품질(미끄러짐)을 잰다
+        AP._col(db, "at_trades", (("q_in", "REAL"), ("q_out", "REAL")))
+        self._ret = {}        # (시장, 종목) → (날짜, 최근 일간 수익률들): 쏠림(상관) 계산용
         AP._col(db, "at_runs", (("last_review_day", "TEXT"), ("lab_id", "INTEGER"), ("variant", "TEXT"), ("last_full", "REAL NOT NULL DEFAULT 0")))
         self._lvl = {}        # 시장 → (받은 시각, 지수 줄들)
         self._idx = {}        # 시장 → (받은 시각, 지수 등락률)
@@ -986,6 +1014,7 @@ class AutoTrade:
             fill = price
         else:
             fill = C.sell_fill(price, self.rt.settings.get("costs")) if mkt == "kr" else round(price * (1 - US_SLIP), 4)
+        self.rt.db.x("UPDATE at_trades SET q_out=? WHERE id=?", (price, t["id"]))
         self._close(run, t, fill, reason, sell_no, exit_ok)
 
     def _close(self, run, t, fill, reason, sell_no="", exit_ok=1):
@@ -1153,6 +1182,57 @@ class AutoTrade:
         if not row or not row.get("price"):
             return None, None
         return str(row.get("name") or ""), float(row["price"])
+
+    def _day_returns(self, mkt, sym):
+        """최근 20거래일의 일간 수익률(쏠림 계산용). 하루에 한 번만 받는다. 못 받으면 None."""
+        key, today = (mkt, sym), AP.mkt_date(mkt)
+        hit = self._ret.get(key)
+        if hit and hit[0] == today:
+            return hit[1]
+        try:
+            bars = (self.rt.invest.candles(mkt, sym, "d") or {}).get("bars") or []
+            c = [b["c"] for b in bars if b.get("c")][-21:]
+            rets = [b / a - 1 for a, b in zip(c, c[1:])] if len(c) >= 11 else None
+        except Exception:
+            rets = None
+        self._ret[key] = (today, rets)
+        return rets
+
+    def _crowded(self, run, p, opens, sym, theme):
+        """지금 보유한 종목들과 같은 쪽에 쏠리면 그 이유(짧은 글), 아니면 빈 글.
+        ① 같은 업종(국내 종목 목록의 업종) 또는 AI가 붙인 같은 테마가 group_max개 이상 ② 최근 20일 일간 수익률의 상관이 corr_max 이상."""
+        mkt, held = run["mkt"], {}
+        for t in opens:
+            held.setdefault(t["sym"], t)
+        held.pop(sym, None)
+        if not held:
+            return ""
+        sec = (lambda s: self.rt.market.kr_info(str(s)).get("sector") or "") if mkt == "kr" else (lambda s: "")
+        gm = int(p.get("group_max") or 0)
+        if gm:
+            mine, th = sec(sym), str(theme or "").strip()
+            same_sec = [t["name"] for s, t in held.items() if mine and sec(s) == mine]
+            if len(same_sec) >= gm:
+                return f"업종 '{mine}'에 이미 {same_sec[0]}"
+            same_th = [t["name"] for t in held.values() if th and str(json.loads(t["why"] or "{}").get("theme") or "").strip() == th]
+            if len(same_th) >= gm:
+                return f"테마 '{th}'에 이미 {same_th[0]}"
+        cm = float(p.get("corr_max") or 0)
+        if cm:
+            a = self._day_returns(mkt, sym)
+            for s, t in held.items():
+                b = self._day_returns(mkt, s)
+                if not a or not b:
+                    continue
+                n = min(len(a), len(b))
+                x, y = a[-n:], b[-n:]
+                mx, my = sum(x) / n, sum(y) / n
+                vx, vy = sum((v - mx) ** 2 for v in x), sum((v - my) ** 2 for v in y)
+                if n >= 10 and vx > 0 and vy > 0:
+                    r = sum((u - mx) * (v - my) for u, v in zip(x, y)) / math.sqrt(vx * vy)
+                    if r >= cm:
+                        return f"{t['name']}와 같이 움직임(상관 {r:.2f})"
+        return ""
 
     def _due(self, run):
         """지금 받을 추천의 종류와 다음 차례. kind: full(정밀 — 좋은 엔진·뉴스 검색)·quick(빠른 재추천 — 가장 싼 엔진)·None(아직).
@@ -1643,6 +1723,11 @@ class AutoTrade:
             if jr:
                 skip("junk", f"경고·특수 종목이라 사지 않음({jr})")
                 continue
+            if p.get("group_max") or p.get("corr_max"):
+                cw = self._crowded(run, p, opens, sym, x.get("theme"))
+                if cw:
+                    skip("crowd", f"쏠림을 피하려고 사지 않음({cw})")
+                    continue
             wp = x.get("cal_prob") if x.get("cal_prob") is not None and (x.get("cal_n") or 0) >= 10 else x.get("win_prob")
             if (wp or 0) < p["min_win_prob"]:
                 dec["wp"] = wp
@@ -1683,7 +1768,19 @@ class AutoTrade:
                         dec["sl_from"], dec["tp_from"] = sl, tp
                         tp, sl = round(min(tp * want / sl, p["tp_cap"] * 2), 2), want
             m = self.money(run)
-            alloc = min(m["base"] * p["per_trade_pct"] / 100 * mult * vm, m["cash"])
+            alloc = m["base"] * p["per_trade_pct"] / 100
+            if p.get("risk_pct") and sl > 0:
+                # 위험 기준: 손절에 닿았을 때 잃는 돈이 굴리는 돈의 risk_pct%가 되게(1회 비중의 1.5배를 넘지는 않는다)
+                alloc = min(m["base"] * float(p["risk_pct"]) / sl, alloc * 1.5)
+                dec["risk_alloc"] = round(alloc)
+            if p.get("edge_size") and wp and sl > 0:
+                # 확신만큼: 이길 확률 p, 손익비 b일 때 기대값 지표 k = p − (1−p)/b (켈리 비율).
+                # 기준을 막 넘긴 종목(k≈0.25)은 0.7배, 보통(k≈0.35)은 1배, 아주 좋은 종목(k≥0.52)은 1.5배 — 평균 크기는 예전과 비슷하게 둔다
+                pw, b = float(wp) / 100, tp / sl
+                em = round(max(0.5, min(1.5, 1 + EDGE_K * (pw - (1 - pw) / b - EDGE_MID))), 2)
+                alloc *= em
+                dec["edge"] = em
+            alloc = min(alloc * mult * vm, m["cash"])
             buy_px = C.buy_fill(price, self.rt.settings.get("costs")) if mkt == "kr" else round(price * (1 + US_SLIP), 4)
             qty = int(alloc // (buy_px * 1.002))
             if qty < 1 and run["mode"] == "paper" and p.get("min_one", True) and m["cash"] >= buy_px * 1.002:
@@ -1769,12 +1866,12 @@ class AutoTrade:
         idx_name, idx_in = self._idx_level(mkt, sym)
         tid = self.rt.db.x(
             "INSERT INTO at_trades(run_id,ver,mkt,sym,name,exch,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,"
-            "trail_pct,exit_by,exit_date,high,low,last,pick_id,score,win_prob,cal_prob,stance,feat,why,buy_no,fill_ok,idx_name,idx_in) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "trail_pct,exit_by,exit_date,high,low,last,pick_id,score,win_prob,cal_prob,stance,feat,why,buy_no,fill_ok,idx_name,idx_in,q_in) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (run["id"], run["ver"], mkt, sym, name, exch, qty, "open", now.isoformat(timespec="seconds"), AP.mkt_date(mkt),
              self._local(mkt).strftime("%H:%M"), buy_px, tp, sl, abs(float(x.get("trail_pct") or 0)), exit_by, exit_date,
              buy_px, buy_px, price, res.get("id"), x.get("score"), x.get("win_prob"), x.get("cal_prob"), res.get("stance"),
-             json.dumps(x.get("feat"), ensure_ascii=False, default=str), json.dumps(why, ensure_ascii=False, default=str), buy_no, fill_ok, idx_name, idx_in))
+             json.dumps(x.get("feat"), ensure_ascii=False, default=str), json.dumps(why, ensure_ascii=False, default=str), buy_no, fill_ok, idx_name, idx_in, price))
         unit = "원" if mkt == "kr" else "달러"
         self.log(run["id"], "buy", f"{name} {qty}주 매수 · {buy_px:,.{0 if mkt == 'kr' else 2}f}{unit} · 목표 +{tp:g}% / 손절 -{sl:g}%", {"trade": tid})
         self._tell(run, f"{name} {qty}주 매수 · {buy_px:,.{0 if mkt == 'kr' else 2}f}{unit} · 목표 +{tp:g}% / 손절 -{sl:g}%", "매수")
@@ -1819,6 +1916,7 @@ class AutoTrade:
         def score(r):
             return None if r["score"] is None else "70 미만" if r["score"] < 70 else "70~80" if r["score"] < 80 else "80 이상"
         out["attr"] = attribution(rows)
+        out["slip"] = slippage(rows, run["mode"])
         try:
             out["bench"] = self.benchmark(run, rows)
         except Exception:
@@ -3181,7 +3279,7 @@ class AutoTrade:
     GATES = (("closed", "장이 열렸나"), ("over", "기간 안인가"), ("time", "매수 시간인가"), ("full", "자리가 있나"), ("dayloss", "오늘 손실 한도 안인가"),
              ("streak", "연속 손절 아닌가"), ("cash", "현금이 있나"), ("turn", "추천 받을 차례인가"), ("aicost", "오늘 AI 비용 한도 안인가"),
              ("market", "지수가 기준보다 강한가"), ("watchwait", "관망 뒤 쉬는 중이 아닌가"), ("nokey", "AI 키가 있나"), ("budget", "이번 달 AI 예산 안인가"))
-    FILTERS = (("market", "지수"), ("full", "자리"), ("watch", "관망"), ("auto", "AI가 고른 종목"), ("junk", "경고·특수 종목"), ("winprob", "승률"), ("score", "점수"), ("rr", "손익비"), ("fee", "비용"), ("dup", "오늘 이미 거래"),
+    FILTERS = (("market", "지수"), ("full", "자리"), ("watch", "관망"), ("auto", "AI가 고른 종목"), ("junk", "경고·특수 종목"), ("crowd", "쏠림"), ("winprob", "승률"), ("score", "점수"), ("rr", "손익비"), ("fee", "비용"), ("dup", "오늘 이미 거래"),
                ("quote", "시세"), ("chase", "쫓지 않기"), ("qty", "1주 이상"), ("fail", "주문"), ("etc", "기타"))
 
     def flow(self, rid):
@@ -3237,7 +3335,8 @@ class AutoTrade:
               "ladder": [{"model": m, "label": _short_model(m), "on": m == run["model"]} for m in ENGINE_LADDER]}}
         # 3) 거르기: 오늘 받은 종목이 어디서 걸렸나
         fee = AP.FEE[mkt]
-        rule = {"full": f"보유 {p['max_positions']}종목 미만", "auto": "앱이 고른 예비 종목은 사지 않음", "junk": "경고 종목·스팩·우선주·레버리지 상품은 사지 않음", "winprob": f"AI 승률 {p['min_win_prob']:g}% 이상",
+        rule = {"full": f"보유 {p['max_positions']}종목 미만", "auto": "앱이 고른 예비 종목은 사지 않음", "junk": "경고 종목·스팩·우선주·레버리지 상품은 사지 않음",
+                "crowd": (f"같은 업종·테마는 {int(p.get('group_max') or 0)}종목까지" if p.get("group_max") else "쏠림 제한 꺼짐") + (f", 상관 {float(p.get('corr_max')):g} 이상은 제외" if p.get("corr_max") else ""), "winprob": f"AI 승률 {p['min_win_prob']:g}% 이상",
                 "score": f"점수 {p['min_score']:g} 이상", "rr": f"익절÷손절 {p['min_rr']:g} 이상", "fee": f"목표가 비용({fee:g}%)의 3배 이상", "dup": "같은 종목은 하루 한 번",
                 "quote": "지금 시세가 있어야", "chase": f"추천가보다 {p['chase_pct']:g}% 넘게 오르면 안 쫓음", "qty": "배정 금액으로 1주 이상" + (" (모의는 현금이 되면 1주)" if run["mode"] == "paper" and p.get("min_one", True) else ""),
                 "fail": "주문이 들어가야", "market": f"실험: 지수 {float(p.get('idx_floor') or 0):g}% 아래면 사지 않음",
@@ -3264,7 +3363,9 @@ class AutoTrade:
                 "warm": warm, "warm_mult": float(p.get("warmup_mult") or 1), "warm_left": max(0, int(p.get("warmup_trades") or 0) - n_closed),
                 "watch_mult": float(p.get("watch_mult") or 0.5), "skip_watch": bool(p.get("skip_watch")), "min_one": run["mode"] == "paper" and bool(p.get("min_one", True)),
                 "exit_mult": float(p.get("exit_mult") or 1), "tp_cap": p["tp_cap"], "sl_cap": p["sl_cap"],
-                "scale_in": bool(p.get("scale_in")), "scale_out": bool(p.get("scale_out")), "vol_stop": bool(p.get("vol_stop"))}
+                "scale_in": bool(p.get("scale_in")), "scale_out": bool(p.get("scale_out")), "vol_stop": bool(p.get("vol_stop")),
+                "risk_pct": float(p.get("risk_pct") or 0), "edge_size": bool(p.get("edge_size")),
+                "group_max": int(p.get("group_max") or 0), "corr_max": float(p.get("corr_max") or 0)}
         # 5) 주문 · 6) 들고 있기
         buys = self.rt.db.one("SELECT COUNT(*) n FROM at_trades WHERE run_id=? AND entry_day=? AND status!='cancelled'", (rid, today))["n"]
         hold = [{"sym": t["sym"], "name": t["name"], "qty": t["qty"], "pct": round(((t["last"] or t["entry_price"]) / t["entry_price"] - 1) * 100, 2),

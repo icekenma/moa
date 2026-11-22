@@ -8,8 +8,8 @@ import re
 
 # 키움 종목정보(ka10099)의 주문 경고 값: 0 없음, 1 ETF 투자주의, 2 정리매매, 3 단기과열, 4 투자위험, 5 투자경고
 WARN = {"2": "정리매매", "3": "단기과열", "4": "투자위험", "5": "투자경고"}
-BAD_WORDS = ("관리종목", "투자주의환기", "거래정지", "정리매매", "투자경고", "투자위험", "불성실공시")
-KR_LEVER = re.compile(r"레버리지|인버스|곱버스|2X|3X|선물|ETN|블룸버그", re.I)
+BAD_WORDS = ("관리종목", "투자주의환기", "거래정지", "정리매매", "투자경고", "투자위험", "단기과열", "불성실공시")
+KR_LEVER = re.compile(r"레버리지|인버스|곱버스|2X|3X|ETN", re.I)      # 금·지수 선물을 그대로 따르는 보통 ETF는 빼지 않는다
 US_LEVER = re.compile(r"\b(2X|3X|1\.5X|ULTRA(PRO)?|LEVERAGED?|INVERSE|BULL|BEAR|SHORT)\b", re.I)
 KR_PREF = re.compile(r"우[A-C]?$|우\(전환\)$|\d우B?$")
 

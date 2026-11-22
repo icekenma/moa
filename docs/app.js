@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261122.2143";
+const UI_VERSION = "261122.2155";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2641,6 +2641,17 @@ atAttrHtml(st) {
     const bench = b && b.run_pct != null ? `<div class="tiny">같은 기간(${esc(b.since)}부터 ${b.days}거래일) ${esc(b.name)}를 그냥 들고 있었다면 <b class="${tone(b.idx_pct)}">${pct(b.idx_pct, 2)}</b>, 이 자동매매의 확정 손익은 굴리는 돈 대비 <b class="${tone(b.run_pct)}">${pct(b.run_pct, 2)}</b>예요(AI 비용 전).</div>` : "";
     return `<section class="card tight"><div class="card-head" style="padding-top:8px"><h2>수익이 어디서 왔나</h2></div>${part}${bench}</section>`;
   },
+  atSlipHtml(st) {
+    // 체결 품질: 사기로·팔기로 정했을 때 본 값과 실제로 체결된 값의 차이
+    const s = st.slip || {};
+    if (!s.n) return "";
+    const v = (x) => (x == null ? "–" : pct(x, 2));
+    return `<section class="card tight"><div class="card-head" style="padding-top:8px"><h2>체결 품질</h2><span class="tag">${s.real ? "실제 체결가" : "모의 가정"}</span></div>
+      <div class="sc-kpi"><div><span>살 때</span><b class="${tone(-(s.buy || 0))}">${v(s.buy)}</b></div><div><span>팔 때</span><b class="${tone(s.sell)}">${v(s.sell)}</b></div>
+        <div><span>한 번 사고팔 때</span><b class="${tone(-s.round)}">${pct(-s.round, 2)}</b></div></div>
+      <div class="tiny">정했을 때 본 값보다 얼마나 비싸게 사고 싸게 팔았는지예요(${s.n}건 평균). ${s.real ? "증권사 체결가로 잰 값이에요." : "모의는 앱이 정해 둔 가정값이라 늘 비슷해요. 실전에서 진짜 값이 쌓여요."}
+        ${(s.by_time || []).length > 1 ? ` 살 때 시간대별: ${s.by_time.map((x) => `${esc(x.key)} ${pct(x.buy, 2)}(${x.n}건)`).join(" · ")}` : ""}</div></section>`;
+  },
     atPropHtml(p, mkt) {
     const pend = p.status === "pending";
     const stLbl = { applied: "반영함", rejected: "반영 안 함", none: "바꿀 것 없음", pending: "승인 대기" }[p.status] || p.status;
@@ -2844,7 +2855,9 @@ atAttrHtml(st) {
           ${sz.warm ? `<span class="tag">검증 단계 ×${sz.warm_mult} · ${sz.warm_left}건 남음</span>` : ""}
           ${sz.skip_watch ? `<span class="tag">관망이면 안 삼</span>` : `<span class="tag">관망이면 ×${sz.watch_mult}</span>`}
           ${sz.min_one ? `<span class="tag">모의: 모자라도 1주</span>` : ""}
-          ${sz.scale_in ? `<span class="tag y">분할 매수: 확신만큼 먼저, 오르면 나머지</span>` : ""}${sz.vol_stop ? `<span class="tag y">흔들림 맞춤 손절</span>` : ""}</div>
+          ${sz.scale_in ? `<span class="tag y">분할 매수: 확신만큼 먼저, 오르면 나머지</span>` : ""}${sz.vol_stop ? `<span class="tag y">흔들림 맞춤 손절</span>` : ""}
+          ${sz.risk_pct ? `<span class="tag y">손절하면 굴리는 돈의 ${sz.risk_pct}%만 잃게</span>` : ""}${sz.edge_size ? `<span class="tag y">확신만큼 0.5~1.5배</span>` : ""}
+          ${sz.group_max ? `<span class="tag y">같은 업종·테마 ${sz.group_max}종목까지</span>` : ""}${sz.corr_max ? `<span class="tag y">같이 움직이는 종목 제외</span>` : ""}</div>
         <div class="fl-facts"><span>익절·손절 폭 = AI가 정한 폭 × ${sz.exit_mult}(최대 +${sz.tp_cap}% / −${sz.sl_cap}%)</span><span>남은 현금 ${M(sz.cash)}</span></div></div>`;
     // ⑤ 주문
     const s5 = `<div class="fl-two"><div class="fl-box on"><span class="fl-k">${F.order.mode === "real" ? "실전" : "모의"}</span><b>${esc(F.order.slip)}</b><small>오늘 산 것 ${F.order.today}건</small></div></div>`;
@@ -2924,6 +2937,7 @@ atAttrHtml(st) {
           <div class="tiny">이길 때 평균 ${pct(S.avg_win, 2)}, 질 때 평균 ${pct(S.avg_loss, 2)} · 보유 중 최고 오름폭 중간값 ${pct(S.mfe_med, 2)}, 최저 ${pct(S.mae_med, 2)} · 비용 합계 ${M(S.fees)}</div>
         </section>
         ${this.atAttrHtml(d.stats)}
+        ${this.atSlipHtml(d.stats)}
         ${(d.stats.groups || []).filter((g) => g.rows.length > 1 || g.label === "파는 사유").map((g) => `<section class="card tight"><div class="card-head" style="padding-top:8px"><h2>${esc(g.label)}별</h2></div>
           <div class="at-tbl"><div class="at-tr at-th"><span></span><span>거래</span><span>승률</span><span>평균</span></div>${g.rows.sort((a, b) => b.n - a.n).map((x) => `<div class="at-tr"><span>${esc(x.key)}</span><span>${x.n}</span><span>${x.win_rate}%</span><span class="${tone(x.avg_pct)}">${pct(x.avg_pct, 2)}</span></div>`).join("")}</div></section>`).join("")}
         ${this.atOppHtml(d)}

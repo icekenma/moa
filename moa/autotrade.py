@@ -1423,6 +1423,13 @@ class AutoTrade:
         except Exception:
             v = None
         out["hold"] = None if v is None else {"var": round(v, 2), "krw": round(m["base"] * v / 100), "n": len({t["sym"] for t in opens}), "over": v > out["day_limit"]}
+        if out["hold"] and opens and m["base"] > 0:
+            # 틈(갭) 위험: 손절선은 장이 열려 있고 체결이 될 때만 지켜진다. 가장 크게 든 종목이 하한가(국내 −30%)·급락(미국 −20%)으로 가면
+            by = {}
+            for t in opens:
+                by[t["sym"]] = by.get(t["sym"], 0.0) + t["qty"] * float(t["last"] or t["entry_price"])
+            drop = 30 if run["mkt"] == "kr" else 20
+            out["hold"]["gap"] = {"drop": drop, "pct": round(max(by.values()) / m["base"] * drop, 2)}
         if len(closed) >= MC_MIN and run["budget"]:
             steps = [float(r["pnl"] or 0) / run["budget"] * 100 for r in closed]
             days = len({r["exit_day"] or r["entry_day"] for r in closed}) or 1
@@ -1439,14 +1446,14 @@ class AutoTrade:
         return out
 
     def _day_returns(self, mkt, sym):
-        """최근 60거래일까지의 일간 수익률(쏠림은 끝 20일, 위험 계산은 전부). 하루에 한 번만 받는다. 못 받으면 None."""
+        """최근 120거래일까지의 일간 수익률(쏠림은 끝 20일, 위험 계산은 전부). 하루에 한 번만 받는다. 못 받으면 None."""
         key, today = (mkt, sym), AP.mkt_date(mkt)
         hit = self._ret.get(key)
         if hit and hit[0] == today:
             return hit[1]
         try:
             bars = (self.rt.invest.candles(mkt, sym, "d") or {}).get("bars") or []
-            c = [b["c"] for b in bars if b.get("c")][-61:]
+            c = [b["c"] for b in bars if b.get("c")][-121:]
             rets = [b / a - 1 for a, b in zip(c, c[1:])] if len(c) >= 11 else None
         except Exception:
             rets = None

@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261123.0241";
+const UI_VERSION = "261123.0259";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2667,7 +2667,8 @@ atAttrHtml(st) {
     return `<section class="card tight rkc"><div class="card-head" style="padding-top:8px"><h2>위험 점검</h2><span class="tag ${R.guard ? "y" : ""}">${R.guard ? "미리 막기 켜짐" : "보기만"}</span></div>
       ${h ? `<div class="rkc-m"><div class="rkc-t"><span>지금 보유 ${h.n}종목 · 나쁜 날 하루 손실</span><b class="${h.over ? "down" : ""}">${h.n ? `−${h.var}%` : "없음"}${h.n ? ` <small>약 ${M(h.krw)}</small>` : ""}</b></div>
           <div class="rkc-bar ${h.over ? "over" : ""}" role="img" aria-label="하루 손실 한도의 ${Math.round(h.var / R.day_limit * 100)}%"><i style="width:${use.toFixed(1)}%"></i></div>
-          <div class="rkc-s"><span>0</span><span>하루 손실 한도 −${R.day_limit}%</span></div></div>
+          <div class="rkc-s"><span>0</span><span>하루 손실 한도 −${R.day_limit}%</span></div>
+          ${h.gap ? `<div class="tiny">손절 주문이 듣지 않는 날(갭·${d.run.mkt === "kr" ? "하한가" : "급락"})에 가장 크게 든 종목이 −${h.gap.drop}%까지 밀리면 굴리는 돈의 <b class="down">−${h.gap.pct}%</b>예요.</div>` : ""}</div>
         ${h.over ? `<div class="notice warn">스무 날에 한 번쯤 오는 나쁜 날이면 하루 손실 한도를 넘을 수 있는 크기예요.${R.guard ? "" : " 실험 플랜 '위험 미리 막기'는 이럴 때 살 때부터 수량을 줄여요."}</div>` : ""}` : `<div class="tiny">보유 종목의 일봉을 받지 못해 나쁜 날 손실은 계산하지 못했어요.</div>`}
       ${f ? `<div class="sc-kpi"><div><span>손실 한도에 닿을 확률</span><b class="${f.p_ruin >= 20 ? "down" : ""}">${f.p_ruin}%</b></div>
           <div><span>이익으로 끝날 확률</span><b>${f.p_profit}%</b></div>
@@ -3900,6 +3901,7 @@ atAttrHtml(st) {
         <span class="end"><b>${won(o.qty)}주</b><span class="tiny">${o.fill_price ? (isUsCode(o.code) ? usd(o.fill_price) + " " : won(o.fill_price) + "원 ") : ""}<span class="tag ${st[1]}">${esc(st[0])}</span></span></span></button>`; }).join("")
         : `<div class="empty">아직 주문이 없어요</div>`}</div></section>`;
     this.loadOpen();
+    this.riskBind();
     this.loadRisk();
     fab("주문", () => orderSheet({}));
     box.onclick = async (e) => {
@@ -3944,6 +3946,12 @@ atAttrHtml(st) {
       if (investState.tab === "trade" && $("#riskBox")) $("#riskBox").innerHTML = this.riskHtml(this.riskMemo);
     } catch (e) { /* 다음 새로고침에 다시 */ }
   },
+  riskBind() {
+    const box = $("#riskBox");
+    if (!box) return;
+    box.onclick = (e) => { const b = e.target.closest("[data-rks]"); if (b) this.riskPop(b.dataset.rks); };
+    box.onkeydown = (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-rks]")) { e.preventDefault(); this.riskPop(e.target.dataset.rks); } };
+  },
   riskFan(r) {
     // 앞으로 20거래일을 3,000번 그려 본 분포: 바깥 띠 = 열에 아홉, 안쪽 띠 = 절반, 선 = 가운데
     const m = r.mc;
@@ -3962,7 +3970,33 @@ atAttrHtml(st) {
       <div class="sc-kpi"><div><span>나쁜 경우(스무 번에 한 번)</span><b class="down">−${won(m.var_krw)}</b></div>
         <div><span>그보다 나쁠 때 평균</span><b class="down">−${won(m.cvar_krw)}</b></div>
         <div><span>10% 넘게 잃을 확률</span><b>${m.p_loss10}%</b></div></div>
-      <div class="tiny">지난 ${r.days}거래일에 실제 있었던 하루하루를 무작위로 이어 붙여 본 값이에요(몬테카를로). 바깥 띠에 열에 아홉, 안쪽 띠에 절반이 들어와요. 최근 오름세가 이어진다고 가정하지 않고, 그사이 가장 깊은 낙폭은 보통 ${m.mdd50}%·나쁜 경우 ${m.mdd95}%예요.</div>`;
+      <div class="tiny">지난 ${m.window || r.days}거래일에 실제 있었던 하루하루를 무작위로 이어 붙여 본 값이에요(몬테카를로).${m.alt ? ` 긴 기간과 최근 ${r.days}일을 둘 다 그려 보고 더 나쁜 쪽을 썼어요(다른 쪽은 나쁜 경우 −${m.alt.var95}%).` : ""} 바깥 띠에 열에 아홉, 안쪽 띠에 절반이 들어와요. 최근 오름세가 이어진다고 가정하지 않고, 그사이 가장 깊은 낙폭은 보통 ${m.mdd50}%·나쁜 경우 ${m.mdd95}%예요.</div>`;
+  },
+  riskScen(r) {
+    // 요인 시나리오: 과거 위기를 지금 보유에 입히면 · 만약에 · 한 종목 급락. 줄을 누르면 종목별 내역이 팝업으로
+    const S = r.scen;
+    if (!S || !S.rows.length) return "";
+    const sh = (s) => [["kr", "코스피"], ["us", "S&P"], ["fx", "원/달러"]].filter(([k]) => s[k] != null).map(([k, n]) => `${n} ${s[k] > 0 ? "+" : ""}${s[k]}%`).join(" · ");
+    const row = (x, i) => `<div class="rk-sr hx-link" role="button" tabindex="0" data-rks="${i}" aria-label="${esc(x.name)} 종목별 내역 보기"><span><b>${esc(x.name)}<i class="hx-chev" aria-hidden="true">›</i></b><small>${x.sub ? esc(x.sub) + " · " : ""}${esc(sh(x.shock))}</small></span>
+        <span class="rk-sv"><b class="${tone(x.pnl)}">${signed(x.pnl)}</b><small class="${tone(x.pct)}">${pct(x.pct, 1)}</small></span></div>`;
+    const cr = S.rows.map((x, i) => [x, i]).filter(([x]) => x.kind === "crisis"), wi = S.rows.map((x, i) => [x, i]).filter(([x]) => x.kind === "whatif");
+    return `${cr.length ? `<div class="rk-h">과거 위기가 지금 다시 온다면</div><div class="rk-sl">${cr.map(([x, i]) => row(x, i)).join("")}</div>` : ""}
+      ${wi.length ? `<div class="rk-h">만약에</div><div class="rk-sl">${wi.map(([x, i]) => row(x, i)).join("")}</div>` : ""}
+      <div class="rk-h">한 종목 급락</div><div class="rk-sl"><div class="rk-sr"><span><b>${esc(S.gap.name)} 하루 −${S.gap.drop}%</b><small>가장 크게 든 종목 · 손절 주문이 듣지 않는 경우(하한가·거래정지·갭)</small></span>
+        <span class="rk-sv"><b class="down">−${won(S.gap.loss)}</b><small class="down">−${S.gap.pct}%</small></span></div></div>
+      <div class="tiny">종목마다 지수·환율에 따라 움직인 정도(민감도)를 구해, 그 기간 지수·환율이 실제 움직인 폭을 입힌 어림값이에요. '만약에'는 나머지 요인도 과거에 함께 움직인 만큼 따라간다고 봐요. 충격이 클수록 오차가 커요.${S.est < S.n ? ` 기록이 짧은 ${S.n - S.est}종목은 지수와 똑같이 움직인다고 봤어요.` : ""}</div>`;
+  },
+  riskPop(i) {
+    const S = (this.riskMemo || {}).scen, x = S && S.rows[+i];
+    if (!x) return;
+    const bt = Object.fromEntries(S.betas.map((b) => [b.name, b]));
+    openSheet(x.name, `<div class="sc-kpi"><div><span>계좌 손익(어림)</span><b class="${tone(x.pnl)}">${signed(x.pnl)}</b></div><div><span>계좌 대비</span><b class="${tone(x.pct)}">${pct(x.pct, 2)}</b></div>
+        <div><span>${x.kind === "crisis" ? "기간" : "가정"}</span><b style="font-size:13px">${esc(x.sub || "요인 하나를 흔듦")}</b></div></div>
+      <div class="hx-sub">넣은 충격</div><div class="tiny">${[["kr", "코스피"], ["us", "S&P 500"], ["fx", "원/달러"]].filter(([k]) => x.shock[k] != null).map(([k, n]) => `${n} <b class="${tone(x.shock[k])}">${x.shock[k] > 0 ? "+" : ""}${x.shock[k]}%</b>`).join(" · ")}${x.kind === "whatif" ? " (첫째만 정한 값, 나머지는 과거에 함께 움직인 만큼)" : " (그 기간 실제 움직임)"}</div>
+      <div class="hx-sub">종목별(많이 잃는 순)</div>
+      <div class="rk-sl">${x.items.map((t) => { const b = bt[t.name] || {}; return `<div class="rk-sr"><span><b>${esc(t.name)}</b><small>지수 민감도 ${b.bm ?? "–"}${b.bfx != null ? ` · 환율 민감도 ${b.bfx}` : ""}${b.guess ? " · 기록이 짧아 가정값" : ""}</small></span>
+        <span class="rk-sv"><b class="${tone(t.pnl)}">${signed(t.pnl)}</b><small class="${tone(t.pct)}">${pct(t.pct, 1)}</small></span></div>`; }).join("")}</div>
+      <div class="tiny">민감도는 최근 약 2년의 일간 움직임으로 구했어요. 위기 때는 종목들이 평소보다 더 같이 떨어지는 경향이 있어 실제 손실은 더 클 수 있어요.</div>`);
   },
   riskHtml(r) {
     if (!r || !r.configured || !r.n) return "";
@@ -3973,6 +4007,7 @@ atAttrHtml(st) {
           <div><span>지수 −5%면</span><b class="down">${r.stress ? "−" + won(Math.abs(r.stress.loss)) : "–"}</b></div></div>
         ${r.flags.length ? `<ul class="at-notes">${r.flags.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : ""}
         ${this.riskFan(r)}
+        ${this.riskScen(r)}
         <div class="rk-h">종목 비중</div>
         <div class="rk-list">${r.top.map((x) => `<div><b>${esc(x.name)}</b>${bar(x.w)}<span>${x.w}%</span><small>${x.sector ? esc(x.sector) + " · " : ""}${x.vol == null ? "일봉 자료 없음" : "하루 ±" + x.vol + "%"}${x.beta == null ? "" : " · 지수 민감도 " + x.beta}</small></div>`).join("")}</div>
         <div class="rk-h">업종 비중</div>

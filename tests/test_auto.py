@@ -2486,3 +2486,41 @@ def test_account_risk_view_adds_montecarlo_distribution():
     mc = out["mc"]
     assert mc["days"] == 20 and mc["var_krw"] == round(10_000_000 * mc["var95"] / 100) and mc["cvar_krw"] >= mc["var_krw"] > 0 and len(mc["band"]) == 4
     assert compute([{"name": "B", "value": 1, "sector": "", "mkt": "us", "rets": None}], {})["mc"] is None
+
+
+def test_factor_scenarios_replay_crises_and_imply_other_factors():
+    from moa.riskview import scenarios, _fit
+    import random
+    from datetime import date
+    r = random.Random(11)
+    days = [(date(2019, 1, 1) + timedelta(days=i)).isoformat() for i in range(2900) if (date(2019, 1, 1) + timedelta(days=i)).weekday() < 5]
+    lv = {"kr": {}, "us": {}, "fx": {}}
+    k = u = 100.0
+    f = 1200.0
+    hi, lo = {}, {}
+    a = b = 100.0
+    for d in days:
+        g = r.gauss(0, 0.01)                                     # 세계 공통 움직임
+        rk, ru = g + r.gauss(0, 0.004), g + r.gauss(0, 0.004)
+        rf = -0.4 * rk + r.gauss(0, 0.002)                       # 주가가 내리면 원화가 약해진다
+        if "2020-02-19" < d <= "2020-03-23":
+            rk, ru, rf = -0.017, -0.016, 0.004                   # 급락 구간
+        k, u, f = k * (1 + rk), u * (1 + ru), f * (1 + rf)
+        lv["kr"][d], lv["us"][d], lv["fx"][d] = k, u, f
+        a, b = a * (1 + 1.5 * rk + r.gauss(0, 0.003)), b * (1 + 0.8 * ru + r.gauss(0, 0.003))
+        hi[d], lo[d] = a, b
+    tail = lambda m: {d: v for d, v in m.items() if d >= "2025-01-01"}
+    items = [{"name": "고베타", "mkt": "kr", "value": 6_000_000, "closes": tail(hi)}, {"name": "미국주", "mkt": "us", "value": 3_000_000, "closes": tail(lo)},
+             {"name": "새내기", "mkt": "kr", "value": 1_000_000, "closes": {}}]
+    S = scenarios(items, lv)
+    B = {x["name"]: x for x in S["betas"]}
+    assert 1.3 < B["고베타"]["bm"] < 1.7 and 0.65 < B["미국주"]["bm"] < 0.95 and B["미국주"]["bfx"] == 1.0 and B["새내기"]["guess"] and B["새내기"]["bm"] == 1.0 and S["est"] == 2
+    rows = {x["name"]: x for x in S["rows"]}
+    c = rows["2020년 코로나 급락"]
+    assert "2008년 금융위기" not in rows and c["kind"] == "crisis" and c["shock"]["kr"] < -25 and c["shock"]["fx"] > 5 and c["pnl"] < -2_500_000 and c["items"][0]["name"] == "고베타"   # 기록이 닿는 위기만, 가장 많이 잃는 종목부터
+    w = rows["코스피 −10%"]
+    assert w["shock"]["kr"] == -10.0 and w["shock"]["us"] < -5 and w["shock"]["fx"] > 1 and w["pnl"] < 0                 # 다른 요인도 함께 움직인다고 본다
+    fxu = rows["원/달러 +5%(원화 약세)"]
+    assert fxu["shock"]["kr"] < 0 and next(x for x in fxu["items"] + [{"name": "미국주", "pct": 0}] if x["name"] == "미국주") is not None
+    assert S["gap"] == {"name": "고베타", "drop": 30, "loss": 1_800_000, "pct": 18.0}
+    assert [round(v, 6) for v in _fit([2, 4, 6, 8], [[1, 2, 3, 4]])] == [2.0] and scenarios([], lv) is None

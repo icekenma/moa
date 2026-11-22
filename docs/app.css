@@ -3767,3 +3767,14 @@ html.gm-on dialog.sheet .sheet-in{border-radius:24px}
 .rkc-bar.over i{background:var(--down)}
 .rkc-s{display:flex;justify-content:space-between;font-size:11px;color:var(--ink3)}
 .rkc .notice{margin:0 0 10px}
+
+/* 계좌 위험 · 요인 시나리오 줄 */
+.rk-sl{display:grid}
+.rk-sr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.rk-sl .rk-sr:first-child{border-top:0}
+.rk-sr > span:first-child{display:grid;gap:2px;min-width:0}
+.rk-sr b{font-size:13px}
+.rk-sr small{font-size:11px;color:var(--ink3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rk-sv{display:grid;justify-items:end;gap:1px;font-variant-numeric:tabular-nums}
+.rk-sv b{font-size:14px}
+.rk-sv small.up{color:var(--up)}.rk-sv small.down{color:var(--down)}

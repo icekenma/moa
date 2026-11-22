@@ -2300,6 +2300,7 @@ def test_counter_check_vetoes_only_confirmed_objections(env, monkeypatch):
     at._counter_ask(rid, "kr", res)
     assert len(asked) == 1 and asked[0][0] == "counter" and asked[0][1]["items"][0]["재료"] == "수주"      # 추천 한 번에 한 번만
     assert {k: v["verdict"] for k, v in at._counter_get(77).items()} == {"005930": "반대", "000660": "주의", "035420": "모름"}
+    assert abs(at._ai_usd(rid) - 0.03) < 1e-9 and abs(at.now(at._run(rid))["ai"]["today_usd"] - 0.03) < 1e-3      # 반대 의견 비용도 AI 비용 합계에 든다
     assert at._enter(at._run(rid), res, {"usd": 0.1}) == 2
     assert sorted(t["sym"] for t in at._open(rid)) == ["000660", "035420"]                                  # '반대'만 거르고, 못 받은 판정으로는 거르지 않는다
     dec = json.loads(env.rt.db.q("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' ORDER BY id DESC LIMIT 1", (rid,))[0]["data"])["decisions"]

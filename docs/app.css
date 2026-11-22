@@ -3724,3 +3724,6 @@ html:not(.dark-theme):not(.gm-on) .lab-tr:nth-child(2) .lab-nm i:not(.few){color
 .bk-r{font-size:11px;color:var(--ink3)}
 .ap-theme .btn.sm{justify-self:start;margin-top:6px}
 .bk-m .tag{justify-self:start}
+
+/* 떠 있는 버튼(주문·추가)이 있는 화면: 맨 아래 내용이 버튼에 가리지 않게 끝을 더 띄운다 */
+body:has(> .fab) main{padding-bottom:calc(150px + var(--safe-b))}

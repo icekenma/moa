@@ -674,7 +674,7 @@ class AutoTrade:
         return {"ok": ok, "need": READY_N, "total": total, "best": best, "text": text}
 
     def _ai_usd(self, rid):
-        return sum(float((json.loads(r["data"]) or {}).get("usd") or 0) for r in self.rt.db.q("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' AND data IS NOT NULL", (rid,)))
+        return sum(float((json.loads(r["data"]) or {}).get("usd") or 0) for r in self.rt.db.q("SELECT data FROM at_log WHERE run_id=? AND kind IN ('cycle','control') AND data IS NOT NULL", (rid,)))
 
     def preview(self, d):
         mkt, style, budget, days, model = self._read_form(d)
@@ -814,7 +814,7 @@ class AutoTrade:
             if idx is not None:
                 lines.append(f"{'코스피·코스닥' if mkt == 'kr' else 'S&P·나스닥'} 평균 {idx:+.2f}%")
             usd = sum(float((json.loads(c["data"]) or {}).get("usd") or 0) for c in self.rt.db.q(
-                f"SELECT data FROM at_log WHERE run_id IN ({q}) AND kind='cycle' AND day=? AND data IS NOT NULL", (*ids, day)))
+                f"SELECT data FROM at_log WHERE run_id IN ({q}) AND kind IN ('cycle','control') AND day=? AND data IS NOT NULL", (*ids, day)))
             if usd:
                 lines.append(f"AI 비용 ${usd:.2f}({usd * self.rt.ai.fx():,.0f}원)")
             todo = self.rt.db.one(f"SELECT COUNT(*) n FROM at_proposals WHERE status='pending' AND run_id IN ({q})", ids)["n"]
@@ -1172,7 +1172,7 @@ class AutoTrade:
         sibs = self._sibs(run) if sibs is None else sibs
         ids = [x["id"] for x in sibs] if sibs else [run["id"]]
         return sum(float((json.loads(c["data"]) if c["data"] else {}).get("usd") or 0) for c in self.rt.db.q(
-            f"SELECT data FROM at_log WHERE run_id IN ({','.join('?' * len(ids))}) AND kind='cycle' AND day=?", (*ids, AP.mkt_date(run["mkt"]))))
+            f"SELECT data FROM at_log WHERE run_id IN ({','.join('?' * len(ids))}) AND kind IN ('cycle','control') AND day=?", (*ids, AP.mkt_date(run["mkt"]))))
 
     def _sibs(self, run):
         """실험 묶음이면 함께 도는 실험들(돌고 있는 것만, 번호순). 아니면 None."""
@@ -1627,6 +1627,11 @@ class AutoTrade:
             usd_day += float(d.get("usd") or 0)
             n_quick += 1 if d.get("lite") else 0
             cyc_today.append({"ts": x["ts"], "msg": x["msg"]})
+        # 반대 의견 확인·재료 감시처럼 추천 밖에서 쓴 AI 비용도 합계에 넣는다
+        for x in self.rt.db.q("SELECT day, data FROM at_log WHERE run_id=? AND kind='control' AND data LIKE '%\"usd\"%'", (rid,)):
+            u = float((json.loads(x["data"]) or {}).get("usd") or 0)
+            usd_all += u
+            usd_day += u if x["day"] == day else 0.0
         last_cycle = None
         if last:
             x, d = last

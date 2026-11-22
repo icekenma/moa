@@ -402,13 +402,15 @@ class Photo:
             o["wm_op"] = min(100, max(10, int(o.get("wm_op") or 60)))
         except (TypeError, ValueError):
             raise PhotoError("내보내기 설정의 숫자를 확인해 주세요")
+        suffix = re.sub(r'[\\/:*?"<>|\s]+', "_", str(o.get("suffix") if o.get("suffix") is not None else "_edited"))[:20]
+        stem += suffix
         if q["bg_remove"] and mask is not None:
             side = o["resize"]
             if side and side < max(a.shape[:2]):
                 import cv2
                 a = E.fit(a, max(320, side))
                 mask = cv2.resize(mask, (a.shape[1], a.shape[0]), interpolation=cv2.INTER_AREA)
-            return E.png_alpha(a, mask), "image/png", f"{stem}_edited.png"
+            return E.png_alpha(a, mask), "image/png", f"{stem}.png"
         png = o.get("fmt") == "PNG"
         fd, tmp = tempfile.mkstemp(suffix=".png" if png else ".jpg", dir=self.dir)
         os.close(fd)
@@ -425,7 +427,7 @@ class Photo:
                 os.remove(tmp)
             except OSError:
                 pass
-        return data, "image/png" if png else "image/jpeg", f"{stem}_edited.{'png' if png else 'jpg'}"
+        return data, "image/png" if png else "image/jpeg", f"{stem}.{'png' if png else 'jpg'}"
 
     def export_zip(self, ids, opt=None):
         buf, seen = io.BytesIO(), set()

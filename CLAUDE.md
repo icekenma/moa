@@ -20,6 +20,7 @@
 이 웹앱 하나에 직접 만든 앱들을 모은다. 첫 화면(`#world`)에 앱 타일이 있고, 앱마다 구역(주소 첫 마디)·아래 탭·겉모습을 가진다.
 
 - 앱 등록: `docs/app.js`의 `APPS`·`addApp()`. 가계부(가계부·자산·투자·설정)는 `app.js`, 건강관리는 `docs/health.js`·`docs/health.css`·`moa/health.py`(기구 안내 글은 `docs/gym.js`, 기구 사진은 서버 DB). 사진편집은 `docs/photo.js`·`docs/photo.css`·`moa/photo.py`(보관·설치)·`moa/photo_engine.py`(보정 계산, numpy·OpenCV)·`moa/slideshow.py`(슬라이드쇼 영상·배경음악). 무거운 꾸러미는 `requirements.txt`에 넣지 않고 앱의 설치 버튼으로 넣는다.
+- 사진편집의 보정 엔진은 PhotoGrader Pro 원본(`grade_engine.py`, `style_match.py`)이고 **판매용이라 저장소에 넣지 않는다**. 노트북의 `data/photo_engine`(또는 환경변수 `MOA_PHOTO_ENGINE`)에만 두고 `moa/photo_engine.py`(다리)가 불러온다. 다리에는 값 다듬기·돌리기/자르기·AI 덧보정·파일 입출력만 둔다. 엔진 파일이 바뀌면 `photo_engine.ENGINE_FILES`의 지문을 같이 바꾼다. 테스트는 흉내 엔진으로 돌고, 진짜 엔진 검사는 `MOA_PHOTO_ENGINE=<폴더>`를 줄 때만 돈다.
 - 새 앱 더하기: ① `docs/<앱>.js`에서 `addApp({id, name, desc, home, secs, tabs, skin, tile, live, art})`와 `pages.<구역>` 정의 ② `docs/<앱>.css`(구역은 `html[data-sec="<구역>"]`로 한정, 클래스는 앱 머리글자 접두사) ③ `index.html`에 두 파일 연결 ④ 서버가 필요하면 `moa/<앱>.py` + `app.py` 라우트 + `/api/world`의 한 줄 요약.
 - 전역 클래스(`.top`, `.hl`, `.empty`, `.check` …)와 이름이 겹치지 않게 한다(겹쳐서 난 문제가 여러 번 있었다).
 - 건강 수치 같은 개인 자료는 저장소에 넣지 않는다. 서버 DB에만 두고, 처음 자료는 앱의 '자료 가져오기'로 넣는다.

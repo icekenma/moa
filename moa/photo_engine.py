@@ -1,30 +1,96 @@
-"""사진 보정 엔진(우석World 사진편집). numpy + OpenCV만 쓴다.
+"""사진편집(우석World) 보정 다리: 화면에서 온 보정값을 PhotoGrader Pro 원본 엔진에 넘긴다.
 
-grade(img, p): 0~1 float32 RGB 사진에 보정값 p를 차례로 입힌다.
-순서: 화이트밸런스·노출(선형 빛) → 밝은 곳·어두운 곳 → 흰색·검정 → 대비 → 안개 제거 → 또렷함
-      → 생동감·채도 → 색별(HSL) → 흑백 → 색조 → 바랜 느낌 → 노이즈 → 피부 → 배경 → 선명 → 가장자리 → 입자
+색·톤·디테일 보정은 전부 원본 엔진(grade_engine.py, style_match.py)이 한다. 그 두 파일은 판매용이라
+이 저장소에 넣지 않고, 노트북의 data/photo_engine 폴더에만 둔다(load가 거기서 불러온다).
+여기 있는 것은 그 앞뒤 일뿐이다: 값 다듬기, 돌리기·수평·자르기, 피부·배경(AI) 덧보정, 파일 읽고 쓰기.
 이 모듈은 numpy·OpenCV가 있어야 불러올 수 있어서, 쓰는 쪽(photo.py)에서 필요할 때만 불러온다.
 """
+import hashlib
+import importlib.util
+import io
 import os
+import sys
 
 import cv2
 import numpy as np
 
-# 보정값: (기본, 최소, 최대). 화면의 슬라이더도 이 범위를 그대로 쓴다.
+# 보정값: (기본, 최소, 최대). 이름과 범위는 원본 화면(ui.html)의 슬라이더와 같다. 끝의 셋은 여기서 덧붙인 것.
 RANGES = {
-    "exposure": (0.0, -2.0, 2.0), "contrast": (0, -100, 100), "highlights": (0, -100, 100), "shadows": (0, -100, 100),
+    "exposure": (0.0, -3.0, 3.0), "contrast": (0, -100, 100), "highlights": (0, -100, 100), "shadows": (0, -100, 100),
     "whites": (0, -100, 100), "blacks": (0, -100, 100),
     "temp": (0, -100, 100), "tint": (0, -100, 100), "vibrance": (0, -100, 100), "saturation": (0, -100, 100),
-    "clarity": (0, -100, 100), "dehaze": (0, 0, 100), "sharpen": (0, 0, 100), "sharpen_radius": (1.0, 0.5, 3.0), "sharpen_thresh": (0, 0, 20),
-    "nr_luma": (0, 0, 100), "nr_color": (0, 0, 100),
-    "vignette": (0, -100, 100), "grain": (0, 0, 100), "fade": (0, 0, 100),
-    "split_sh_hue": (220, 0, 360), "split_sh_sat": (0, 0, 100), "split_hl_hue": (40, 0, 360), "split_hl_sat": (0, 0, 100),
+    "texture": (0, -100, 100), "clarity": (0, -100, 100), "sharpen_amt": (0, 0, 150), "sharpen_rad": (1.0, 0.5, 3.0),
+    "noise_red": (0, 0, 100), "noise_detail": (50, 0, 100), "noise_chroma": (0, 0, 100), "noise_chroma_rad": (50, 0, 100),
+    "fade": (0, 0, 100), "grain": (0, 0, 100), "vignette": (0, -100, 100),
+    "split_sh_hue": (210, 0, 360), "split_sh_amt": (0, 0, 100), "split_hi_hue": (45, 0, 360), "split_hi_amt": (0, 0, 100),
     "angle": (0.0, -15.0, 15.0), "skin": (0, 0, 100), "bg_blur": (0, 0, 100),
 }
-FLAGS = ("bw", "flip", "nr_quality", "bg_remove")
+EXTRA = ("angle", "skin", "bg_blur")                      # 원본 엔진에 없는 값(넘기지 않는다)
+FLAGS = ("bw", "flip", "noise_hq", "bg_remove")
 HSL_COLORS = [("red", "빨강", 0), ("orange", "주황", 30), ("yellow", "노랑", 60), ("green", "초록", 120),
-              ("aqua", "청록", 180), ("blue", "파랑", 225), ("purple", "보라", 270), ("magenta", "자홍", 315)]
+              ("aqua", "아쿠아", 180), ("blue", "파랑", 240), ("purple", "보라", 285), ("magenta", "자홍", 325)]
 LUMA = np.array([0.299, 0.587, 0.114], np.float32)
+# 앱에서 올리는 엔진 파일은 이 지문과 같을 때만 받는다(아무 코드나 서버에 올려 돌리지 못하게). 파일 내용은 여기 없다.
+ENGINE_FILES = {"grade_engine.py": "5639b3ae463ce759fc22fc18d1060292f12229d352cfdecb024fe2e37ad5021f",
+                "style_match.py": "ba4e78f2711aa7ba41717f9ac24e649f722a5398ba747ac9991a603277b7992e"}
+G = None            # 원본 엔진(grade_engine)
+S = None            # 참고 사진 맞추기(style_match)
+_DIR = ""
+
+
+class EngineMissing(ValueError):
+    pass
+
+
+def has_engine(folder):
+    return all(os.path.isfile(os.path.join(folder, n)) for n in ENGINE_FILES)
+
+
+def load(folder):
+    """노트북에 둔 원본 엔진을 불러온다. 같은 폴더면 한 번만."""
+    global G, S, _DIR
+    if G is not None and _DIR == folder:
+        return G
+    if not has_engine(folder):
+        raise EngineMissing("PhotoGrader 엔진 파일이 아직 없어요. 사진편집 첫 화면에서 엔진 파일을 올려 주세요")
+    mods = {}
+    try:
+        for name in ("grade_engine", "style_match"):      # style_match가 grade_engine을 이름으로 찾으므로 먼저 등록해 둔다
+            spec = importlib.util.spec_from_file_location(name, os.path.join(folder, name + ".py"))
+            mods[name] = sys.modules[name] = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mods[name])
+    except ImportError as e:
+        for name in mods:
+            sys.modules.pop(name, None)
+        raise EngineMissing(f"엔진에 필요한 프로그램이 빠졌어요 ({e.name or e}). '필요한 프로그램 설치'를 눌러 주세요")
+    g, s = mods["grade_engine"], mods["style_match"]
+    G, S, _DIR = g, s, folder
+    return G
+
+
+def install(folder, data):
+    """올린 zip에서 엔진 파일 둘만 꺼내 둔다. 지문이 다르면 받지 않는다."""
+    import zipfile
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise ValueError("zip 파일이 아니에요")
+    found = {}
+    for info in z.infolist():
+        base = info.filename.replace("\\", "/").rsplit("/", 1)[-1]
+        if base in ENGINE_FILES and base not in found and info.file_size < 2_000_000:
+            raw = z.read(info)
+            if hashlib.sha256(raw).hexdigest() == ENGINE_FILES[base]:
+                found[base] = raw
+    lack = [n for n in ENGINE_FILES if n not in found]
+    if lack:
+        raise ValueError(f"이 zip에는 맞는 엔진 파일이 없어요 ({', '.join(lack)}). 받은 엔진 zip을 그대로 올려 주세요")
+    os.makedirs(folder, exist_ok=True)
+    for name, raw in found.items():
+        with open(os.path.join(folder, name), "wb") as f:
+            f.write(raw)
+    global G
+    G = None
 
 
 def clean(p):
@@ -36,7 +102,7 @@ def clean(p):
             v = float(p.get(k, d))
         except (TypeError, ValueError):
             v = d
-        out[k] = min(hi, max(lo, v))
+        out[k] = min(hi, max(lo, v)) if v == v else d
     for k in FLAGS:
         out[k] = bool(p.get(k))
     try:
@@ -54,6 +120,13 @@ def clean(p):
                 continue
             if any(t):
                 out["hsl"][key] = t
+    out["wb_gains"] = None                                # 스포이드·자동 보정이 넣는 색 균형(빨강·초록·파랑 배율)
+    g = p.get("wb_gains")
+    if isinstance(g, (list, tuple)) and len(g) == 3:
+        try:
+            out["wb_gains"] = [round(min(2.0, max(0.5, float(x))), 4) for x in g]
+        except (TypeError, ValueError):
+            pass
     c = p.get("crop")
     out["crop"] = None
     if isinstance(c, (list, tuple)) and len(c) == 4:
@@ -69,12 +142,41 @@ def clean(p):
 
 
 def is_neutral(p):
-    q = clean(p)
-    return q == clean({})
+    return clean(p) == clean({})
 
 
-def _luma(a):
-    return a @ LUMA
+def to_edit(p):
+    """다듬은 보정값 → 원본 엔진의 EditParams. 돌리기·자르기는 여기서 먼저 하므로 넘기지 않는다."""
+    d = {k: v for k, v in p.items() if k in RANGES and k not in EXTRA}
+    d["bw"], d["noise_hq"], d["wb_gains"] = p["bw"], p["noise_hq"], p["wb_gains"]
+    for i, name in enumerate(("hsl_hue", "hsl_sat", "hsl_lum")):
+        d[name] = [float((p["hsl"].get(key) or (0, 0, 0))[i]) for key, _, _ in HSL_COLORS]
+    return G.EditParams.from_dict(d)
+
+
+def from_engine(d):
+    """원본 엔진의 보정값(프리셋·자동·참고 사진 결과) → 화면이 쓰는 모양."""
+    out, hsl = {}, {}
+    for k, v in (d or {}).items():
+        if k in RANGES and k not in EXTRA and isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[k] = v
+        elif k in ("bw", "noise_hq") and v:
+            out[k] = True
+        elif k == "wb_gains" and v is not None:
+            out[k] = [float(x) for x in v]
+    for i, name in enumerate(("hsl_hue", "hsl_sat", "hsl_lum")):
+        for (key, _, _), v in zip(HSL_COLORS, (d or {}).get(name) or []):
+            if v:
+                hsl.setdefault(key, [0, 0, 0])[i] = float(v)
+    if hsl:
+        out["hsl"] = hsl
+    q = clean(out)
+    base = clean({})
+    return {k: v for k, v in q.items() if v != base[k]}
+
+
+def presets():
+    return [(name, from_engine(p)) for name, p in G.BUILTIN_PRESETS.items()]
 
 
 def _blur(x, sigma):
@@ -89,21 +191,8 @@ def _blur(x, sigma):
     return cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
 
 
-def _max3(a):
-    return np.maximum(np.maximum(a[..., 0], a[..., 1]), a[..., 2])
-
-
-def _min3(a):
-    return np.minimum(np.minimum(a[..., 0], a[..., 1]), a[..., 2])
-
-
 def _f32(a):
     return a if a.dtype == np.float32 else a.astype(np.float32)
-
-
-def _hue_rgb(h):
-    c = np.float32([[[h % 360, 1.0, 1.0]]])
-    return cv2.cvtColor(c, cv2.COLOR_HSV2RGB)[0, 0]
 
 
 # ---------- 돌리기·뒤집기·수평·자르기 ----------
@@ -203,138 +292,10 @@ def subject_mask(img, model_path):
 
 
 # ---------- 보정 ----------
-def grade(img, p, fast=False, mask=None):
-    """img: float32 RGB 0~1(자르기까지 끝난 것). mask: 사람 영역(배경 흐림·제거용, 같은 크기)."""
-    a = img.astype(np.float32, copy=True)
+def extras(a, p, mask=None):
+    """원본 엔진 뒤에 덧붙이는 것: 피부 보정, 배경 흐림·제거."""
     h, w = a.shape[:2]
     size = float(max(h, w))
-
-    # 1) 색온도·색조·노출: 빛의 양에 비례하도록 선형으로 바꿔서 곱한다
-    if p["temp"] or p["tint"] or p["exposure"]:
-        t, ti = p["temp"] / 100.0, p["tint"] / 100.0
-        g = np.float32([1 + 0.32 * t + 0.10 * ti, 1 - 0.22 * ti, 1 - 0.32 * t + 0.10 * ti])
-        g /= float(g @ LUMA)
-        # 선형 빛에 g를 곱하는 것은 감마 값에 g^(1/2.2)를 곱하는 것과 같다
-        a *= np.power(g * np.float32(2.0 ** p["exposure"]), np.float32(1 / 2.2))
-        hi = _max3(a)[..., None]                            # 넘친 곳은 색 비율을 지키며 1로 맞춘다(한 색으로 뭉개지지 않게)
-        a = np.clip(np.where(hi > 1, a / np.maximum(hi, 1e-6), a), 0, 1)
-
-    # 2) 밝은 곳·어두운 곳: 주변 밝기를 보고 그 영역만 밝기 비율로 움직인다(색은 그대로)
-    if p["highlights"] or p["shadows"]:
-        L = _luma(a)
-        Lb = _blur(L, size * 0.012)
-        sh, hl = p["shadows"] / 100.0, p["highlights"] / 100.0
-        L2 = L.copy()
-        if sh:
-            ms = np.clip(1 - Lb / 0.55, 0, 1) ** 1.5
-            L2 += sh * 0.38 * ms * (np.where(sh > 0, 1 - L, L))
-        if hl:
-            mh = np.clip((Lb - 0.45) / 0.55, 0, 1) ** 1.5
-            L2 += hl * 0.38 * mh * (np.where(hl > 0, 1 - L, L))
-        a *= (np.clip(L2, 0, 1) / np.maximum(L, 1e-4))[..., None]
-        a = np.clip(a, 0, 1)
-
-    # 3) 흰색·검정: 양 끝점을 옮긴다
-    if p["whites"] or p["blacks"]:
-        wp = 1 - p["whites"] / 100.0 * 0.25
-        bp = -p["blacks"] / 100.0 * 0.12
-        a = np.clip((a - bp) / max(0.2, wp - bp), 0, 1)
-
-    # 4) 대비: 가운데 밝기를 축으로 S자(올릴 때)·직선(내릴 때)
-    if p["contrast"]:
-        c = p["contrast"] / 100.0
-        if c > 0:
-            k = 1 + c * 3.0
-            a = 0.5 + np.tanh((a - 0.5) * np.float32(k)) * np.float32(1 / (2 * float(np.tanh(k / 2))))
-        else:
-            a = 0.5 + (a - 0.5) * (1 + c * 0.6)
-        a = np.clip(a, 0, 1)
-
-    a = _f32(a)
-
-    # 5) 안개 제거: 뿌연 정도(어두운 채널)를 어림해 걷어낸다
-    if p["dehaze"]:
-        s = p["dehaze"] / 100.0
-        dark = cv2.erode(_min3(a), np.ones((max(3, int(size * 0.012)) | 1,) * 2, np.uint8))
-        dark = _blur(dark, size * 0.02)
-        A = float(max(0.5, np.percentile(a[::4, ::4], 99.5)))
-        t = np.clip(1 - 0.85 * s * dark / A, 0.3, 1)[..., None]
-        a = np.clip((a - A) / t + A, 0, 1)
-
-    # 6) 또렷함: 중간 밝기의 굵은 윤곽 대비
-    if p["clarity"]:
-        L = _luma(a)
-        d = L - _blur(L, size * 0.02)
-        m = 1 - np.abs(2 * L - 1) ** 2
-        a = np.clip(a + (p["clarity"] / 100.0 * 0.9 * d * m)[..., None], 0, 1)
-
-    # 7) 생동감(덜 진한 색 위주)·채도
-    if p["vibrance"] or p["saturation"]:
-        L = _luma(a)[..., None]
-        inv = 1 - (_max3(a) - _min3(a))[..., None]
-        f = 1 + p["saturation"] / 100.0 + p["vibrance"] / 100.0 * (1.0 if p["vibrance"] > 0 else 0.8) * inv * inv
-        a = np.clip(L + (a - L) * np.maximum(f, 0), 0, 1)
-
-    a = _f32(a)
-
-    # 8) 색별 보정(HSL)
-    if p["hsl"]:
-        hsv = cv2.cvtColor(a, cv2.COLOR_RGB2HSV)
-        H, S, V = hsv[..., 0], hsv[..., 1], hsv[..., 2]
-        dh, fs, fv = np.zeros_like(H), np.ones_like(H), np.ones_like(H)
-        for key, _, center in HSL_COLORS:
-            if key not in p["hsl"]:
-                continue
-            hs, ss, ls = [v / 100.0 for v in p["hsl"][key]]
-            dist = np.abs((H - center + 180) % 360 - 180)
-            wgt = np.clip(1 - dist / 38.0, 0, 1)
-            wgt = wgt * wgt * (3 - 2 * wgt)
-            dh += hs * 30 * wgt
-            fs += ss * wgt
-            fv += ls * 0.5 * wgt * np.clip(S * 2, 0, 1)
-        hsv[..., 0] = (H + dh) % 360
-        hsv[..., 1] = np.clip(S * np.maximum(fs, 0), 0, 1)
-        hsv[..., 2] = np.clip(V * np.maximum(fv, 0), 0, 1)
-        a = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-
-    # 9) 흑백
-    if p["bw"]:
-        a = np.repeat(_luma(a)[..., None], 3, axis=2)
-
-    # 10) 색조(어두운 곳·밝은 곳에 색 얹기)
-    if p["split_sh_sat"] or p["split_hl_sat"]:
-        L = _luma(a)[..., None]
-        if p["split_sh_sat"]:
-            a += (_hue_rgb(p["split_sh_hue"]) - 0.5) * (p["split_sh_sat"] / 100.0 * 0.28) * (1 - L) ** 2
-        if p["split_hl_sat"]:
-            a += (_hue_rgb(p["split_hl_hue"]) - 0.5) * (p["split_hl_sat"] / 100.0 * 0.28) * L ** 2
-        a = np.clip(a, 0, 1)
-
-    # 11) 바랜 느낌
-    if p["fade"]:
-        f = p["fade"] / 100.0
-        a = a * (1 - 0.22 * f) + 0.12 * f
-
-    a = _f32(a)
-
-    # 12) 노이즈 제거: 색 얼룩은 색 성분만 흐리고, 밝기 노이즈는 윤곽을 지키며 깎는다
-    if p["nr_color"] or p["nr_luma"]:
-        ycc = cv2.cvtColor(a, cv2.COLOR_RGB2YCrCb)
-        if p["nr_color"]:
-            s = 1.0 + p["nr_color"] / 100.0 * size * 0.006
-            ycc[..., 1], ycc[..., 2] = _blur(ycc[..., 1], s), _blur(ycc[..., 2], s)
-        if p["nr_luma"]:
-            n = p["nr_luma"] / 100.0
-            y = ycc[..., 0]
-            if p["nr_quality"] and not fast:
-                y8 = (np.clip(y, 0, 1) * 255).astype(np.uint8)
-                dn = cv2.fastNlMeansDenoising(y8, None, 3 + 14 * n, 7, 21).astype(np.float32) / 255.0
-            else:
-                dn = cv2.bilateralFilter(y, 5 if fast else 7, 0.02 + 0.10 * n, 2 + 4 * n)
-            ycc[..., 0] = y * (1 - min(1.0, 0.35 + n)) + dn * min(1.0, 0.35 + n)
-        a = np.clip(cv2.cvtColor(ycc, cv2.COLOR_YCrCb2RGB), 0, 1)
-
-    # 13) 피부 보정: 피부 영역만 곱게, 눈·머리카락 같은 윤곽은 남긴다
     if p["skin"]:
         s = p["skin"] / 100.0
         f = max(1, int(round(size / 480.0)))                # 고운 결만 고르면 되니 줄여서 처리한다
@@ -343,49 +304,20 @@ def grade(img, p, fast=False, mask=None):
         sm = cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
         m = (skin_mask(a) * (0.85 * s))[..., None]
         a = a * (1 - m) + sm * m
-
-    # 14) 배경 흐림·제거
     if mask is not None and (p["bg_blur"] or p["bg_remove"]):
         m = mask[..., None]
         if p["bg_remove"]:
             a = a * m + (1 - m)
         else:
-            bg = _blur(a, 1 + p["bg_blur"] / 100.0 * size * 0.022)
-            a = a * m + bg * (1 - m)
-
-    a = _f32(a)
-
-    # 15) 선명하게: 밝기에만, 문턱값보다 작은 차이(노이즈)는 건드리지 않는다
-    if p["sharpen"]:
-        L = _luma(a)
-        d = L - _blur(L, p["sharpen_radius"])
-        th = p["sharpen_thresh"] / 255.0
-        if th:
-            d = np.sign(d) * np.maximum(np.abs(d) - th, 0)
-        a = np.clip(a + (p["sharpen"] / 100.0 * 1.6 * d)[..., None], 0, 1)
-
-    # 16) 가장자리 어둡게·밝게
-    if p["vignette"]:
-        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-        r2 = ((xx - w / 2) / (w / 2)) ** 2 + ((yy - h / 2) / (h / 2)) ** 2
-        v = np.clip(r2 / 2, 0, 1) ** 1.3
-        a = np.clip(a * (1 + p["vignette"] / 100.0 * 0.75 * v)[..., None], 0, 1)
-
-    # 17) 필름 입자(같은 사진은 늘 같은 무늬)
-    if p["grain"]:
-        n = _GRAIN.get((h, w))
-        if n is None:
-            _GRAIN.clear()
-            n = np.random.default_rng(7).standard_normal((h, w), dtype=np.float32)
-            n = _GRAIN[(h, w)] = _blur(n, max(0.6, size / 2200.0))
-        a = np.clip(a + (n * (p["grain"] / 100.0 * 0.10))[..., None] * (1 - np.abs(2 * _luma(a) - 1) * 0.5)[..., None], 0, 1)
-
-    return _f32(np.clip(a, 0, 1))
+            a = a * m + _blur(a, 1 + p["bg_blur"] / 100.0 * size * 0.022) * (1 - m)
+    return _f32(a)
 
 
-def render(img, p, fast=False, crop=True, mask_fn=None):
-    """돌리기·자르기 → 보정. mask_fn(): 원본 방향 그대로의 사람 영역(없으면 None)."""
-    g = geometry(img, p, crop=crop)
+def render(img, p, fast=False, crop=True, mask_fn=None, plain=False):
+    """돌리기·자르기 → 원본 엔진 보정 → 덧보정. fast: 화면용(원본 엔진의 preview). plain: 보정 없이 모양만."""
+    g = _f32(geometry(img, p, crop=crop))
+    if plain:
+        return g, None
     mask = None
     if (p["bg_blur"] or p["bg_remove"]) and mask_fn:
         m = mask_fn()
@@ -393,76 +325,72 @@ def render(img, p, fast=False, crop=True, mask_fn=None):
             if m.shape[:2] != img.shape[:2]:
                 m = cv2.resize(m, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
             mask = geometry(m, p, crop=crop)
-    return grade(g, p, fast=fast, mask=mask), mask
+    out = np.clip(G.apply_edit(g, to_edit(p), preview=fast, skip_geometry=True), 0, 1)
+    return extras(out, p, mask), mask
 
 
-# ---------- 자동 보정(사진 분석) ----------
-def auto(img):
-    """사진의 밝기·색 분포를 보고 무난한 보정값을 제안한다. 과하지 않게 한도를 둔다."""
-    k = 640.0 / max(img.shape[:2])
-    s = cv2.resize(img, (max(1, int(img.shape[1] * k)), max(1, int(img.shape[0] * k))), interpolation=cv2.INTER_AREA) if k < 1 else img
-    L = _luma(s)
-    p1, p50, p99 = [float(v) for v in np.percentile(L, [1, 50, 99])]
-    out = {}
-    ev = np.log2(max(1e-4, 0.44 ** 2.2) / max(1e-4, p50 ** 2.2)) * 0.45
-    out["exposure"] = round(float(np.clip(ev, -0.8, 1.2)) / 0.05) * 0.05
-    gain = 2 ** (out["exposure"] / 2.2)
-    if p1 * gain > 0.05:
-        out["blacks"] = -int(min(45, (p1 * gain - 0.02) * 380))
-    if p99 * gain < 0.93:
-        out["whites"] = int(min(45, (0.97 - p99 * gain) * 260))
-    if float((L * gain > 0.94).mean()) > 0.04:
-        out["highlights"] = -35
-    if float((L * gain < 0.12).mean()) > 0.22:
-        out["shadows"] = 30
-    if float(L.std()) < 0.17:
-        out["contrast"] = 18 if float(L.std()) < 0.12 else 10
-    mid = (L > 0.2) & (L < 0.85)
-    if mid.sum() > 500:                                    # 회색 세계 가정, 절반만 따라간다
-        r, g, b = [float(s[..., i][mid].mean()) for i in range(3)]
-        out["temp"] = int(np.clip((b - r) / max(1e-3, g) * 60, -18, 18))
-        out["tint"] = int(np.clip(((r + b) / 2 - g) / max(1e-3, g) * -70, -12, 12))
-    sat = float((s.max(axis=2) - s.min(axis=2)).mean())
-    out["vibrance"] = 22 if sat < 0.16 else 12 if sat < 0.26 else 4
-    out["clarity"] = 8
-    out["sharpen"] = 25
-    return {k2: v for k2, v in out.items() if v}
+def histogram(a, bins=64):
+    """빨강·초록·파랑 밝기 분포(각 64칸, 0~255로 맞춤)."""
+    k = max(1, max(a.shape[:2]) // 360)
+    h = G.histogram_rgb(a[::k, ::k], bins)
+    return (np.clip(h, 0, 1) * 255 + 0.5).astype(np.uint8).tobytes()
 
 
-PRESETS = [
-    ("none", "원본", {}),
-    ("crisp", "선명하게", {"contrast": 14, "clarity": 18, "vibrance": 16, "sharpen": 35, "blacks": -8}),
-    ("warm", "따뜻한 필름", {"temp": 16, "tint": 4, "contrast": 8, "fade": 22, "vibrance": 10, "grain": 18, "split_hl_hue": 42, "split_hl_sat": 22, "split_sh_hue": 210, "split_sh_sat": 12}),
-    ("cool", "시원한 도시", {"temp": -14, "contrast": 16, "clarity": 12, "vibrance": 8, "saturation": -8, "split_sh_hue": 205, "split_sh_sat": 24, "highlights": -15}),
-    ("portrait", "인물", {"exposure": 0.15, "contrast": 4, "highlights": -18, "shadows": 14, "vibrance": 10, "skin": 45, "sharpen": 18, "vignette": -12}),
-    ("landscape", "풍경", {"contrast": 12, "highlights": -30, "shadows": 22, "dehaze": 18, "clarity": 16, "vibrance": 26, "sharpen": 30,
-                         "hsl": {"blue": [0, 14, -8], "green": [0, 12, 0]}}),
-    ("food", "음식", {"exposure": 0.2, "temp": 8, "contrast": 10, "vibrance": 24, "clarity": 10, "sharpen": 28, "hsl": {"orange": [0, 10, 4], "red": [0, 8, 0]}}),
-    ("night", "야경", {"exposure": 0.25, "highlights": -40, "shadows": 30, "blacks": -10, "clarity": 14, "vibrance": 14, "nr_luma": 35, "nr_color": 45, "sharpen": 15}),
-    ("bw", "흑백", {"bw": True, "contrast": 22, "clarity": 16, "blacks": -10, "grain": 22}),
-    ("vintage", "빈티지", {"fade": 45, "contrast": -6, "saturation": -18, "temp": 10, "grain": 35, "vignette": -30, "split_sh_hue": 190, "split_sh_sat": 18, "split_hl_hue": 48, "split_hl_sat": 26}),
-]
-
-
-# ---------- 읽기·쓰기 ----------
-RAW_EXT = ("cr2", "cr3", "nef", "arw", "srw", "orf", "rw2", "dng", "raf", "pef")
-
-
-def decode(data, ext=""):
-    """사진 파일 내용 → float 아닌 uint8 RGB. RAW는 rawpy가 있을 때만."""
-    if ext.lower() in RAW_EXT:
+# ---------- 파일 ----------
+def read_file(path, half=False):
+    """원본 엔진으로 사진을 연다(RAW 현상 포함) → float RGB, EXIF, 촬영 정보. 세워 찍은 사진은 바로 세운다."""
+    try:
+        img, exif = G.load_image(path, half=half)
+    except Exception as e:
         try:
-            import io
+            img, exif = G._load_raw_preview(path, e)     # RAW 현상이 안 되면 안에 든 미리보기로
+        except Exception:
+            raise ValueError(f"열 수 없는 사진이에요 ({type(e).__name__})")
+    try:
+        info = G.read_shot_info(path) or {}
+    except Exception:
+        info = {}
+    if exif:
+        try:
+            from PIL import Image
+            ex = Image.Exif()
+            ex.load(exif)
+            o = ex.get(274, 1)
+            op = {2: lambda a: a[:, ::-1], 3: lambda a: a[::-1, ::-1], 4: lambda a: a[::-1], 5: lambda a: a.transpose(1, 0, 2),
+                  6: lambda a: np.rot90(a, 3), 7: lambda a: np.rot90(a, 2).transpose(1, 0, 2), 8: lambda a: np.rot90(a)}.get(o)
+            if op:
+                img = np.ascontiguousarray(op(img))
+                ex[274] = 1
+                exif = ex.tobytes()
+        except Exception:
+            pass
+    return np.ascontiguousarray(img, dtype=np.float32), exif, info
 
-            import rawpy
-        except ImportError:
-            raise ValueError("RAW 사진은 노트북에 rawpy를 설치해야 열 수 있어요")
-        with rawpy.imread(io.BytesIO(data)) as raw:
-            return np.ascontiguousarray(raw.postprocess(use_camera_wb=True, no_auto_bright=False, output_bps=8))
-    arr = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
-    if arr is None:
-        raise ValueError("열 수 없는 사진이에요 (JPG·PNG·WebP·RAW만 돼요)")
-    return cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+
+def write_file(a, path, exif=None, info=None, opt=None):
+    """원본 엔진의 내보내기(용량 제한·워터마크·촬영 정보 표기 포함)."""
+    o = opt or {}
+    if not exif and info:
+        exif = G.build_exif(info)
+    G.encode_capped(a, path, exif=exif, quality=int(o.get("quality") or 95), fmt="PNG" if o.get("fmt") == "PNG" else "JPG",
+                    resize_long=int(o.get("resize") or 0), wm_text=str(o.get("wm_text") or "")[:60], wm_opacity=int(o.get("wm_op") or 60),
+                    wm_pos=o.get("wm_pos") or "우측 하단", cap_bytes=20 * 1024 * 1024 if o.get("size_cap") else 0,
+                    info_lines=G.shot_lines(info) if (o.get("shot_info") and info) else None)
+    del G._DRAW_ERR[:]
+
+
+def raw_exts():
+    return tuple(e.lstrip(".") for e in G.RAW_EXTS)
+
+
+def all_exts():
+    return tuple(e.lstrip(".") for e in G.ALL_EXTS)
+
+
+def decode_small(data, max_px=1024):
+    """참고 사진(파일 내용) → float RGB. 원본의 decode_image와 같은 처리."""
+    import base64
+    return S.decode_image(base64.b64encode(data).decode(), max_px)
 
 
 def fit(rgb, long_side):

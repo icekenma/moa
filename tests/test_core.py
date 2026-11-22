@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import sys
@@ -2901,82 +2902,258 @@ def _photo_img(w=640, h=480):
     return buf.tobytes()
 
 
-def test_photo_engine_each_control_moves_the_right_way():
+_STUB_GRADE = """
+import os
+from dataclasses import dataclass, field, asdict
+import numpy as np
+import cv2
+RAW_EXTS = {'.cr2', '.nef'}
+IMG_EXTS = {'.jpg', '.jpeg', '.png'}
+ALL_EXTS = RAW_EXTS | IMG_EXTS
+APP_VERSION = 'stub'
+_DRAW_ERR = []
+@dataclass
+class EditParams:
+    exposure: float = 0.0
+    saturation: float = 0.0
+    temp: float = 0.0
+    bw: bool = False
+    noise_hq: bool = False
+    wb_gains: object = None
+    hsl_hue: list = field(default_factory=lambda: [0.0] * 8)
+    hsl_sat: list = field(default_factory=lambda: [0.0] * 8)
+    hsl_lum: list = field(default_factory=lambda: [0.0] * 8)
+    @classmethod
+    def from_dict(cls, d):
+        p = cls()
+        for k, v in d.items():
+            if hasattr(p, k):
+                setattr(p, k, v)
+        return p
+BUILTIN_PRESETS = {'무보정': {}, '밝게': dict(exposure=0.5, hsl_sat=[0, 20, 0, 0, 0, 0, 0, 0]), '흑백': dict(bw=True)}
+SEEN = []
+def apply_edit(img, p, preview=False, skip_geometry=False):
+    SEEN.append((preview, skip_geometry, p))
+    x = img * np.float32(2.0 ** p.exposure)
+    if p.wb_gains is not None:
+        x = x * np.float32(p.wb_gains)
+    if p.bw:
+        x = np.repeat(x.mean(axis=2, keepdims=True), 3, axis=2)
+    return x.astype(np.float32)
+def auto_adjust(img):
+    return {'exposure': 0.25, 'wb_gains': [1.0, 1.0, 1.1], 'temp': 0.0}
+def picker_wb_gains(px):
+    m = float(sum(px)) / 3
+    return [m / max(1e-4, float(v)) for v in px]
+def histogram_rgb(img, bins=128):
+    return np.ones((3, bins), np.float32)
+def load_image(path, half=False, fbdd=True):
+    a = cv2.imdecode(np.fromfile(path, np.uint8), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
+    if a is None:
+        raise RuntimeError('bad')
+    return a[:, :, ::-1].astype(np.float32) / 255.0, None
+def _load_raw_preview(path, err):
+    raise err
+def read_shot_info(path):
+    return {'model': 'CAM', 'iso': 100}
+def build_exif(info):
+    return None
+def shot_lines(info):
+    return ['CAM', 'ISO 100']
+def encode_capped(img, out_path, exif=None, quality=95, fmt='JPG', resize_long=0, wm_text='', wm_opacity=60, wm_scale=4,
+                  wm_pos='', cap_bytes=0, info_lines=None, badge=None):
+    SEEN.append(('save', fmt, quality, resize_long, wm_text, cap_bytes, info_lines))
+    a = (np.clip(img, 0, 1) * 255).astype(np.uint8)[:, :, ::-1]
+    if resize_long and max(a.shape[:2]) > resize_long:
+        k = resize_long / max(a.shape[:2])
+        a = cv2.resize(a, (int(a.shape[1] * k), int(a.shape[0] * k)))
+    cv2.imencode('.png' if fmt == 'PNG' else '.jpg', a)[1].tofile(out_path)
+"""
+_STUB_STYLE = """
+import base64
+import numpy as np
+import cv2
+from grade_engine import EditParams
+def decode_image(data, max_px=1024):
+    a = cv2.imdecode(np.frombuffer(base64.b64decode(data), np.uint8), cv2.IMREAD_COLOR)
+    if a is None:
+        raise ValueError('bad')
+    return a[:, :, ::-1].astype(np.float32) / 255.0
+def fit_style(ref, targets, iters=8):
+    return dict(params={'exposure': 0.3, 'bw': False, 'rot90': 1, 'hsl_sat': [0.0] * 8}, before=10, after=55, traits=['밝게'], name='밝은 스타일')
+def suggest_presets(img):
+    return [{'name': '밝게', 'why': '어두워요'}]
+"""
+
+
+@pytest.fixture
+def photo_rt(rt, tmp_path):
+    """원본 엔진은 저장소에 없으니, 같은 모양의 흉내 엔진을 엔진 폴더에 두고 다리(photo_engine)와 앞뒤 흐름을 본다."""
+    pytest.importorskip("cv2")
+    d = tmp_path / "photo_engine"
+    d.mkdir()
+    (d / "grade_engine.py").write_text(_STUB_GRADE, encoding="utf-8")
+    (d / "style_match.py").write_text(_STUB_STYLE, encoding="utf-8")
+    rt.photo.engine_dir = str(d)
+    return rt
+
+
+def test_photo_bridge_hands_values_to_the_engine(photo_rt):
+    np = pytest.importorskip("numpy")
+    E = photo_rt.photo.engine()
+    base = np.full((480, 640, 3), 0.25, np.float32)
+    g = lambda **kw: E.render(base, E.clean(kw))[0]
+    assert float(np.abs(g() - base).max()) == 0 and E.is_neutral({"exposure": 0, "hsl": {"red": [0, 0, 0]}})
+    assert float(g(exposure=1).mean()) > 0.45 and float(g(bw=True).std()) < 1e-6
+    E.G.SEEN.clear()
+    E.render(base, E.clean({"exposure": 9, "saturation": 20, "skin": 30, "angle": 3, "hsl": {"orange": [5, -40, 0], "zzz": [1, 2, 3]}, "wb_gains": [1, 9, "1"], "junk": 1}), fast=True)
+    preview, skip, p = E.G.SEEN[-1]
+    assert preview and skip and p.exposure == 3.0 and p.saturation == 20                 # 범위 안으로 다듬어서, 모양(돌리기·자르기)은 빼고 넘긴다
+    assert p.hsl_hue[1] == 5 and p.hsl_sat[1] == -40 and p.hsl_sat[0] == 0 and p.wb_gains == [1.0, 2.0, 1.0]
+    assert not hasattr(p, "skin") and not hasattr(p, "angle")
+    # 돌리기·수평·자르기는 다리가 먼저 한다
+    assert g(rot=90).shape[:2] == (640, 480) and g(crop=[0.25, 0.25, 0.5, 0.5]).shape[:2] == (240, 320)
+    t = g(angle=10).shape
+    assert t[0] < 480 and t[1] < 640 and g(skin=60).shape == base.shape
+    assert E.clean({"rot": 450})["rot"] == 90 and E.clean({"crop": [0, 0, 1, 1]})["crop"] is None and E.clean({"exposure": float("nan")})["exposure"] == 0
+    # 엔진의 프리셋·결과를 화면 모양으로
+    assert dict(E.presets())["밝게"] == {"exposure": 0.5, "hsl": {"orange": [0.0, 20.0, 0.0]}} and dict(E.presets())["흑백"] == {"bw": True}
+    assert E.from_engine({"exposure": 0.3, "rot90": 1, "crop": [0, 0, 1, 1], "bw": False, "wb_gains": [1, 1, 1.1]}) == {"exposure": 0.3, "wb_gains": [1.0, 1.0, 1.1]}
+
+
+def test_photo_real_engine_moves_the_right_way():
+    """노트북에 둔 진짜 엔진이 있을 때만(MOA_PHOTO_ENGINE): 값마다 사진이 맞는 쪽으로 바뀌는지."""
+    folder = os.environ.get("MOA_PHOTO_ENGINE") or ""
     np = pytest.importorskip("numpy")
     pytest.importorskip("cv2")
     from moa import photo_engine as E
-    base = E.to_float(E.decode(_photo_img()))
+    if not E.has_engine(folder):
+        pytest.skip("원본 엔진 없음")
+    E.load(folder)
+    import cv2
+    base = (cv2.imdecode(np.frombuffer(_photo_img(), np.uint8), cv2.IMREAD_COLOR)[:, :, ::-1] / 255.0).astype(np.float32)
     lum = lambda a: float((a @ E.LUMA).mean())
     sat = lambda a: float((a.max(axis=2) - a.min(axis=2)).mean())
     g = lambda **kw: E.render(base, E.clean(kw))[0]
-    assert float(np.abs(g() - base).max()) == 0 and E.is_neutral({"exposure": 0, "hsl": {"red": [0, 0, 0]}})
-    assert lum(g(exposure=1)) > lum(base) > lum(g(exposure=-1))
-    assert lum(g(shadows=60)) > lum(base) > lum(g(highlights=-60))
-    assert sat(g(saturation=40)) > sat(base) > sat(g(saturation=-40)) and sat(g(bw=True)) < 1e-6
+    assert float(np.abs(g() - base).max()) < 1e-5
+    assert lum(g(exposure=1)) > lum(base) > lum(g(exposure=-1)) and lum(g(shadows=60)) > lum(base) > lum(g(highlights=-60))
+    assert sat(g(saturation=40)) > sat(base) > sat(g(saturation=-40)) and sat(g(bw=True)) < 1e-3
     assert g(contrast=50).std() > base.std() > g(contrast=-50).std()
     warm, cool = g(temp=50), g(temp=-50)
-    assert warm[..., 0].mean() > base[..., 0].mean() > cool[..., 0].mean() and warm[..., 2].mean() < cool[..., 2].mean()
-    edge = lambda a: float(np.abs(np.diff(a @ E.LUMA, axis=1)).mean())
-    assert edge(g(sharpen=80)) > edge(base) and lum(g(vignette=-80)) < lum(base)
-    red = g(hsl={"red": [0, -100, 0]})
-    assert sat(red) < sat(base) and E.clean({"hsl": {"red": [0, -100, 0], "zzz": [1, 2, 3]}})["hsl"] == {"red": [0.0, -100.0, 0.0]}
-    for kw in ({"nr_luma": 60, "nr_color": 60}, {"dehaze": 50}, {"clarity": 50}, {"grain": 50, "fade": 30}, {"split_sh_sat": 50, "split_hl_sat": 50}):
+    assert warm[..., 0].mean() > cool[..., 0].mean() and warm[..., 2].mean() < cool[..., 2].mean()
+    assert sat(g(hsl={"red": [0, -100, 0]})) < sat(base) and g(wb_gains=[1.2, 1, 1])[..., 0].mean() > base[..., 0].mean()
+    for kw in ({"noise_red": 60, "noise_chroma": 60}, {"texture": 50}, {"clarity": 50}, {"sharpen_amt": 90}, {"grain": 50, "fade": 30}, {"vignette": 60}, {"split_sh_amt": 50, "split_hi_amt": 50}):
         out = g(**kw)
         assert out.dtype == np.float32 and out.shape == base.shape and 0 <= out.min() and out.max() <= 1 and float(np.abs(out - base).mean()) > 1e-4
-    assert g(skin=60).shape == base.shape                     # 피부색이 없는 사진에서도 그냥 지나간다
-    # 돌리기·자르기
-    assert g(rot=90).shape[:2] == (640, 480) and g(crop=[0.25, 0.25, 0.5, 0.5]).shape[:2] == (240, 320)
-    t = g(angle=10).shape
-    assert t[0] < 480 and t[1] < 640
-    assert E.clean({"exposure": 99, "rot": 450, "crop": [0.9, 0.9, 5, 5], "skin": "x"})["exposure"] == 2.0
-    assert E.clean({"rot": 450})["rot"] == 90 and E.clean({"crop": [0, 0, 1, 1]})["crop"] is None
-    a = E.auto(E.to_float(E.decode(_photo_img())) * 0.4)       # 어두운 사진은 밝히자고 제안한다
-    assert a["exposure"] > 0 and all(E.RANGES[k][1] <= v <= E.RANGES[k][2] for k, v in a.items())
-    for _, _, pp in E.PRESETS:
-        assert E.render(base, E.clean(pp))[0].shape == base.shape
+    for name, pp in E.presets():
+        assert E.render(base, E.clean(pp), fast=True)[0].shape == base.shape
+    for name, sha in E.ENGINE_FILES.items():                      # 앱에서 올릴 때 받는 지문이 이 엔진과 같은지
+        with open(os.path.join(folder, name), "rb") as f:
+            import hashlib
+            assert hashlib.sha256(f.read()).hexdigest() == sha
 
 
-def test_photo_library_render_save_export(rt):
-    pytest.importorskip("cv2")
+def test_photo_library_render_save_export(photo_rt):
     import io
     import zipfile
+    np = pytest.importorskip("numpy")
+    import cv2
+    rt = photo_rt
     ph = rt.photo
     assert ph.status()["ready"] and ph.brief() == {"count": 0, "edited": 0}
     c = create_app(rt).test_client()
-    r = c.post("/api/photo/upload", data={"file": [(io.BytesIO(_photo_img(2000, 1500)), "여행 사진.JPG"), (io.BytesIO(b"not an image"), "x.jpg")]}, content_type="multipart/form-data").get_json()
-    assert len(r["added"]) == 1 and len(r["errors"]) == 1
+    r = c.post("/api/photo/upload", data={"file": [(io.BytesIO(_photo_img(2000, 1500)), "여행 사진.JPG"), (io.BytesIO(b"not an image"), "x.jpg"), (io.BytesIO(b"x"), "a.gif")]}, content_type="multipart/form-data").get_json()
+    assert len(r["added"]) == 1 and len(r["errors"]) == 2
     pid = r["added"][0]["id"]
     assert r["added"][0]["w"] == 2000 and not r["added"][0]["edited"]
+    assert sorted(f.split(".", 1)[1] for f in os.listdir(ph.dir) if f.startswith(pid)) == ["base.jpg", "orig.jpg", "thumb.jpg"]   # 원본은 그대로 둔다
     o = c.get("/api/photo").get_json()
-    assert len(o["photos"]) == 1 and len(o["presets"]) >= 8 and o["ranges"]["exposure"] == [0.0, -2.0, 2.0] and len(o["hsl"]) == 8
+    assert len(o["photos"]) == 1 and [p["id"] for p in o["presets"]] == ["b:무보정", "b:밝게", "b:흑백"] and o["ranges"]["exposure"] == [0.0, -3.0, 3.0] and len(o["hsl"]) == 8
     assert c.get(f"/api/photo/{pid}/thumb").data[:3] == b"\xff\xd8\xff"
-    a = c.post(f"/api/photo/{pid}/render", json={"params": {}}).data
-    b = c.post(f"/api/photo/{pid}/render", json={"params": {"exposure": 1, "bw": True}, "size": "fast"}).data
-    assert a[:3] == b[:3] == b"\xff\xd8\xff" and a != b
+    ra = c.post(f"/api/photo/{pid}/render", json={"params": {}})
+    a, b = ra.data, c.post(f"/api/photo/{pid}/render", json={"params": {"exposure": 1, "bw": True}, "size": "fast"}).data
+    assert a[:3] == b[:3] == b"\xff\xd8\xff" and a != b and len(base64.b64decode(ra.headers["X-Hist"])) == 192
+    assert "X-Hist" not in c.post(f"/api/photo/{pid}/render", json={"params": {}, "size": "tiny"}).headers
     assert c.post("/api/photo/000000000000/render", json={}).status_code == 400
     assert c.post("/api/photo/..%2Fx/render", json={}).status_code in (400, 404, 405)
     saved = c.put(f"/api/photo/{pid}", json={"params": {"exposure": 0.5, "crop": [0, 0, 0.5, 1], "junk": 1}}).get_json()["photo"]
     assert saved["edited"] and saved["params"] == {"exposure": 0.5, "crop": [0.0, 0.0, 0.5, 1.0]}
-    assert "exposure" in c.get(f"/api/photo/{pid}/auto").get_json()["params"] or True
-    ex = c.post(f"/api/photo/{pid}/export", json={"size": 800, "quality": 90})
-    assert ex.mimetype == "image/jpeg" and "_edit.jpg" in ex.headers["Content-Disposition"]
-    from moa import photo_engine as E
-    assert E.decode(ex.data).shape[:2] == (800, 533)             # 저장한 자르기(가로 절반)가 내보낼 때 적용된다
-    z = zipfile.ZipFile(io.BytesIO(c.post("/api/photo/export", json={"ids": [pid, pid]}).data))
+    # 자동·스포이드·추천·참고 사진
+    assert c.post(f"/api/photo/{pid}/auto", json={"params": {}}).get_json()["params"] == {"exposure": 0.25, "wb_gains": [1.0, 1.0, 1.1]}
+    wb = c.post(f"/api/photo/{pid}/wb", json={"params": {}, "u": 0.02, "v": 0.5}).get_json()["wb_gains"]
+    assert len(wb) == 3 and wb[2] != wb[1] and c.post(f"/api/photo/{pid}/wb", json={"u": "x"}).status_code == 400
+    assert c.get(f"/api/photo/{pid}/suggest").get_json()["items"] == [{"id": "b:밝게", "why": "어두워요"}]
+    m = c.post(f"/api/photo/{pid}/match", data={"file": (io.BytesIO(_photo_img()), "ref.jpg")}, content_type="multipart/form-data").get_json()
+    assert m["params"] == {"exposure": 0.3} and m["after"] == 55 and m["name"] == "밝은 스타일"
+    assert c.post(f"/api/photo/{pid}/match", data={"file": (io.BytesIO(b"zz"), "ref.jpg")}, content_type="multipart/form-data").status_code == 400
+    # 내 프리셋: 자르기·AI 값은 빼고 저장, 이름 바꾸기, 지우기
+    ps = c.post("/api/photo/preset", json={"name": " 내  것 ", "params": {"exposure": 0.4, "crop": [0, 0, 0.5, 0.5], "skin": 30, "bw": True}}).get_json()["presets"]
+    assert ps[-1] == {"id": "u:내 것", "name": "내 것", "params": {"exposure": 0.4, "bw": True}, "mine": True}
+    assert c.post("/api/photo/preset", json={"name": "밝게", "params": {}}).status_code == 400 and c.post("/api/photo/preset", json={"name": "", "params": {}}).status_code == 400
+    assert c.post("/api/photo/preset", json={"name": "새 이름", "old": "내 것"}).get_json()["presets"][-1]["name"] == "새 이름"
+    assert len(c.post("/api/photo/preset/delete", json={"name": "새 이름"}).get_json()["presets"]) == 3 and c.post("/api/photo/preset/delete", json={"name": "x"}).status_code == 400
+    # 내보내기: 원본 크기에서 엔진의 저장 기능으로
+    E = ph.engine()
+    E.G.SEEN.clear()
+    ex = c.post(f"/api/photo/{pid}/export", json={"opt": {"resize": 800, "quality": 90, "wm_text": "우석", "size_cap": True, "shot_info": True}})
+    assert ex.mimetype == "image/jpeg" and "_edited.jpg" in ex.headers["Content-Disposition"]
+    assert cv2.imdecode(np.frombuffer(ex.data, np.uint8), 1).shape[:2] == (800, 533)             # 저장한 자르기(가로 절반)가 원본 크기에 적용된 뒤 줄어든다
+    assert E.G.SEEN[0][0] is False and E.G.SEEN[-1] == ("save", "JPG", 90, 800, "우석", 20 * 1024 * 1024, ["CAM", "ISO 100"])
+    assert c.post(f"/api/photo/{pid}/export", json={"opt": {"fmt": "PNG"}}).data[:4] == b"\x89PNG"
+    assert c.post(f"/api/photo/{pid}/export", json={"opt": {"quality": "x"}}).status_code == 400
+    z = zipfile.ZipFile(io.BytesIO(c.post("/api/photo/export", json={"ids": [pid, pid], "opt": {"resize": 400}}).data))
     assert len(z.namelist()) == 2 and len(set(z.namelist())) == 2
+    assert not [f for f in os.listdir(ph.dir) if f.startswith("tmp")]
     assert c.put(f"/api/photo/{pid}", json={"params": {}}).get_json()["photo"]["edited"] is False
     assert c.get("/api/world").get_json()["apps"]["photo"] == {"count": 1, "edited": 0}
     assert c.delete(f"/api/photo/{pid}").status_code == 200 and c.get(f"/api/photo/{pid}/thumb").status_code == 404
     assert not [f for f in os.listdir(ph.dir) if f.startswith(pid)]
 
 
-def test_photo_background_ai_and_setup(rt):
-    np = pytest.importorskip("numpy")
-    pytest.importorskip("cv2")
+def test_photo_engine_files_stay_out_and_upload_checks_them(photo_rt, tmp_path):
+    """엔진 파일이 없으면 안내만 하고, 앱에서 올릴 때는 정해 둔 파일(지문이 같은 것)만 받는다."""
+    import io
+    import zipfile
+    rt = photo_rt
+    ph = rt.photo
+    c = create_app(rt).test_client()
+    src = ph.engine_dir
+    ph.engine_dir = str(tmp_path / "none")
+    st = c.get("/api/photo").get_json()
+    assert st["status"]["engine"] is False and st["status"]["ready"] is False and st["presets"] == []
+    assert c.post("/api/photo/upload", data={"file": (io.BytesIO(_photo_img()), "a.jpg")}, content_type="multipart/form-data").get_json()["errors"]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for n in ("grade_engine.py", "style_match.py"):
+            z.write(os.path.join(src, n), "PhotoGraderPro_web/" + n)
+        z.writestr("../evil.py", "x")
+    up = lambda data: c.post("/api/photo/engine", data={"file": (io.BytesIO(data), "engine.zip")}, content_type="multipart/form-data")
+    assert up(buf.getvalue()).status_code == 400 and up(b"zz").status_code == 400 and not os.path.exists(ph.engine_dir)   # 지문이 다르면 받지 않는다
+    from moa import photo_engine as E
+    import hashlib
+    old = dict(E.ENGINE_FILES)
+    try:
+        for n in old:
+            with open(os.path.join(src, n), "rb") as f:
+                E.ENGINE_FILES[n] = hashlib.sha256(f.read()).hexdigest()
+        assert up(buf.getvalue()).get_json()["status"]["ready"] is True
+        assert sorted(os.listdir(ph.engine_dir)) == ["grade_engine.py", "style_match.py"] and not os.path.exists(tmp_path / "evil.py")
+        assert ph.add("a.jpg", _photo_img())["w"] == 640
+    finally:
+        E.ENGINE_FILES.clear()
+        E.ENGINE_FILES.update(old)
+    # 저장소에는 엔진 파일을 두지 않는다
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    assert not [f for d, _, fs in os.walk(root) if ".git" not in d and "node_modules" not in d for f in fs if f in ("grade_engine.py", "style_match.py")]
+
+
+def test_photo_background_ai_and_setup(photo_rt):
+    pytest.importorskip("numpy")
+    rt = photo_rt
     ph = rt.photo
     pid = ph.add("a.jpg", _photo_img())["id"]
     if ph.status()["ai"]:
-        blurred = ph.render(pid, {"bg_blur": 80})
+        blurred = ph.render(pid, {"bg_blur": 80})[0]
         assert blurred[:3] == b"\xff\xd8\xff" and os.path.exists(ph._path(pid, "mask.png"))
         data, mime, name = ph.export(pid, {"bg_remove": True})
         assert mime == "image/png" and name.endswith(".png") and data[:4] == b"\x89PNG"
@@ -3041,13 +3218,14 @@ def test_slideshow_music_pick_and_fallback(tmp_path):
     assert Music(str(tmp_path / "empty"), down).pick("calm")[0] is None
 
 
-def test_slideshow_makes_playable_video(rt, tmp_path):
+def test_slideshow_makes_playable_video(photo_rt, tmp_path):
     pytest.importorskip("cv2")
     import subprocess
     from moa.slideshow import Slideshow, SlideError, ffmpeg_exe
     exe = ffmpeg_exe()
     if not exe:
         pytest.skip("ffmpeg 없음")
+    rt = photo_rt
     ph = rt.photo
     ids = [ph.add(f"{i}.jpg", _photo_img(*sz))["id"] for i, sz in enumerate([(640, 480), (480, 640), (640, 480)])]
     ph.save(ids[0], {"bw": True})

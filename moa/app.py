@@ -1,4 +1,5 @@
 """웹 서버와 API."""
+import base64
 import hmac
 import json
 import os
@@ -61,7 +62,7 @@ def is_local_direct():
 
 def create_app(rt, updater=None):
     app = Flask(__name__, static_folder=None)
-    app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
+    app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024      # RAW 사진 한 장이 50MB를 넘기도 한다
 
     err_seen = {}
 
@@ -126,7 +127,7 @@ def create_app(rt, updater=None):
                 resp.headers["Access-Control-Allow-Origin"] = origin
                 resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
                 resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-Moa-Session, ngrok-skip-browser-warning"
-                resp.headers["Access-Control-Expose-Headers"] = "X-File-Name"
+                resp.headers["Access-Control-Expose-Headers"] = "X-File-Name, X-Hist"
                 resp.headers["Access-Control-Max-Age"] = "600"
                 resp.headers["Vary"] = "Origin"
             return resp
@@ -163,7 +164,7 @@ def create_app(rt, updater=None):
         if origin and request.path.startswith("/api/"):
             resp.headers["Access-Control-Allow-Origin"] = origin
             resp.headers["Vary"] = "Origin"
-            resp.headers["Access-Control-Expose-Headers"] = "X-File-Name"
+            resp.headers["Access-Control-Expose-Headers"] = "X-File-Name, X-Hist"
         if request.path.startswith("/api/"):
             resp.headers["Cache-Control"] = "no-store"
         # 공통 보안 머리말
@@ -1295,26 +1296,58 @@ def create_app(rt, updater=None):
     @app.post("/api/photo/<pid>/render")
     def photo_render(pid):
         d = body()
-        return _jpeg(rt.photo.render(pid, d.get("params"), d.get("size") or "base", crop=d.get("crop", True) is not False, orig=bool(d.get("orig"))))
+        data, hist = rt.photo.render(pid, d.get("params"), d.get("size") or "base", crop=d.get("crop", True) is not False, orig=bool(d.get("orig")))
+        res = _jpeg(data)
+        if hist:
+            res.headers["X-Hist"] = base64.b64encode(hist).decode()
+        return res
 
     @app.put("/api/photo/<pid>")
     def photo_save(pid):
         return jsonify(photo=rt.photo.save(pid, body().get("params")))
 
-    @app.get("/api/photo/<pid>/auto")
+    @app.post("/api/photo/<pid>/auto")
     def photo_auto(pid):
-        return jsonify(params=rt.photo.auto(pid))
+        return jsonify(params=rt.photo.auto(pid, body().get("params")))
+
+    @app.post("/api/photo/<pid>/wb")
+    def photo_wb(pid):
+        d = body()
+        return jsonify(wb_gains=rt.photo.wb_pick(pid, d.get("params"), d.get("u"), d.get("v")))
+
+    @app.get("/api/photo/<pid>/suggest")
+    def photo_suggest(pid):
+        return jsonify(items=rt.photo.suggest(pid))
+
+    @app.post("/api/photo/<pid>/match")
+    def photo_match(pid):
+        f = request.files.get("file")
+        return jsonify(rt.photo.match(pid, f.read() if f else b""))
+
+    @app.post("/api/photo/preset")
+    def photo_preset_save():
+        d = body()
+        return jsonify(presets=rt.photo.save_preset(d.get("name"), d.get("params"), d.get("old")))
+
+    @app.post("/api/photo/preset/delete")
+    def photo_preset_delete():
+        return jsonify(presets=rt.photo.delete_preset(str(body().get("name") or "")))
+
+    @app.post("/api/photo/engine")
+    def photo_engine_upload():
+        f = request.files.get("file")
+        return jsonify(status=rt.photo.install_engine(f.read() if f else b""))
 
     @app.post("/api/photo/<pid>/export")
     def photo_export(pid):
         d = body()
-        data, mime, name = rt.photo.export(pid, d.get("params"), d.get("size"), d.get("quality"))
+        data, mime, name = rt.photo.export(pid, d.get("params"), d.get("opt"))
         return _jpeg(data, name, mime)
 
     @app.post("/api/photo/export")
     def photo_export_zip():
         d = body()
-        return _jpeg(rt.photo.export_zip(d.get("ids"), d.get("size"), d.get("quality")), "photos_edit.zip", "application/zip")
+        return _jpeg(rt.photo.export_zip(d.get("ids"), d.get("opt")), "photos_edit.zip", "application/zip")
 
     @app.delete("/api/photo/<pid>")
     def photo_delete(pid):

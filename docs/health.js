@@ -37,7 +37,7 @@
   const diff = (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(1);
   function dday(n) { return n > 0 ? `D-${n}` : n === 0 ? "D-DAY" : `D+${-n}`; }
   const send = (m, u, b) => api(m, u, b);
-  const H = { d: null, sub: "today", tab: "weight", sel: "", week: "", busy: false };
+  const H = { d: null, sub: "today", tab: "weight", sel: "", week: "", busy: false, wtab: "week" };
   const SERIES = { weight: ["체중", "kg"], waist: ["허리", "cm"], fat: ["체지방", "%"] };
 
   const head = (sub, title, extra = "") => `<header class="hl-head"><div class="hl-head-t"><p>${esc(sub)}</p><h1>${esc(title)}</h1></div>
@@ -51,6 +51,7 @@
     const d = H.d;
     if (!d || !$("#hlApp")) return;
     $("#hlApp").innerHTML = ({ today, body, workout, checkup }[H.sub] || today)(d);
+    hydrate($("#hlApp"));
   }
   async function reload() { await load(); draw(); }
   // 누르자마자 화면부터 바꾸고 저장한다. 저장이 안 되면 서버 값으로 되돌린다
@@ -149,19 +150,95 @@
     const wk = d.week, plan = d.cfg.plan;
     if (!wk.days.some((x) => x.date === H.sel)) H.sel = (wk.days.find((x) => x.today) || wk.days[0]).date;
     const i = wk.days.findIndex((x) => x.date === H.sel), day = wk.days[i], p = plan.days[i];
+    const seg = `<div class="hl-seg2" role="tablist"><button type="button" role="tab" data-wtab="week" aria-selected="${H.wtab !== "gym"}">주간 루틴</button><button type="button" role="tab" data-wtab="gym" aria-selected="${H.wtab === "gym"}">기구 안내 ${GYM.length}</button></div>`;
+    if (H.wtab === "gym") return `${head(plan.place || "헬스장", "기구 안내", "")}${seg}${gymList(d)}`;
     return `${head(`${md(wk.start)} – ${md(wk.end)}${plan.place ? ` · ${plan.place}` : ""}`, wk.this_week ? "이번 주 운동" : "지난 운동",
       `<button type="button" class="hl-ico" data-act="plan" aria-label="루틴 고치기">${MORE}</button>`)}
+      ${seg}
       <div class="hl-wk"><button type="button" class="hl-ico line" data-wk="-7" aria-label="앞 주">${svg('<path d="M15 6l-6 6 6 6"/>', 18)}</button>
         <span>${wk.done} / ${wk.target}회 완료${wk.rpe_avg ? ` · 평균 힘듦 ${wk.rpe_avg}` : ""}</span>
         ${wk.this_week ? `<span class="hl-ico ghost"></span>` : `<button type="button" class="hl-ico line" data-wk="7" aria-label="다음 주">${NEXT}</button>`}</div>
       <div class="hl-days" role="tablist" aria-label="요일">${wk.days.map((x, k) => `<button type="button" role="tab" data-day="${x.date}" aria-selected="${x.date === H.sel}"
         aria-label="${x.dow}요일 ${esc(plan.days[k].name)}${x.done ? ", 완료" : ""}" class="${x.today ? "today" : ""}"><span>${x.dow}</span><b>${+x.date.slice(8, 10)}</b><i class="${x.done ? "on" : ""}"></i></button>`).join("")}</div>
       <section class="hl-card"><div class="hl-sec-h"><div><p class="hl-over">${day.dow}요일${day.today ? " · 오늘" : ""}</p><h2 class="big">${esc(p.name)}</h2></div>${p.time ? `<span class="hl-chip">${esc(p.time)}</span>` : ""}</div>
-        <div class="hl-items">${p.items.map((it) => `<div><span>${esc(it[0])}</span><b>${esc(it[1] || "")}</b></div>`).join("") || `<div><span class="dim">루틴이 비어 있어요</span></div>`}</div>
+        <div class="hl-items">${p.items.map((it) => { const g = gymOf(it[0]); return g
+          ? `<button type="button" data-gym="${g.id}" aria-label="${esc(it[0])} ${esc(it[1] || "")}, 기구 안내 보기"><span>${esc(it[0])}</span><b>${esc(it[1] || "")}</b>${NEXT}</button>`
+          : `<div><span>${esc(it[0])}</span><b>${esc(it[1] || "")}</b></div>`; }).join("") || `<div><span class="dim">루틴이 비어 있어요</span></div>`}</div>
         <button type="button" class="hl-btn ${day.done ? "done" : "green"} wide" data-done="${day.done ? 0 : 1}" ${day.future ? "disabled" : ""}>${day.future ? "아직 오지 않은 날이에요" : day.done ? "완료됨 · 취소하려면 누르기" : p.rest ? "오늘 할 일 완료" : "운동 완료"}</button></section>
       <section class="hl-card"><div class="hl-sec-h"><h2>힘들었던 정도</h2><span>대화는 되고 노래는 힘들면 6~7</span></div>
         <div class="hl-rpe" role="group" aria-label="힘들었던 정도 1부터 10">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) =>
           `<button type="button" data-rpe="${v}" aria-pressed="${day.rpe === v}" ${day.future ? "disabled" : ""}>${v}</button>`).join("")}</div></section>`;
+  }
+
+  // ---------- 기구 안내 ----------
+  // 루틴 줄 이름에서 기구를 찾는다(가장 긴 낱말이 맞는 기구)
+  function gymOf(name) {
+    let best = null, len = 0;
+    GYM.forEach((g) => g.k.forEach((k) => { if (name.includes(k) && k.length > len) { best = g; len = k.length; } }));
+    return best;
+  }
+  const gymDays = (d, id) => d.cfg.plan.days.map((p, i) => (p.items.some((it) => (gymOf(it[0]) || {}).id === id) ? "월화수목금토일"[i] : "")).filter(Boolean);
+  const gymPic = (g, d, cls) => (d.photos && d.photos[g.id] ? `<img class="${cls}" data-ph="${g.id}" data-ver="${esc(d.photos[g.id])}" alt="${esc(g.name)} 사진">` : `<span class="${cls} none" aria-hidden="true">${svg(GYM_ICON[g.icon] || "", 26, 1.7)}</span>`);
+  function gymList(d) {
+    const n = Object.keys(d.photos || {}).filter((k) => GYM.some((g) => g.id === k)).length;
+    return `<p class="hl-hint">기구를 누르면 맞추는 법과 하는 법이 나와요. 사진은 기구마다 직접 찍어 넣을 수 있어요${n ? ` (${n} / ${GYM.length}개 넣음)` : ""}.</p>
+      ${GYM_CATS.map(([cat, label]) => `<section class="hl-sec"><div class="hl-sec-h"><h2>${label}</h2><span>${GYM.filter((g) => g.cat === cat).length}가지</span></div>
+        <div class="hl-card flush">${GYM.filter((g) => g.cat === cat).map((g) => { const days = gymDays(d, g.id); return `<button type="button" class="hl-gym" data-gym="${g.id}">${gymPic(g, d, "hl-gym-ph")}
+          <span class="hl-lab-t"><b>${esc(g.name)}</b><small>${esc(g.aka)} · ${esc(g.target)}</small></span>${days.length ? `<em>${days.join("·")}</em>` : ""}</button>`; }).join("")}</div></section>`).join("")}`;
+  }
+  // 사진은 로그인 정보가 있어야 받을 수 있어서 직접 받아 붙인다. 한 번 받은 것은 그대로 쓴다
+  const picCache = new Map();
+  async function picUrl(key, ver, thumb) {
+    const id = `${key}|${ver}|${thumb ? 1 : 0}`;
+    if (!picCache.has(id)) picCache.set(id, fetch(apiBase() + `/api/health/photo/${key}${thumb ? "?s=thumb" : ""}`, { headers: authHeaders({}) })
+      .then((r) => { if (!r.ok) throw new Error("사진을 받지 못했어요"); return r.blob(); }).then((b) => URL.createObjectURL(b)).catch((e) => { picCache.delete(id); throw e; }));
+    return picCache.get(id);
+  }
+  function hydrate(root) {
+    $$("img[data-ph]", root).forEach((im) => { if (!im.src) picUrl(im.dataset.ph, im.dataset.ver, !im.dataset.full).then((u) => { im.src = u; }).catch(() => { im.classList.add("fail"); }); });
+  }
+  // 휴대폰 사진을 줄여서(긴 쪽 1280, 작은 것 320) 보낸다
+  function shrink(img, max, q) {
+    const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight)), c = document.createElement("canvas");
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", q);
+  }
+  function pickPhoto(g) {
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.accept = "image/*";
+    inp.onchange = () => {
+      const file = inp.files && inp.files[0];
+      if (!file) return;
+      const img = new Image(), url = URL.createObjectURL(file);
+      img.onerror = () => { URL.revokeObjectURL(url); toast("사진을 읽지 못했어요", true); };
+      img.onload = async () => {
+        const full = shrink(img, 1280, 0.82), thumb = shrink(img, 320, 0.78);
+        URL.revokeObjectURL(url);
+        if (await save(() => send("POST", `/api/health/photo/${g.id}`, { full, thumb }), "사진을 넣었어요")) gymSheet(g.id);
+      };
+      img.src = url;
+    };
+    inp.click();
+  }
+  function gymSheet(id) {
+    const g = GYM.find((x) => x.id === id), d = H.d;
+    if (!g) return;
+    const has = !!(d.photos && d.photos[g.id]), days = gymDays(d, g.id), li = (a) => a.map((x) => `<li>${esc(x)}</li>`).join("");
+    openSheet(g.name, `<div class="hl-guide">
+      <div class="hl-guide-ph">${has ? `<img data-ph="${g.id}" data-full="1" data-ver="${esc(d.photos[g.id])}" alt="${esc(g.name)} 사진">` : `<span class="none">${svg(GYM_ICON[g.icon] || "", 54, 1.4)}<small>아직 사진이 없어요</small></span>`}</div>
+      ${Object.keys(d.photos || {}).filter((k) => k.startsWith(g.id + "_")).sort().map((k) => `<div class="hl-guide-ph"><img data-ph="${k}" data-full="1" data-ver="${esc(d.photos[k])}" alt="${esc(g.name)} 사진 더"></div>`).join("")}
+      <div class="hl-row2"><button type="button" class="btn ${has ? "soft" : "dark"} wide" id="hlPic">${has ? "사진 바꾸기" : "사진 넣기"}</button>${has ? `<button type="button" class="btn soft" id="hlPicDel">사진 지우기</button>` : ""}</div>
+      <p class="hl-guide-tag"><b>${esc(g.aka)}</b><span>${esc(g.target)}</span>${days.length ? `<em>내 루틴 ${days.join("·")}요일</em>` : ""}</p>
+      <p class="hl-guide-what">${esc(g.what)}</p>
+      <h3>자리 맞추기</h3><ul>${li(g.setup)}</ul>
+      <h3>하는 법</h3><ol>${li(g.how)}</ol>
+      <h3>처음에는</h3><p>${esc(g.start)}</p>
+      <h3>조심할 점</h3><ul class="care">${li(g.care)}</ul></div>`, (root) => {
+      hydrate(root);
+      $("#hlPic", root).onclick = () => pickPhoto(g);
+      if (has) $("#hlPicDel", root).onclick = async (e) => { if (!confirmTap(e.currentTarget, "한 번 더 누르면 지워요")) return; if (await save(() => send("DELETE", `/api/health/photo/${g.id}`), "지웠어요")) gymSheet(g.id); };
+    });
   }
 
   // ---------- 검진 ----------
@@ -266,7 +343,7 @@
       let data;
       try { data = JSON.parse(await file.text()); } catch (e) { return toast("건강관리 자료 파일이 아니에요", true); }
       closeSheet();
-      await save(async () => { const r = await send("POST", "/api/health/import", { data }); toast(`가져왔어요: 기록 ${r.added.body}개, 수치 ${r.added.labs}개, 일정 ${r.added.follows}개`); });
+      await save(async () => { const r = await send("POST", "/api/health/import", { data }); toast(r.added.photos && !r.added.body && !r.added.labs ? `기구 사진 ${r.added.photos}장을 넣었어요` : `가져왔어요: 기록 ${r.added.body}개, 수치 ${r.added.labs}개, 일정 ${r.added.follows}개${r.added.photos ? `, 사진 ${r.added.photos}장` : ""}`); });
     };
     inp.click();
   }
@@ -304,6 +381,8 @@
     }
     if ((b = el("[data-act]"))) return ({ goal: goalSheet, manage: manageSheet, import: importPick, plan: planSheet, lab: () => labSheet(0), follow: () => followSheet(0), med: () => medSheet(-1) }[b.dataset.act] || (() => {}))();
     if ((b = el("[data-tab]"))) { H.tab = b.dataset.tab; return draw(); }
+    if ((b = el("[data-wtab]"))) { H.wtab = b.dataset.wtab; draw(); return window.scrollTo(0, 0); }
+    if ((b = el("[data-gym]"))) return gymSheet(b.dataset.gym);
     if ((b = el("[data-delbody]"))) { if (!confirmTap(b, "한 번 더")) return; return save(() => send("DELETE", `/api/health/body/${b.dataset.delbody}`), "지웠어요"); }
     if ((b = el("[data-day]"))) { H.sel = b.dataset.day; return draw(); }
     if ((b = el("[data-wk]"))) {

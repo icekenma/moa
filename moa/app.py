@@ -5,7 +5,7 @@ import os
 import secrets
 from datetime import date, datetime
 
-from flask import Flask, jsonify, make_response, request, send_from_directory
+from flask import Flask, Response, jsonify, make_response, request, send_from_directory
 
 from .assets import AssetError
 from .broker.brokers import OrderError
@@ -1217,6 +1217,22 @@ def create_app(rt, updater=None):
     @app.delete("/api/health/follow/<int:fid>")
     def health_follow_del(fid):
         rt.health.delete_follow(fid)
+        return jsonify(ok=True)
+
+    @app.get("/api/health/photo/<key>")
+    def health_photo(key):
+        b = rt.health.photo(key, thumb=request.args.get("s") == "thumb")
+        if b is None:
+            return jsonify(error="사진이 없어요"), 404
+        return Response(b, mimetype="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+    @app.post("/api/health/photo/<key>")
+    def health_photo_save(key):
+        return jsonify(updated=rt.health.save_photo(key, body()))
+
+    @app.delete("/api/health/photo/<key>")
+    def health_photo_del(key):
+        rt.health.delete_photo(key)
         return jsonify(ok=True)
 
     @app.get("/api/health/export")

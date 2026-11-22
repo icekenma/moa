@@ -3,6 +3,7 @@
 개인 건강 수치는 코드에 넣지 않는다. 전부 이 서버의 DB에만 저장하고,
 처음 자료는 앱에서 직접 넣거나 '자료 가져오기'(JSON 파일)로 넣는다.
 """
+import base64
 import json
 import re
 import zlib
@@ -76,6 +77,8 @@ class Health:
         db.x("""CREATE TABLE IF NOT EXISTS hl_follow(
             id INTEGER PRIMARY KEY, date TEXT NOT NULL, title TEXT NOT NULL, why TEXT NOT NULL DEFAULT '',
             done INTEGER NOT NULL DEFAULT 0)""")
+        # 헬스장 기구 사진(내 휴대폰으로 찍은 것). 저장소가 아니라 이 서버에만 둔다
+        db.x("CREATE TABLE IF NOT EXISTS hl_photo(key TEXT PRIMARY KEY, full BLOB NOT NULL, thumb BLOB NOT NULL, updated TEXT NOT NULL)")
 
     # ---------- 설정(목표·루틴·체크 항목) ----------
     def cfg(self):
@@ -302,6 +305,41 @@ class Health:
             nxt = nxt or r["next"]
         return rows
 
+    # ---------- 기구 사진 ----------
+    @staticmethod
+    def _jpeg(v, limit, what):
+        s = str(v or "")
+        if s.startswith("data:"):
+            s = s.split(",", 1)[-1]
+        try:
+            raw = base64.b64decode(s, validate=True)
+        except Exception:
+            raise HealthError(f"{what}을 읽지 못했어요")
+        if raw[:3] != b"\xff\xd8\xff":
+            raise HealthError("사진(JPEG)만 넣을 수 있어요")
+        if len(raw) > limit:
+            raise HealthError("사진이 너무 커요")
+        return raw
+
+    def save_photo(self, key, d):
+        if not re.fullmatch(r"[a-z0-9_]{1,30}", str(key)):
+            raise HealthError("없는 기구예요")
+        full, thumb = self._jpeg(d.get("full"), 2_000_000, "사진"), self._jpeg(d.get("thumb"), 300_000, "작은 사진")
+        now = datetime.now().isoformat(timespec="seconds")
+        self.db.x("INSERT INTO hl_photo(key,full,thumb,updated) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
+                  "full=excluded.full, thumb=excluded.thumb, updated=excluded.updated", (key, full, thumb, now))
+        return now
+
+    def photo(self, key, thumb=False):
+        r = self.db.one(f"SELECT {'thumb' if thumb else 'full'} AS b FROM hl_photo WHERE key=?", (str(key),))
+        return bytes(r["b"]) if r else None
+
+    def delete_photo(self, key):
+        self.db.x("DELETE FROM hl_photo WHERE key=?", (str(key),))
+
+    def photos(self):
+        return {r["key"]: r["updated"] for r in self.db.q("SELECT key, updated FROM hl_photo")}
+
     # ---------- 화면 한 번에 ----------
     def overview(self, week=None):
         t = self._today()
@@ -329,7 +367,7 @@ class Health:
                 "body": {"rows": rows, "latest": latest, "start_weight": start_w, "progress": prog, "bmi": bmi},
                 "checks": [r["key"] for r in self.db.q("SELECT key FROM hl_check WHERE date=?", (t.isoformat(),))],
                 "week": self.week(week), "now_week": self.week() if week else None,
-                "labs": labs, "lab_date": lab_date, "follows": self.follows(), "empty": not rows and not labs}
+                "labs": labs, "lab_date": lab_date, "follows": self.follows(), "empty": not rows and not labs, "photos": self.photos()}
 
     def brief(self):
         """첫 화면(우석World) 타일에 보일 한 줄."""
@@ -360,7 +398,7 @@ class Health:
         """내보낸 파일(또는 처음 자료 파일)을 넣는다. 같은 날짜·같은 항목은 파일 값으로 바꾸고, 나머지는 그대로 둔다."""
         if not isinstance(d, dict) or d.get("kind") != "moa-health":
             raise HealthError("건강관리 자료 파일이 아니에요")
-        n = {"body": 0, "labs": 0, "follows": 0, "workouts": 0, "checks": 0}
+        n = {"body": 0, "labs": 0, "follows": 0, "workouts": 0, "checks": 0, "photos": 0}
         if isinstance(d.get("cfg"), dict):
             self.save_cfg({k: d["cfg"][k] for k in ("height", "note", "goal", "habits", "plan", "meds") if k in d["cfg"]})
         for r in d.get("body") or []:
@@ -384,4 +422,7 @@ class Health:
         for r in d.get("checks") or []:
             self.db.x("INSERT OR IGNORE INTO hl_check(date,key) VALUES(?,?)", (_d(r.get("date")).isoformat(), _txt(r.get("key"), 20)))
             n["checks"] += 1
+        for r in d.get("photos") or []:   # 기구 사진 묶음(내보내기에는 넣지 않는다: 백업에 들어 있다)
+            self.save_photo(r.get("key"), r)
+            n["photos"] += 1
         return n

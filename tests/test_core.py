@@ -2868,3 +2868,23 @@ def test_health_and_world_api(rt):
     w = c.get("/api/world").get_json()["apps"]
     assert w["health"]["checks"] == 2 and w["health"]["weight"] == 88.2 and "expense" in w["ledger"]
     assert c.post("/api/health/import", json={"data": c.get("/api/health/export").get_json()}).status_code == 200
+
+
+def test_health_gym_photos(rt):
+    import base64
+    from moa.health import HealthError
+    jpg = base64.b64encode(b"\xff\xd8\xff\xe0" + b"0" * 64).decode()
+    h = rt.health
+    with pytest.raises(HealthError):
+        h.save_photo("smith", {"full": base64.b64encode(b"GIF89a....").decode(), "thumb": jpg})   # 사진이 아님
+    with pytest.raises(HealthError):
+        h.save_photo("../x", {"full": jpg, "thumb": jpg})
+    c = create_app(rt).test_client()
+    assert c.get("/api/health/photo/smith").status_code == 404
+    assert c.post("/api/health/photo/smith", json={"full": "data:image/jpeg;base64," + jpg, "thumb": jpg}).status_code == 200
+    r = c.get("/api/health/photo/smith?s=thumb")
+    assert r.status_code == 200 and r.mimetype == "image/jpeg" and r.data[:3] == b"\xff\xd8\xff"
+    assert "smith" in c.get("/api/health").get_json()["photos"]
+    assert h.import_({"kind": "moa-health", "photos": [{"key": "bike", "full": jpg, "thumb": jpg}]})["photos"] == 1
+    assert "photos" not in h.export()                          # 내보내기 파일에는 사진을 넣지 않는다
+    assert c.delete("/api/health/photo/smith").status_code == 200 and set(h.photos()) == {"bike"}

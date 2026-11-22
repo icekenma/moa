@@ -193,3 +193,32 @@ html[data-sec="health"] .sheet .btn.dark{background:var(--hg);border-color:var(-
 .hl-lab strong.sm{font-size:14px;color:var(--ink2)}
 .hl-meds-n{padding:11px 16px 13px;font-size:12px;color:var(--ink2)}
 .hl-card.flush .hl-lab:last-of-type{border-bottom:1px solid #EEF0EB}
+/* 운동 탭: 주간 루틴 | 기구 안내 */
+.hl-seg2{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:4px;border-radius:14px;background:#E6E9E3}
+.hl-seg2 button{min-height:44px;border:0;border-radius:11px;background:transparent;font-size:14.5px;font-weight:700;color:var(--ink2)}
+.hl-seg2 button[aria-selected="true"]{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(23,32,27,.14)}
+.hl-items button{display:flex;align-items:center;gap:10px;width:100%;padding:11px 0;border:0;border-bottom:1px solid #EEF0EB;background:none;text-align:left;min-height:48px}
+.hl-items button span{flex:1 1 auto;min-width:0;font-size:15px;font-weight:500;text-decoration:underline;text-decoration-color:var(--hg-l);text-underline-offset:4px}
+.hl-items button svg{flex:0 0 auto;color:var(--ink3);margin-left:-4px}
+.hl-gym{display:flex;align-items:center;gap:12px;width:100%;min-height:76px;padding:10px 14px 10px 10px;border:0;border-bottom:1px solid #EEF0EB;background:#fff;text-align:left}
+.hl-gym:last-child{border-bottom:0}
+.hl-gym-ph{flex:0 0 56px;width:56px;height:56px;border-radius:12px;object-fit:cover;background:var(--hg-s);display:block}
+.hl-gym-ph.none{display:flex;align-items:center;justify-content:center;color:var(--hg)}
+.hl-gym em{flex:0 0 auto;font-style:normal;font-size:11.5px;font-weight:700;padding:5px 9px;border-radius:999px;background:var(--hg-s);color:var(--hg-d);border:1px solid var(--hg-l);white-space:nowrap}
+.hl-guide{display:flex;flex-direction:column;gap:12px;font-size:14.5px;line-height:1.6;color:var(--ink)}
+.hl-guide-ph{border-radius:16px;overflow:hidden;background:#17201B;min-height:120px}
+.hl-guide-ph img{width:100%;height:auto;max-height:62vh;object-fit:contain;display:block}
+.hl-guide-ph .none{width:100%;aspect-ratio:4 / 3;background:var(--hg-s);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--hg)}
+.hl-guide-ph small{font-size:12.5px;color:var(--ink2)}
+.hl-guide .btn{min-height:46px;border-radius:13px;font-size:14.5px}
+.hl-guide .btn.soft{flex:0 0 auto;padding:0 16px}
+.hl-guide .btn.wide{flex:1 1 auto}
+.hl-guide-tag{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:4px 0 0}
+.hl-guide-tag b{font-size:15px}
+.hl-guide-tag span{font-size:13px;color:var(--ink2)}
+.hl-guide-tag em{font-style:normal;font-size:12px;font-weight:700;padding:4px 9px;border-radius:999px;background:var(--hg-s);color:var(--hg-d)}
+.hl-guide p{margin:0}
+.hl-guide h3{margin:8px 0 -6px;font-size:13px;font-weight:800;color:var(--hg)}
+.hl-guide ul,.hl-guide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:5px}
+.hl-guide ul.care{list-style:none;padding:12px 14px;border-radius:14px;background:var(--warn-s);border:1px solid var(--warn-l);color:#4A2A12}
+img.fail{visibility:hidden}

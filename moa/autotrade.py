@@ -3223,7 +3223,7 @@ class AutoTrade:
                     k = None
                 if k is not None:
                     g.setdefault(k, []).append(t)
-            rows = [dict(agg(v), key=k) for k, v in g.items()]
+            rows = [dict(agg(v), key=k, ids=[t["id"] for t in v][-300:]) for k, v in g.items()]   # 누르면 그 칸의 거래를 보여 주려고
             rows.sort(key=(lambda x: order.index(x["key"]) if x["key"] in order else 99) if order else (lambda x: -x["n"]))
             return {"label": label, "rows": rows}
 
@@ -3251,7 +3251,7 @@ class AutoTrade:
         by_sym = {}
         for t in closed:
             by_sym.setdefault((t["mkt"], t["sym"]), []).append(t)
-        syms = sorted(([dict(agg(v), mkt=m, sym=sy, name=v[-1]["name"]) for (m, sy), v in by_sym.items()]), key=lambda x: -x["n"])[:15]
+        syms = sorted(([dict(agg(v), mkt=m, sym=sy, name=v[-1]["name"], ids=[t["id"] for t in v][-300:]) for (m, sy), v in by_sym.items()]), key=lambda x: -x["n"])[:15]
         tot = agg(closed)
         cost_all = round(sum(cost_d.values()))
         tot.update(ai_cost=cost_all, net=round((tot.get("pnl_krw") or 0) - cost_all), open=sum(1 for t in trades if t["status"] == "open"),

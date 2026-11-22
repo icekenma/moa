@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261123.0101";
+const UI_VERSION = "261123.0115";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -3087,7 +3087,22 @@ atAttrHtml(st) {
     $("#hxMkt").onchange = (e) => { H.mkt = e.target.value; H.strat = ""; this.atLog(box); };
     $("#hxMode").onchange = (e) => { H.mode = e.target.value; H.strat = ""; this.atLog(box); };
     $("#hxStrat").onchange = (e) => { H.strat = e.target.value; this.atLog(box); };
+    box.onkeydown = (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-hxcell],[data-hxsd]")) { e.preventDefault(); e.target.click(); } };
     box.onclick = async (e) => {
+      const cell = e.target.closest("[data-hxcell]");
+      if (cell && !e.target.closest("a")) return this.hxCell(cell.dataset.hxcell);
+      const sd = e.target.closest("[data-hxsd]");
+      if (sd && !e.target.closest("a")) {
+        // 전략의 날짜별 한 줄: 그날 그 전략의 거래를 팝업으로
+        const [sk, day] = sd.dataset.hxsd.split("|"), lab = ((H.d.strategies || []).find((x) => x.key === sk) || {}).label || "";
+        openSheet(`${lab} · ${day.slice(5).replace("-", "/")}`, `<div class="empty small loading">그날 거래를 여는 중</div>`);
+        try {
+          const D = await GET(`/api/auto/history?${new URLSearchParams({ days: H.days, mkt: H.mkt, mode: H.mode, strat: sk, day })}`);
+          const ts = D.trades.filter((t) => t.status === "closed" ? (t.exit_day || t.entry_day) === day : t.entry_day === day);
+          $("#sheetBody").innerHTML = `<div class="hx-pop">${ts.map((t) => this.hxTrade(t, true)).join("") || `<div class="empty small">거래가 없어요</div>`}</div>`;
+        } catch (err) { $("#sheetBody").innerHTML = `<div class="notice warn">${esc(err.message)}</div>`; }
+        return;
+      }
       const dy = e.target.closest("[data-hxday]"), st = e.target.closest("[data-hxst]"), only = e.target.closest("[data-hxonly]"), go = e.target.closest("[data-hxgo]"), more = e.target.closest("[data-hxmore]");
       if (more) {
         if (more.dataset.hxmore === "trade") H.tn = (H.tn || 40) + 40; else H.dayAll = more.dataset.hxmore;
@@ -3211,19 +3226,35 @@ atAttrHtml(st) {
             <div><span>손익(AI 비용 전)</span><b class="${tone(S.pnl_krw)}">${S.n ? signed(S.pnl_krw) : "-"}</b></div>
             <div><span>거래한 날 · 쓴 돈</span><b>${s.days}일 · ${won(s.budget)}</b></div></div>
           ${s.reasons.length ? `<div class="chips hx-chips">${s.reasons.map(([k, n]) => `<span class="chip">${esc(k)} ${n}</span>`).join("")}</div>` : ""}
-          ${s.by_day.length ? `<div class="hx-sub">날짜별</div><div class="hx-tbl">${s.by_day.map((x) => `<div><span><b>${esc(x.day.slice(5).replace("-", "/"))}</b></span><span>${x.n}건 · 승 ${x.win}</span>
+          ${s.by_day.length ? `<div class="hx-sub">날짜별</div><div class="hx-tbl">${s.by_day.map((x) => `<div class="hx-link" role="button" tabindex="0" data-hxsd="${esc(s.key)}|${x.day}" aria-label="${esc(x.day)} 거래 보기"><span><b>${esc(x.day.slice(5).replace("-", "/"))}<i class="hx-chev" aria-hidden="true">›</i></b></span><span>${x.n}건 · 승 ${x.win}</span>
             <span class="${tone(x.avg)}">${pct(x.avg, 2)}</span><b class="${tone(x.pnl)}">${signed(x.pnl)}</b></div>`).join("")}</div>` : ""}
           <button type="button" class="btn wide sm" data-hxonly="${esc(s.key)}">이 전략만 날짜별·기준별로 보기</button></div>` : ""}</div>`;
     }).join("")}</section>`).join("") || `<section class="card"><div class="empty small">기록이 없어요</div></section>`;
   },
+  // 기준별 성적 한 칸(예: '12시', '목', '관망')을 누르면 그 칸에 든 거래를 팝업으로
+  hxCell(key) {
+    const d = this.hx.d;
+    if (!d) return;
+    const [g, i] = key.split("|"), r = g === "s" ? (d.symbols || [])[+i] : ((d.groups[+g] || {}).rows || [])[+i];
+    if (!r) return;
+    const title = g === "s" ? r.name : `${d.groups[+g].label} · ${r.key}`;
+    const ids = new Set(r.ids || []), ts = d.trades.filter((t) => ids.has(t.id));
+    const miss = Math.max(0, (r.ids || []).length - ts.length);
+    const html = `<div class="sc-kpi"><div><span>거래 · 승률</span><b>${r.n}건 · ${r.win_rate}%</b></div><div><span>한 번 평균</span><b class="${tone(r.avg_pct)}">${pct(r.avg_pct, 2)}</b></div>
+        <div><span>손익</span><b class="${tone(r.pnl_krw)}">${signed(r.pnl_krw)}</b></div></div>
+      ${r.avg_win != null ? `<div class="tiny" style="margin:6px 2px">이길 때 평균 <b class="up">${pct(r.avg_win, 2)}</b> · 질 때 평균 <b class="down">${pct(r.avg_loss, 2)}</b>${r.best != null ? ` · 가장 좋았던 ${pct(r.best, 2)} · 나빴던 ${pct(r.worst, 2)}` : ""}</div>` : ""}
+      <div class="hx-sub">거래 ${ts.length}건${miss ? ` (오래된 ${miss}건은 기간을 줄이거나 전략을 골라 보세요)` : ""}</div>
+      <div class="hx-pop">${ts.map((t) => this.hxTrade(t)).join("") || `<div class="empty small">보여 줄 거래가 없어요</div>`}</div>`;
+    openSheet(title, html);
+  },
   hxAngles(d) {
     const sym = d.symbols || [];
-    return `${d.groups.map((g) => `<section class="card hx-ang"><div class="card-head"><h2>${esc(g.label)}</h2><span class="tiny">건수 · 승률 · 한 번 평균 · 손익</span></div>
-      ${g.rows.map((r) => `<div class="hx-ar"><span class="hx-ak">${esc(r.key)}</span><span class="hx-an">${r.n}건</span>
+    return `${d.groups.map((g, gi) => `<section class="card hx-ang"><div class="card-head"><h2>${esc(g.label)}</h2><span class="tiny">건수 · 승률 · 한 번 평균 · 손익</span></div>
+      ${g.rows.map((r, ri) => `<div class="hx-ar hx-link" role="button" tabindex="0" data-hxcell="${gi}|${ri}" aria-label="${esc(g.label)} ${esc(r.key)} 거래 ${r.n}건 보기"><span class="hx-ak">${esc(r.key)}<i class="hx-chev" aria-hidden="true">›</i></span><span class="hx-an">${r.n}건</span>
         <span class="hx-bar" role="img" aria-label="승률 ${r.win_rate}%"><i style="width:${r.win_rate}%"></i><em>${r.win_rate}%</em></span>
         <b class="${tone(r.avg_pct)}">${pct(r.avg_pct, 2)}</b><small class="${tone(r.pnl_krw)}">${signed(r.pnl_krw)}</small></div>`).join("")}</section>`).join("")}
-      ${sym.length ? `<section class="card hx-ang"><div class="card-head"><h2>자주 거래한 종목</h2><span class="tiny">누르면 차트에 산 때·판 때가 찍혀요</span></div>
-        ${sym.map((r) => `<div class="hx-ar"><span class="hx-ak">${stockA(r.mkt, r.sym, r.name)}</span><span class="hx-an">${r.n}건</span>
+      ${sym.length ? `<section class="card hx-ang"><div class="card-head"><h2>자주 거래한 종목</h2><span class="tiny">이름은 차트, 줄은 거래 목록</span></div>
+        ${sym.map((r, ri) => `<div class="hx-ar hx-link" role="button" tabindex="0" data-hxcell="s|${ri}" aria-label="${esc(r.name)} 거래 ${r.n}건 보기"><span class="hx-ak">${stockA(r.mkt, r.sym, r.name)}<i class="hx-chev" aria-hidden="true">›</i></span><span class="hx-an">${r.n}건</span>
           <span class="hx-bar"><i style="width:${r.win_rate}%"></i><em>${r.win_rate}%</em></span><b class="${tone(r.avg_pct)}">${pct(r.avg_pct, 2)}</b><small class="${tone(r.pnl_krw)}">${signed(r.pnl_krw)}</small></div>`).join("")}</section>` : ""}
       <div class="tiny" style="padding:0 3px">건수가 적은 칸은 운일 수 있어요. 10건 넘는 칸끼리 비교해 보세요.</div>`;
   },

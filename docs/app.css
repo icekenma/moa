@@ -3727,3 +3727,10 @@ html:not(.dark-theme):not(.gm-on) .lab-tr:nth-child(2) .lab-nm i:not(.few){color
 
 /* 떠 있는 버튼(주문·추가)이 있는 화면: 맨 아래 내용이 버튼에 가리지 않게 끝을 더 띄운다 */
 body:has(> .fab) main{padding-bottom:calc(150px + var(--safe-b))}
+
+/* 매매 기록 · 기준별 성적: 줄을 누르면 그 칸의 거래를 팝업으로 */
+.hx-link{cursor:pointer;border-radius:8px;margin:0 -6px;padding-left:6px;padding-right:6px;transition:background .12s}
+.hx-link:active{background:color-mix(in srgb,var(--ink) 8%,transparent)}
+.hx-link:focus-visible{outline:2px solid var(--sec,#5b8cff);outline-offset:1px}
+.hx-chev{font-style:normal;margin-left:4px;opacity:.45;font-weight:700}
+.hx-pop{display:grid;gap:6px}

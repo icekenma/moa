@@ -1535,6 +1535,9 @@ def test_history_by_day_strategy_and_angles(env, monkeypatch):
     d17 = next(x for x in H["days"] if x["day"] == "2026-11-17")
     assert d17["sells"] == 2 and d17["dow"] == "화" and d17["stats"]["pnl_krw"] == 1600 + 5600 and d17["mkts"] == ["kr", "us"]
     G = {g["label"]: {r["key"]: r for r in g["rows"]} for g in H["groups"]}
+    tid = {x["id"] for x in H["trades"]}
+    assert all(r["ids"] and set(r["ids"]) <= tid and len(r["ids"]) == r["n"] for g in H["groups"] for r in g["rows"])     # 칸을 누르면 그 거래를 보여 준다
+    assert all(len(s_["ids"]) == s_["n"] for s_ in H["symbols"])
     assert G["추천 종류"]["빠른 재추천"]["n"] == 1 and G["시장 · 방식"]["미국 단타"]["n"] == 1 and G["파는 사유"]["익절"]["n"] == 1
     assert H["symbols"] and all(t["strat_label"] for t in H["trades"]) and H["trades"][0]["exit_ts"] >= H["trades"][-1]["exit_ts"]
     # 걸러 보기: 시장·구분·전략, 그날 자세히(받은 추천 포함)

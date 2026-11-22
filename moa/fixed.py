@@ -268,7 +268,7 @@ class Fixed:
         today = today or date.today()
         first = today.replace(day=1)
         last = _day_in(today.year, today.month, 31)
-        items, total, paid = [], 0, 0
+        total, paid = 0, 0
         for r in self.db.q("SELECT r.*, c.name AS category FROM recurring r LEFT JOIN categories c ON c.id=r.category_id "
                            "WHERE r.active=1 AND r.kind='out'"):
             for due in self.dues(r, first, last):
@@ -311,7 +311,6 @@ class Fixed:
         for k, ts in groups.items():
             if k in dismissed or any(h and (h in k or k in h) for h in have):
                 continue
-            months = sorted({t["date"][:7] for t in ts})
             amts = sorted(t["amount"] for t in ts)
             med = amts[len(amts) // 2]
             similar = [t for t in ts if abs(t["amount"] - med) <= max(med * 0.15, 100)]

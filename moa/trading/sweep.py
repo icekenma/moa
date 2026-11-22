@@ -251,7 +251,7 @@ def _first_per_day(sig, ser):
 
 def signals(ser, name, p, risk, costs, cache):
     """조건 하나의 신호 위치와 손절가. 반환: (신호 bool 배열, 손절가 배열)."""
-    c, n = ser.c, ser.n
+    c = ser.c
     t_ok = (ser.tmin >= hm(risk["entry_start"])) & (ser.tmin <= hm(risk["entry_end"]))
     day_pct = (c / ser.day_open - 1) * 100
     if name == "orb_vwap":

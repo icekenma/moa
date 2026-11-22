@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261122.2315";
+const UI_VERSION = "261123.0000";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -266,7 +266,6 @@ const localToday = () => { const d = new Date(); return `${d.getFullYear()}-${St
 const thisMonth = () => localToday().slice(0, 7);
 const WD = "일월화수목금토";
 const korDate = (iso, wd = true) => { const [y, m, d] = iso.split("-").map(Number); return `${m}월 ${d}일` + (wd ? ` ${WD[new Date(y, m - 1, d).getDay()]}요일` : ""); };
-const STATE = { running: "가동 중", paused: "새 매수 멈춤", stopped: "멈춤" };
 // AI 추천 종류(보유 기간)
 const AI_H = {
   day: { label: "당일", sub: "오늘 안에 정리", days: 0, go: "지금 추천 받기", title: "지금 사면 오늘 안에 수익 낼 확률이 높은 종목",
@@ -3375,7 +3374,6 @@ atAttrHtml(st) {
         <span class="ap-mn"><b>${esc(nm)}${x.id === "claude-sonnet-5-5" ? ` <span class="tag y">추천</span>` : ""}</b><small>${esc(note[x.id] || "")}</small></span>
         <span class="ap-cost"><b>${this.apCost(x)}</b><small>${x.n ? `지난 ${x.n}회 평균` : "1회 예상"}</small></span></button>`;
     }).join("");
-    const cur = (E.models || []).find((x) => x.id === A.model);
     $("#apFx").textContent = E.fx ? `환율 ${won(E.fx)}원 기준` : "";
     const go = $("#apGo");
     go.disabled = A.busy || !E.configured || !E.kiwoom;
@@ -5399,7 +5397,6 @@ const mkt = {
       await run(() => api("POST", "/api/market/watch", { mkt: m, sym: D.sym, on }), on ? "관심종목에 넣었어요" : "관심종목에서 뺐어요");
       q.watched = on; $("#mkStar").setAttribute("aria-pressed", String(on));
     };
-    const r52 = q.high52 && q.low52 && q.high52 > q.low52 ? Math.min(100, Math.max(0, (q.price - q.low52) / (q.high52 - q.low52) * 100)) : null;
     const hd = q.holding;
     const box = $("#mkD");
     if (full || !$("#mkPrice")) {
@@ -6360,9 +6357,6 @@ function orderSheet(o) {
     const mode = a ? a.mode_label : null, realOrder = mode === "키움 실전", isKiwoom = mode && mode.startsWith("키움");
     const gap = demo && S.q && S.real && Math.abs(S.real.price - S.q.price) / S.real.price > 0.005;
     const usBlocked = US && a && !a.error && !isKiwoom;
-    const qtxt = !S.q ? "종목을 고르면 현재가를 보여 드려요"
-      : US ? `${esc(S.q.name)}${S.q.exchange ? " · " + esc(S.q.exchange) : ""} 현재가 <b>${usd(S.q.price)}</b>${S.q.fx ? ` · 약 ${won(S.q.price * S.q.fx)}원` : ""}${S.q.live ? "" : ` <span class="tag">지연 시세</span>`}`
-      : `${esc(S.q.name)} 주문 기준가 <b style="color:${gap ? "var(--up)" : "var(--ink)"}">${won(S.q.price)}원</b>${gap ? " (가상 시세)" : ""}`;
     const Q = US ? S.q : (S.real && !demo ? { ...S.q, ...S.real, price: (S.q || S.real).price } : S.q), nm = (Q && Q.name) || S.name || S.code;
     const P = (v) => v == null ? "-" : US ? usd(v) : won(v) + "원";
     openSheet(`${nm} ${buy ? "매수" : "매도"}`, `

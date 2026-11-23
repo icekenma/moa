@@ -222,3 +222,93 @@ html[data-sec="health"] .sheet .btn.dark{background:var(--hg);border-color:var(-
 .hl-guide ul,.hl-guide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:5px}
 .hl-guide ul.care{list-style:none;padding:12px 14px;border-radius:14px;background:var(--warn-s);border:1px solid var(--warn-l);color:#4A2A12}
 img.fail{visibility:hidden}
+
+/* ===== 홈: 퀘스트 보드 — 밤 숲색 캐릭터 카드, 민트 경험치, 불씨색(주황) 보상·보스 ===== */
+html[data-sec="health"]{--ember:#E8862E;--ember-s:#FDEBD8;--ember-d:#8A4708}
+.hq-hero{display:grid;grid-template-columns:72px minmax(0,1fr) auto;gap:14px;align-items:center;background:#17201B;color:#F4F5F1;border-radius:22px;padding:18px 18px 18px 14px}
+.hq-lv{position:relative;width:72px;height:80px;display:grid;place-items:center}
+.hq-lv svg{position:absolute;inset:0}
+.hq-lv b{position:relative;font-size:30px;font-weight:800;line-height:1;letter-spacing:-.03em;font-variant-numeric:tabular-nums;margin-top:8px}
+.hq-lv i{position:absolute;top:13px;left:0;right:0;text-align:center;font-style:normal;font-size:10px;font-weight:800;color:var(--mint);letter-spacing:.14em}
+.hq-me{display:grid;gap:5px;min-width:0}
+.hq-me p{font-size:12px;font-weight:700;color:var(--mint)}
+.hq-me h2{font-size:22px;font-weight:800;letter-spacing:-.02em;line-height:1.1}
+.hq-xp{height:10px;border-radius:5px;background:#33453B;overflow:hidden;margin-top:3px}
+.hq-xp i{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,#3FA672,#6FD39A);transition:width .6s cubic-bezier(.2,.8,.2,1)}
+.hq-xpt{font-size:12px;color:#B9C4BC;display:flex;gap:4px;align-items:baseline;font-variant-numeric:tabular-nums}
+.hq-xpt b{color:#fff}
+.hq-xpt em{margin-left:auto;font-style:normal;font-weight:700;color:var(--mint)}
+.hq-fire{display:grid;justify-items:center;gap:0;color:#6C7B72;min-width:48px}
+.hq-fire.on{color:var(--ember)}
+.hq-fire b{font-size:20px;font-weight:800;line-height:1.1;color:#F4F5F1;font-variant-numeric:tabular-nums}
+.hq-fire span{font-size:10.5px;color:#B9C4BC;white-space:nowrap}
+/* 주간 보스 */
+.hq-boss{display:grid;grid-template-columns:64px minmax(0,1fr);gap:14px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:18px;padding:14px 16px}
+.hq-boss-a{width:64px;height:64px}
+.hq-boss:not(.dead) .hq-boss-a{animation:hqBob 2.4s ease-in-out infinite}
+@keyframes hqBob{50%{transform:translateY(-3px)}}
+.hq-boss-t{display:grid;gap:4px;min-width:0}
+.hq-boss-t p{font-size:11.5px;font-weight:700;color:var(--ember-d)}
+.hq-boss-t h3{margin:0;font-size:17px;font-weight:800;letter-spacing:-.02em}
+.hq-boss-t h3 em{font-style:normal;font-size:12px;color:var(--hg);background:var(--hg-s);padding:2px 8px;border-radius:999px;vertical-align:2px}
+.hq-boss-t span{font-size:12px;color:var(--ink2)}
+.hq-hp{display:flex;gap:4px;margin:2px 0}
+.hq-hp i{flex:1 1 0;max-width:34px;height:10px;border-radius:3px;background:var(--line)}
+.hq-hp i.on{background:var(--ember)}
+/* 오늘의 퀘스트: 시간 줄 */
+.hq-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.hq-q{display:grid;grid-template-columns:44px minmax(0,1fr) auto;align-items:center;gap:8px}
+.hq-q time{font-size:12.5px;font-weight:700;color:var(--ink3);font-variant-numeric:tabular-nums;text-align:right}
+.hq-q.next time{color:var(--ember-d)}
+.hq-qb,.hq-qi{display:flex;align-items:center;gap:12px;min-height:60px;padding:10px 14px;border-radius:16px;border:1px solid var(--line);background:#fff;text-align:left;width:100%;color:inherit;text-decoration:none;font:inherit;transition:background .15s,border-color .15s,transform .1s}
+.hq-qb:active{transform:scale(.985)}
+.hq-q.next .hq-qb{border-color:var(--ember);box-shadow:0 0 0 3px var(--ember-s)}
+.hq-q.on .hq-qb{background:var(--hg-s);border-color:var(--hg-l)}
+.hq-q.on .hq-qt b{text-decoration:line-through;text-decoration-color:rgba(31,111,74,.5);color:var(--hg-d)}
+.hq-qi{min-height:0;padding:6px 14px;border-style:dashed;background:transparent;color:var(--ink2)}
+.hq-box{flex:0 0 auto;width:26px;height:26px;border-radius:8px;border:2px solid var(--line2);display:grid;place-items:center;color:#fff}
+.hq-q.on .hq-box{background:var(--hg);border-color:var(--hg)}
+.hq-qt{display:grid;gap:2px;min-width:0;flex:1 1 auto}
+.hq-qt b{font-size:15px;font-weight:700;overflow-wrap:anywhere}
+.hq-qi .hq-qt b{font-size:13px;font-weight:600}
+.hq-qt small{font-size:12px;color:var(--ink3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hq-rw{flex:0 0 auto;font-style:normal;font-size:12.5px;font-weight:800;color:var(--ember-d);background:var(--ember-s);padding:4px 9px;border-radius:999px;font-variant-numeric:tabular-nums}
+.hq-q.on .hq-rw{background:var(--hg);color:#fff}
+.hq-go{display:inline-flex;align-items:center;gap:2px;min-height:44px;padding:0 4px 0 8px;font-size:12.5px;font-weight:700;color:var(--hg);text-decoration:none;white-space:nowrap}
+.hq-bonus .hq-qi{border-style:solid;border-color:var(--ember-s);background:var(--ember-s);color:var(--ember-d);padding:10px 14px}
+.hq-bonus.on .hq-qi{background:var(--hg);border-color:var(--hg);color:#fff}
+.hq-bonus.on .hq-qt small{color:#DDEBE2}
+/* 원정(목표까지의 길) */
+.hq-trail{background:#fff;border:1px solid var(--line);border-radius:18px;padding:16px;display:grid;gap:10px}
+.hq-trail-h,.hq-trail-f{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:12.5px;color:var(--ink2)}
+.hq-trail-h b{font-size:15px;color:var(--ink)}
+.hq-trail-h span{font-weight:700;color:var(--hg)}
+.hq-trail-f b{color:var(--ink);font-size:14px}
+.hq-path{position:relative;height:8px;border-radius:4px;background:repeating-linear-gradient(90deg,var(--line2) 0 6px,transparent 6px 12px);margin:8px 6px 4px}
+.hq-path i{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:var(--hg)}
+.hq-path u{position:absolute;top:50%;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;background:#fff;border:4px solid var(--hg);box-shadow:0 1px 4px rgba(23,32,27,.25)}
+.hq-trail.hq-empty{background:#17201B;color:#F4F5F1;border:0}
+.hq-trail.hq-empty span{font-size:13px;color:#B9C4BC}
+/* 능력치 · 업적 */
+.hq-stats{display:grid;gap:10px;background:#fff;border:1px solid var(--line);border-radius:18px;padding:14px 16px}
+.hq-stats>div{display:grid;grid-template-columns:92px minmax(0,1fr) 28px;align-items:center;gap:10px}
+.hq-stats span{display:grid;font-size:13.5px;font-weight:700}
+.hq-stats small{font-size:11px;font-weight:500;color:var(--ink3)}
+.hq-sb{height:8px;border-radius:4px;background:var(--line);overflow:hidden}
+.hq-sb i{display:block;height:100%;background:var(--hg);border-radius:4px}
+.hq-stats b{font-size:17px;font-weight:800;text-align:right;font-variant-numeric:tabular-nums}
+.hq-badges{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.hq-badges>div{display:grid;justify-items:center;gap:3px;text-align:center;padding:12px 6px;border-radius:14px;border:1px dashed var(--line2);color:var(--ink3)}
+.hq-badges i{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:var(--line);color:var(--ink3)}
+.hq-badges b{font-size:12.5px;font-weight:700}
+.hq-badges small{font-size:10.5px;line-height:1.3}
+.hq-badges .got{border:1px solid var(--ember);background:var(--ember-s);color:var(--ember-d)}
+.hq-badges .got i{background:var(--ember);color:#fff}
+.hq-badges .got b{color:var(--ink)}
+/* 레벨 업 알림 */
+.hq-up{position:fixed;left:50%;top:38%;z-index:90;transform:translate(-50%,-50%);display:grid;justify-items:center;gap:2px;padding:22px 40px;border-radius:24px;background:#17201B;color:#F4F5F1;border:2px solid var(--mint,#6FD39A);box-shadow:0 20px 60px rgba(23,32,27,.5);animation:hqUp 2.6s ease both;pointer-events:none}
+.hq-up p{margin:0;font-size:13px;font-weight:800;letter-spacing:.2em;color:#6FD39A}
+.hq-up b{font-size:64px;font-weight:800;line-height:1;letter-spacing:-.04em}
+.hq-up span{font-size:15px;font-weight:700}
+@keyframes hqUp{0%{opacity:0;transform:translate(-50%,-40%) scale(.8)}12%{opacity:1;transform:translate(-50%,-50%) scale(1.04)}18%{transform:translate(-50%,-50%) scale(1)}85%{opacity:1}100%{opacity:0;transform:translate(-50%,-56%) scale(1)}}
+@media (prefers-reduced-motion:reduce){.hq-boss:not(.dead) .hq-boss-a,.hq-up{animation:none}.hq-xp i,.hq-qb{transition:none}}

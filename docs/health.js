@@ -56,39 +56,78 @@
   async function reload() { await load(); draw(); }
   // 누르자마자 화면부터 바꾸고 저장한다. 저장이 안 되면 서버 값으로 되돌린다
   async function save(fn, okMsg) {
-    try { await fn(); if (okMsg) toast(okMsg); await reload(); return true; }
+    const before = H.d && H.d.rpg;
+    try { await fn(); if (okMsg) toast(okMsg); await reload(); gain(before); return true; }
     catch (e) { if (!(e instanceof Locked)) toast(e.message, true); await reload().catch(() => {}); return false; }
   }
 
-  // ---------- 홈 ----------
+  // ---------- 홈: 퀘스트 보드(레벨 · 원정 · 주간 보스 · 오늘의 퀘스트 · 능력치 · 업적) ----------
+  const BOSS_C = ["#6FD39A", "#F2A65A", "#9AA7B8", "#C98BDB", "#7FB7F0", "#F07F7F"];
+  const bossArt = (i, dead) => `<svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true"><path d="M8 46c0-18 8-34 24-34s24 16 24 34c0 6-6 8-12 6-4-1-8 2-12 2s-8-3-12-2c-6 2-12 0-12-6z" fill="${BOSS_C[i % 6]}" opacity="${dead ? 0.35 : 1}"/>
+    ${dead ? `<path d="M21 30l6 6m0-6l-6 6M37 30l6 6m0-6l-6 6" stroke="#17201B" stroke-width="2.6" stroke-linecap="round"/>` : `<circle cx="24" cy="33" r="4" fill="#17201B"/><circle cx="40" cy="33" r="4" fill="#17201B"/><circle cx="25.3" cy="31.6" r="1.3" fill="#fff"/><circle cx="41.3" cy="31.6" r="1.3" fill="#fff"/><path d="M27 43q5 4 10 0" stroke="#17201B" stroke-width="2.4" fill="none" stroke-linecap="round"/>`}</svg>`;
+  const STATS = [["str", "근력", "근력 운동"], ["end", "지구력", "유산소"], ["wil", "절제", "생활 습관"], ["care", "관리", "약·측정"]];
   function today(d) {
-    const g = d.cfg.goal, L = d.body.latest, w = L.weight, wk = d.week, t = wk.days.find((x) => x.today) || {};
-    const plan = d.cfg.plan.days[wk.days.indexOf(t)] || d.cfg.plan.days[0];
-    const left = w && g.weight != null ? w.value - g.weight : null;
-    const goalTxt = g.weight != null ? `목표 ${f1(g.weight)} kg${g.label ? ` · ${esc(g.label)}` : ""}` : "";
-    const hero = w ? `<section class="hl-hero" aria-label="현재 체중과 목표">
-        <div class="hl-hero-top"><span>현재 체중 <small>${md(w.date)}</small></span>${goalTxt ? `<span>${goalTxt}</span>` : `<button type="button" class="hl-link on-dark" data-act="goal">목표 정하기</button>`}</div>
-        <div class="hl-hero-num"><b>${f1(w.value)}</b><i>kg</i>${left == null ? "" : `<em>${left > 0.05 ? `−${left.toFixed(1)} kg 남음` : "목표에 닿았어요"}</em>`}</div>
-        ${d.body.progress == null ? "" : `<div class="hl-bar" role="progressbar" aria-label="목표까지 진행" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(d.body.progress * 100)}"><i style="width:${Math.max(2, d.body.progress * 100).toFixed(1)}%"></i></div>`}
-        <div class="hl-hero-kv">
-          <div><span>허리</span><b>${L.waist ? f1(L.waist.value) : "–"}<i> cm</i></b></div>
-          <div><span>체지방률</span><b>${L.fat ? f1(L.fat.value) : "–"}<i> %</i></b></div>
-          <div><span>이번 주 운동</span><b>${wk.done}<i> / ${wk.target}회</i></b></div>
-        </div></section>`
-      : `<section class="hl-hero hl-hero0"><b>아직 체중 기록이 없어요</b><span>아침 공복 체중부터 남겨 보세요. 목표까지 얼마나 왔는지 여기에 보여요.</span>
-        <div class="hl-row2"><a class="hl-btn mint" href="#health/body">첫 기록 남기기</a><button type="button" class="hl-btn ghost" data-act="import">자료 가져오기</button></div></section>`;
-    const rows = (d.med_slots || []).map((m) => ({ id: m.key, title: `${m.label} ${m.names.length}가지`, sub: m.names.join(", "), on: d.checks.includes(m.key) }))
-      .concat([{ id: "gym", title: `운동 · ${plan.name}`, sub: plan.items.map((i) => i[0]).slice(0, 5).join(", "), on: !!t.done }])
-      .concat(d.cfg.habits.map((h) => ({ id: h.id, title: h.title, sub: h.sub, on: d.checks.includes(h.id) })));
+    const g = d.cfg.goal, L = d.body.latest, w = L.weight, R = d.rpg, Q = d.quests, B = R.boss;
+    const now = new Date(), hm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    const real = Q.filter((q) => q.kind !== "info"), done = real.filter((q) => q.on).length;
+    const next = Q.find((q) => q.kind !== "info" && !q.on && q.t && q.t >= hm) || Q.find((q) => q.kind !== "info" && !q.on);
+    const left = w && g.weight != null ? w.value - g.weight : null, mode = (d.week.days.find((x) => x.today) || {}).mode;
+    const hero = `<section class="hq-hero" aria-label="내 레벨과 경험치">
+        <div class="hq-lv" aria-hidden="true"><svg viewBox="0 0 72 80" width="72" height="80"><path d="M36 3l30 17v40L36 77 6 60V20z" fill="#24332B" stroke="#6FD39A" stroke-width="3" stroke-linejoin="round"/></svg><b>${R.level}</b><i>LV</i></div>
+        <div class="hq-me"><p>${esc(R.title)}</p><h2>레벨 ${R.level}</h2>
+          <div class="hq-xp" role="progressbar" aria-label="다음 레벨까지 경험치" aria-valuemin="0" aria-valuemax="${R.need}" aria-valuenow="${R.xp}"><i style="width:${Math.max(3, R.xp / R.need * 100).toFixed(1)}%"></i></div>
+          <span class="hq-xpt">경험치 <b>${R.xp}</b> / ${R.need}<em>오늘 +${R.today}</em></span></div>
+        <div class="hq-fire ${R.streak ? "on" : ""}" aria-label="연속 ${R.streak}일">${svg('<path d="M12 3c1 4 5 5 5 10a5 5 0 0 1-10 0c0-2 1-3 2-4 0 2 1 3 2 3 0-3-1-5 1-9z"/>', 22, 2)}<b>${R.streak}</b><span>일 연속</span></div>
+      </section>`;
+    const trail = w && g.weight != null && d.body.progress != null ? `<section class="hq-trail" aria-label="목표까지의 원정">
+        <div class="hq-trail-h"><b>원정${g.label ? ` · ${esc(g.label)}` : ""}</b><span>${left > 0.05 ? `목표까지 ${left.toFixed(1)} kg` : "목표 도착!"}</span></div>
+        <div class="hq-path"><i style="width:${(d.body.progress * 100).toFixed(1)}%"></i><u style="left:${(d.body.progress * 100).toFixed(1)}%"></u></div>
+        <div class="hq-trail-f"><span>출발 ${d.body.start_weight != null ? f1(d.body.start_weight) : "–"}</span><span>지금 <b>${f1(w.value)}</b> kg</span><span>도착 ${f1(g.weight)}</span></div></section>`
+      : `<section class="hq-trail hq-empty"><b>원정을 시작해 볼까요?</b><span>${w ? "목표 체중을 정하면 출발점에서 도착점까지의 길이 생겨요." : "아침 공복 체중을 한 번 재면 원정 지도가 열려요."}</span>
+        ${w ? `<button type="button" class="hl-btn green" data-act="goal">목표 정하기</button>` : `<div class="hl-row2"><a class="hl-btn green" href="#health/body">첫 기록 남기기</a><button type="button" class="hl-btn ghost dark" data-act="import">자료 가져오기</button></div>`}</section>`;
+    const boss = `<section class="hq-boss ${B.hp ? "" : "dead"}" aria-label="이번 주 보스">
+        <div class="hq-boss-a">${bossArt(B.i, !B.hp)}</div>
+        <div class="hq-boss-t"><p>이번 주 보스</p><h3>${esc(B.name)}${B.hp ? "" : ` <em>처치!</em>`}</h3>
+          <div class="hq-hp" role="img" aria-label="보스 체력 ${B.hp} / ${B.max}">${Array.from({ length: B.max }, (_, k) => `<i class="${k < B.hp ? "on" : ""}"></i>`).join("")}</div>
+          <span>${B.hp ? `운동 한 번에 체력 1칸. ${B.hp}번 남았어요` : "이번 주 운동 목표를 다 채웠어요"}${B.slain ? ` · 지금까지 ${B.slain}마리` : ""}</span></div></section>`;
+    const row = (q) => {
+      const cls = `hq-q ${q.on ? "on" : ""} ${q === next ? "next" : ""} k-${q.kind}`, tm = `<time>${q.t || ""}</time>`;
+      const txt = `<span class="hq-qt"><b>${esc(q.title)}</b>${q.sub ? `<small>${esc(q.sub)}</small>` : ""}</span>`;
+      if (q.kind === "info") return `<li class="${cls}">${tm}<div class="hq-qi">${txt}</div></li>`;
+      const box = `<span class="hq-box">${q.on ? TICK : ""}</span>`, xp = `<em class="hq-rw">+${q.xp}</em>`;
+      if (q.kind === "body") return `<li class="${cls}">${tm}<a class="hq-qb" href="#health/body">${box}${txt}${xp}</a></li>`;
+      return `<li class="${cls}">${tm}<button type="button" class="hq-qb" data-check="${esc(q.id)}" aria-pressed="${q.on}">${box}${txt}${xp}</button>
+        ${q.kind === "gym" ? `<a class="hq-go" href="#health/workout" aria-label="오늘 루틴 보기">루틴 ${NEXT}</a>` : ""}</li>`;
+    };
     const nx = d.follows.find((f) => f.next);
-    return `${head(`${+d.today.slice(5, 7)}월 ${+d.today.slice(8, 10)}일 ${d.dow}요일`, "오늘의 건강",
+    return `${head(`${+d.today.slice(5, 7)}월 ${+d.today.slice(8, 10)}일 ${d.dow}요일${mode ? ` · ${mode}` : ""}`, "오늘의 모험",
       `${d.week_no ? `<span class="hl-chip">${d.week_no}주차</span>` : ""}<button type="button" class="hl-ico" data-act="manage" aria-label="목표·자료 관리">${MORE}</button>`)}
-      ${hero}
-      <section class="hl-sec"><div class="hl-sec-h"><h2>오늘 체크</h2><span>${rows.filter((r) => r.on).length} / ${rows.length} 완료</span></div>
-        ${rows.map((r) => `<button type="button" class="hl-check" data-check="${esc(r.id)}" aria-pressed="${r.on}"><span class="hl-box">${r.on ? TICK : ""}</span>
-          <span class="hl-check-t"><b>${esc(r.title)}</b>${r.sub ? `<small>${esc(r.sub)}</small>` : ""}</span></button>`).join("")}
+      ${hero}${boss}
+      <section class="hl-sec"><div class="hl-sec-h"><h2>오늘의 퀘스트</h2><span>${done} / ${real.length} 완료</span></div>
+        <ol class="hq-list">${Q.map(row).join("")}
+          <li class="hq-q hq-bonus ${real.length && done === real.length ? "on" : ""}"><time></time><div class="hq-qi"><span class="hq-qt"><b>올 클리어 보너스</b><small>${real.length - done ? `퀘스트 ${real.length - done}개 남았어요` : "오늘 퀘스트를 모두 끝냈어요"}</small></span><em class="hq-rw">+${R.xp_rule.clear}</em></div></li></ol>
       </section>
+      ${trail}
+      <section class="hl-sec"><div class="hl-sec-h"><h2>능력치</h2><span>운동 ${R.workouts}회 · 올 클리어 ${R.clears}번</span></div>
+        <div class="hq-stats">${STATS.map(([k, n, s]) => { const v = R.stats[k] || 0, lv = Math.floor(Math.sqrt(v)), into = v - lv * lv, need = 2 * lv + 1; return `<div><span>${n}<small>${s}</small></span><div class="hq-sb"><i style="width:${(into / need * 100).toFixed(0)}%"></i></div><b>${lv}</b></div>`; }).join("")}</div></section>
+      <section class="hl-sec"><div class="hl-sec-h"><h2>업적</h2><span>${R.badges.filter((x) => x.got).length} / ${R.badges.length}</span></div>
+        <div class="hq-badges">${R.badges.map((x) => `<div class="${x.got ? "got" : ""}" title="${esc(x.desc)}"><i aria-hidden="true">${x.got ? TICK : svg('<rect x="6" y="11" width="12" height="9" rx="2"/><path d="M9 11V8a3 3 0 0 1 6 0v3"/>', 16, 2)}</i><b>${esc(x.title)}</b><small>${esc(x.desc)}</small></div>`).join("")}</div></section>
       ${nx ? `<a class="hl-next" href="#health/checkup"><b>${dday(nx.dday)}</b><span><strong>${esc(nx.title)} · ${dot(nx.date)}</strong>${nx.why ? `<small>${esc(nx.why)}</small>` : ""}</span>${NEXT}</a>` : ""}`;
+  }
+  // 경험치를 얻으면 알려 준다(레벨 업·보스 처치·올 클리어는 크게)
+  function gain(before) {
+    const R = H.d && H.d.rpg;
+    if (!before || !R) return;
+    const diff = R.total - before.total;
+    if (R.level > before.level) {
+      const el = document.createElement("div");
+      el.className = "hq-up"; el.setAttribute("role", "status");
+      el.innerHTML = `<p>레벨 업</p><b>${R.level}</b><span>${esc(R.title)}</span>`;
+      document.body.appendChild(el);
+      setTimeout(() => el.remove(), 2600);
+    } else if (before.boss.hp > 0 && R.boss.hp === 0) toast(`${R.boss.name} 처치! 이번 주 목표 달성 (+${diff} 경험치)`);
+    else if (R.clears > before.clears) toast(`올 클리어! +${diff} 경험치`);
+    else if (diff > 0) toast(`+${diff} 경험치`);
   }
 
   // ---------- 기록 ----------
@@ -149,7 +188,7 @@
   function workout(d) {
     const wk = d.week, plan = d.cfg.plan;
     if (!wk.days.some((x) => x.date === H.sel)) H.sel = (wk.days.find((x) => x.today) || wk.days[0]).date;
-    const i = wk.days.findIndex((x) => x.date === H.sel), day = wk.days[i], p = plan.days[i];
+    const i = wk.days.findIndex((x) => x.date === H.sel), day = wk.days[i], p = day.name ? day : plan.days[i];
     const seg = `<div class="hl-seg2" role="tablist"><button type="button" role="tab" data-wtab="week" aria-selected="${H.wtab !== "gym"}">주간 루틴</button><button type="button" role="tab" data-wtab="gym" aria-selected="${H.wtab === "gym"}">기구 안내 ${GYM.length}</button></div>`;
     if (H.wtab === "gym") return `${head(plan.place || "헬스장", "기구 안내", "")}${seg}${gymList(d)}`;
     return `${head(`${md(wk.start)} – ${md(wk.end)}${plan.place ? ` · ${plan.place}` : ""}`, wk.this_week ? "이번 주 운동" : "지난 운동",
@@ -159,8 +198,8 @@
         <span>${wk.done} / ${wk.target}회 완료${wk.rpe_avg ? ` · 평균 힘듦 ${wk.rpe_avg}` : ""}</span>
         ${wk.this_week ? `<span class="hl-ico ghost"></span>` : `<button type="button" class="hl-ico line" data-wk="7" aria-label="다음 주">${NEXT}</button>`}</div>
       <div class="hl-days" role="tablist" aria-label="요일">${wk.days.map((x, k) => `<button type="button" role="tab" data-day="${x.date}" aria-selected="${x.date === H.sel}"
-        aria-label="${x.dow}요일 ${esc(plan.days[k].name)}${x.done ? ", 완료" : ""}" class="${x.today ? "today" : ""}"><span>${x.dow}</span><b>${+x.date.slice(8, 10)}</b><i class="${x.done ? "on" : ""}"></i></button>`).join("")}</div>
-      <section class="hl-card"><div class="hl-sec-h"><div><p class="hl-over">${day.dow}요일${day.today ? " · 오늘" : ""}</p><h2 class="big">${esc(p.name)}</h2></div>${p.time ? `<span class="hl-chip">${esc(p.time)}</span>` : ""}</div>
+        aria-label="${x.dow}요일 ${esc(x.name || plan.days[k].name)}${x.done ? ", 완료" : ""}" class="${x.today ? "today" : ""}"><span>${x.dow}</span><b>${+x.date.slice(8, 10)}</b><i class="${x.done ? "on" : ""}"></i></button>`).join("")}</div>
+      <section class="hl-card"><div class="hl-sec-h"><div><p class="hl-over">${day.dow}요일${day.today ? " · 오늘" : ""}${day.mode ? ` · ${esc(day.mode)}` : ""}</p><h2 class="big">${esc(p.name)}</h2></div>${p.time ? `<span class="hl-chip">${esc(p.time)}</span>` : ""}</div>
         <div class="hl-items">${p.items.map((it) => { const g = gymOf(it[0]); return g
           ? `<button type="button" data-gym="${g.id}" aria-label="${esc(it[0])} ${esc(it[1] || "")}, 기구 안내 보기"><span>${esc(it[0])}</span><b>${esc(it[1] || "")}</b>${NEXT}</button>`
           : `<div><span>${esc(it[0])}</span><b>${esc(it[1] || "")}</b></div>`; }).join("") || `<div><span class="dim">루틴이 비어 있어요</span></div>`}</div>
@@ -376,6 +415,7 @@
       const id = b.dataset.check, on = b.getAttribute("aria-pressed") !== "true";
       if (id === "gym") (d.week.days.find((x) => x.today) || {}).done = on;
       else d.checks = on ? d.checks.concat(id) : d.checks.filter((k) => k !== id);
+      (d.quests.find((q) => q.id === id) || {}).on = on;
       draw();
       return save(() => (id === "gym" ? send("POST", "/api/health/workout", { done: on }) : send("POST", "/api/health/check", { key: id, on })));
     }

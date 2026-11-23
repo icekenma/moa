@@ -100,12 +100,14 @@ class Agenda:
                 pass
         if c["workout"]:
             try:
-                plan = (rt.health.cfg().get("plan") or {})
-                for k in range(min(days, 7) + 1):
+                hc = rt.health.cfg()
+                plan = hc.get("plan") or {}
+                for k in range(min(days, 21) + 1):
                     d = t0 + timedelta(days=k)
-                    dd = (plan.get("days") or [None] * 7)[d.weekday()]
+                    dd = rt.health.plan_for(d, hc)
                     if dd and not dd.get("rest"):
-                        tm = (re.search(r"(\d{1,2}):(\d{2})", dd.get("time") or "") or [""])[0]
+                        # 날짜별 시간표에 운동 시각이 있으면 그 시각으로(없으면 루틴의 시간 글에서 찾는다)
+                        tm = next((b[0] for b in dd.get("blocks") or [] if b[1] == "gym"), "") or (re.search(r"(\d{1,2}):(\d{2})", dd.get("time") or "") or [""])[0]
                         add(d, "workout", f"운동: {dd['name']}", " · ".join(x for x in (plan.get("place"), dd.get("time")) if x),
                             f"{md(d)}은 '{dd['name']}' 운동하는 날이야{('(' + dd['time'] + ')') if dd.get('time') else ''}. 시작 30분 전에 알려줘.", tm)
             except Exception:

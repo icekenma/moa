@@ -3053,3 +3053,38 @@ def test_gym_photos_import_from_local_folder(rt, tmp_path):
     assert r["keys"] == ["chest"] and {x["file"] for x in r["skipped"]} == {"legext.jpg", "BAD KEY.jpg", "pulley.jpg"}
     assert rt.health.photo("chest") == jpg and "chest" in rt.health.photos() and not (tmp_path / "chest.jpg").exists() and (tmp_path / "legext.jpg").exists()   # 넣은 것만 지운다
     assert rt.health.import_folder(tmp_path / "none")["found"] is False
+
+
+def test_health_dated_plan_quests_and_rpg(rt):
+    from datetime import date
+    from moa.health import Health
+    day = {"t": date(2026, 11, 23)}                                   # 월요일
+    h = Health(rt.db, today=lambda: day["t"])
+    c = h.cfg()
+    plan = dict(c["plan"], cal={"2026-11-23": {"mode": "home", "name": "전신 A", "time": "14:00–14:50", "items": [["체스트프레스", "3×12"]],
+        "blocks": [["07:10", "water", "물 한 컵으로 시작", ""], ["09:00", "info", "수업 시작", "구루미"], ["14:00", "gym", "", ""], ["bad", "x", "y"]]},
+        "2026-11-24": {"mode": "home", "name": "쉬는 날", "rest": True, "items": []}, "nope": {}})
+    h.save_cfg({"plan": plan})
+    c = h.cfg()
+    assert set(c["plan"]["cal"]) == {"2026-11-23", "2026-11-24"} and len(c["plan"]["cal"]["2026-11-23"]["blocks"]) == 3
+    p = h.plan_for(date(2026, 11, 23))
+    assert p["time"] == "14:00–14:50" and p["items"] == [["체스트프레스", "3×12"]] and h.plan_for(date(2026, 11, 24))["rest"] and h.plan_for(date(2026, 11, 25))["blocks"] == []
+    o = h.overview()
+    q = o["quests"]
+    assert [x["id"] for x in q[:3]] == ["water", "info", "gym"] and q[0]["t"] == "07:10" and q[0]["title"] == "물 한 컵으로 시작" and q[1]["kind"] == "info" and q[1]["xp"] == 0
+    assert q[2]["kind"] == "gym" and q[2]["xp"] == 40 and "전신 A" in q[2]["title"] and {x["id"] for x in q[3:]} == {x["id"] for x in c["habits"]} - {"water"}
+    assert o["week"]["days"][0]["time"] == "14:00–14:50" and o["week"]["target"] == sum(1 for d in o["week"]["days"] if not d["rest"])
+    r0 = o["rpg"]
+    assert (r0["level"], r0["xp"], r0["total"], r0["streak"]) == (1, 0, 0, 0) and r0["boss"]["hp"] == r0["boss"]["max"] and not any(b["got"] for b in r0["badges"])
+    for hb in c["habits"]:
+        h.set_check({"key": hb["id"], "on": True})
+    h.set_workout({"done": True, "rpe": 6})
+    r1 = h.overview()["rpg"]
+    n = len(c["habits"])
+    assert r1["total"] == 10 * n + 40 + 10 + 20 and r1["today"] == r1["total"] and r1["clears"] == 1 and r1["streak"] == 1 and r1["boss"]["hp"] == r0["boss"]["max"] - 1
+    assert r1["level"] == 2 and r1["xp"] == r1["total"] - 100 and r1["need"] == 150 and {b["id"] for b in r1["badges"] if b["got"]} == {"first", "clear1"} and r1["stats"]["str"] == 1 and r1["stats"]["wil"] == n
+    assert all(x["on"] for x in h.overview()["quests"] if x["kind"] != "info")
+    day["t"] = date(2026, 11, 25)                                     # 하루 건너뛰면 연속 기록이 끊긴다
+    assert h.overview()["rpg"]["streak"] == 0 and h.overview()["rpg"]["total"] == r1["total"]
+    its = rt.agenda.items(3, date(2026, 11, 23))
+    assert next(x for x in its if x["kind"] == "workout" and x["date"] == "2026-11-23")["time"] == "14:00" and not any(x["kind"] == "workout" and x["date"] == "2026-11-24" for x in its)

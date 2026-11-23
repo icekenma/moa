@@ -9,6 +9,11 @@ import re
 import zlib
 from datetime import date, datetime, timedelta
 
+# 퀘스트 경험치: 체크 하나 10, 운동 40(+힘든 정도 기록 10), 신체 기록 15, 하루 전부 완료 보너스 20
+XP = {"check": 10, "gym": 40, "rpe": 10, "body": 15, "clear": 20, "info": 0}
+LV_BASE, LV_STEP = 100, 50       # 다음 레벨까지: 100, 150, 200 … (하루를 다 채우면 100 남짓)
+TITLES = [(1, "견습 모험가"), (3, "초보 전사"), (5, "단련된 전사"), (8, "숙련 전사"), (12, "베테랑"), (16, "용사"), (20, "전설")]
+BOSSES = ["게으름 슬라임", "야식 고블린", "소파 골렘", "작심삼일 오크", "핑계 마법사", "뱃살 드래곤"]
 DOW = ["월", "화", "수", "목", "금", "토", "일"]
 FLAGS = {"high": "높음", "low": "낮음", "watch": "관리", "check": "확인", "ok": "정상"}
 WHEN = {"am": "아침", "noon": "점심", "pm": "저녁", "night": "자기 전"}   # 약 먹는 때
@@ -174,7 +179,37 @@ class Health:
                 if n:
                     items.append([n, _txt(it[1] if len(it) > 1 else "", 14)])
             out.append({"name": name, "time": _txt(dd.get("time"), 12), "rest": bool(dd.get("rest")), "items": items})
-        return {"place": _txt(p.get("place"), 20), "days": out}
+        # 날짜별 계획(cal): 그날만의 루틴 이름·시간·할 일 시간표. 없는 날은 요일 루틴 그대로
+        cal = {}
+        old = (date.today() - timedelta(days=60)).isoformat()
+        for k, v in sorted(((p or {}).get("cal") or {}).items())[-150:]:
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(k)) or k < old or not isinstance(v, dict):
+                continue
+            blocks = []
+            for b in (v.get("blocks") or [])[:16]:
+                if isinstance(b, (list, tuple)) and len(b) >= 3 and re.fullmatch(r"\d{2}:\d{2}", str(b[0])):
+                    blocks.append([str(b[0]), _txt(b[1], 20), _txt(b[2], 40), _txt(b[3] if len(b) > 3 else "", 70)])
+            e = {"mode": _txt(v.get("mode"), 10), "blocks": blocks}
+            if _txt(v.get("name"), 16):
+                its = []
+                for it in (v.get("items") or [])[:12]:
+                    n = _txt(it[0] if isinstance(it, (list, tuple)) and it else "", 30)
+                    if n:
+                        its.append([n, _txt(it[1] if len(it) > 1 else "", 14)])
+                e.update(name=_txt(v.get("name"), 16), time=_txt(v.get("time"), 12), rest=bool(v.get("rest")), items=its)
+            cal[k] = e
+        return {"place": _txt(p.get("place"), 20), "days": out, "cal": cal}
+
+    def plan_for(self, day, c=None):
+        """그날의 계획: 요일 루틴에 날짜별 계획(cal)을 덮어쓴 것."""
+        plan = (c or self.cfg())["plan"]
+        p = dict(plan["days"][day.weekday()])
+        o = (plan.get("cal") or {}).get(day.isoformat())
+        p.update(mode="", blocks=[])
+        if o:
+            p.update({k: o[k] for k in ("name", "time", "rest", "items") if k in o})
+            p.update(mode=o.get("mode") or "", blocks=o.get("blocks") or [])
+        return p
 
     # ---------- 신체 기록 ----------
     def save_body(self, d):
@@ -226,7 +261,7 @@ class Health:
             rpe = None if d["rpe"] in (None, "", 0) else int(d["rpe"])
             if rpe is not None and not 1 <= rpe <= 10:
                 raise HealthError("힘든 정도는 1~10으로 넣어 주세요")
-        name = self.cfg()["plan"]["days"][day.weekday()]["name"]
+        name = self.plan_for(day)["name"]
         self.db.x("INSERT INTO hl_workout(date,done,rpe,name) VALUES(?,?,?,?) ON CONFLICT(date) DO UPDATE SET "
                   "done=excluded.done, rpe=excluded.rpe, name=excluded.name", (day.isoformat(), done, rpe, name))
 
@@ -236,12 +271,14 @@ class Health:
         mon -= timedelta(days=mon.weekday())
         days = [mon + timedelta(days=i) for i in range(7)]
         got = {r["date"]: r for r in self.db.q("SELECT * FROM hl_workout WHERE date BETWEEN ? AND ?", (days[0].isoformat(), days[6].isoformat()))}
-        plan = self.cfg()["plan"]["days"]
+        c = self.cfg()
+        plan = [self.plan_for(dd, c) for dd in days]
         out = []
         for i, dd in enumerate(days):
             r = got.get(dd.isoformat()) or {}
             out.append({"date": dd.isoformat(), "dow": DOW[i], "done": bool(r.get("done")), "rpe": r.get("rpe"),
-                        "today": dd == t, "future": dd > t})
+                        "today": dd == t, "future": dd > t, "name": plan[i]["name"], "time": plan[i]["time"], "rest": plan[i]["rest"],
+                        "items": plan[i]["items"], "mode": plan[i]["mode"], "blocks": plan[i]["blocks"]})
         target = sum(1 for p in plan if not p["rest"])
         done = sum(1 for i, o in enumerate(out) if o["done"] and not plan[i]["rest"])
         rpes = [o["rpe"] for o in out if o["rpe"]]
@@ -394,7 +431,99 @@ class Health:
                 "body": {"rows": rows, "latest": latest, "start_weight": start_w, "progress": prog, "bmi": bmi},
                 "checks": [r["key"] for r in self.db.q("SELECT key FROM hl_check WHERE date=?", (t.isoformat(),))],
                 "week": self.week(week), "now_week": self.week() if week else None,
-                "labs": labs, "lab_date": lab_date, "follows": self.follows(), "empty": not rows and not labs, "photos": self.photos()}
+                "labs": labs, "lab_date": lab_date, "follows": self.follows(), "empty": not rows and not labs, "photos": self.photos(),
+                "quests": self.quests(c, t, slots), "rpg": self.rpg(c, t, slots)}
+
+    # ---------- 퀘스트 · 레벨(기록에서 그때그때 셈한다. 따로 저장하지 않는다) ----------
+    def quests(self, c, t, slots):
+        """오늘의 퀘스트: 날짜별 시간표(blocks)가 있으면 그 순서·시간대로, 없으면 약 → 운동 → 습관."""
+        p = self.plan_for(t, c)
+        iso = t.isoformat()
+        checks = {r["key"] for r in self.db.q("SELECT key FROM hl_check WHERE date=?", (iso,))}
+        w = self.db.one("SELECT done FROM hl_workout WHERE date=?", (iso,)) or {}
+        body = bool(self.db.one("SELECT 1 x FROM hl_body WHERE date=?", (iso,)))
+        base = {m["key"]: ("check", f"{m['label']} {len(m['names'])}가지", ", ".join(m["names"])) for m in slots}
+        base["gym"] = ("gym", ("오늘 할 일 · " if p["rest"] else "운동 · ") + p["name"], " · ".join(x for x in (p["time"], ", ".join(i[0] for i in p["items"][:4])) if x))
+        base.update({h["id"]: ("check", h["title"], h.get("sub") or "") for h in c["habits"]})
+        out, seen = [], set()
+
+        def add(qid, tm, title, sub):
+            kind = base[qid][0] if qid in base else "body" if qid == "body" else "info"
+            if qid in seen and kind != "info":
+                return
+            seen.add(qid)
+            on = (qid in checks) if kind == "check" else bool(w.get("done")) if kind == "gym" else body if kind == "body" else False
+            out.append({"id": qid, "kind": kind, "t": tm, "title": title or (base[qid][1] if qid in base else ""), "sub": sub or (base[qid][2] if qid in base else ""),
+                        "xp": XP.get(kind, 0), "on": on})
+        for b in p["blocks"]:
+            add(b[1], b[0], b[2], b[3])
+        for qid in base:                               # 시간표에 없는 항목은 뒤에(시간 없이)
+            if qid not in seen:
+                add(qid, "", "", "")
+        return out
+
+    def rpg(self, c, t, slots):
+        """레벨·경험치·연속 기록·이번 주 보스·능력치·업적. 체크·운동·신체 기록에서 셈한다."""
+        need_ids = {m["key"] for m in slots} | {h["id"] for h in c["habits"]}
+        med_ids = {m["key"] for m in slots}
+        days = {}
+        for r in self.db.q("SELECT date, key FROM hl_check"):
+            days.setdefault(r["date"], {"c": set(), "w": None, "b": False})["c"].add(r["key"])
+        for r in self.db.q("SELECT date, done, rpe, name FROM hl_workout"):
+            days.setdefault(r["date"], {"c": set(), "w": None, "b": False})["w"] = r
+        for r in self.db.q("SELECT date FROM hl_body"):
+            days.setdefault(r["date"], {"c": set(), "w": None, "b": False})["b"] = True
+        xp_of, clears, st = {}, 0, {"str": 0, "end": 0, "wil": 0, "care": 0}
+        n_work = 0
+        for d_, v in days.items():
+            done = bool(v["w"] and v["w"]["done"])
+            x = XP["check"] * len(v["c"]) + (XP["gym"] + (XP["rpe"] if v["w"]["rpe"] else 0) if done else 0) + (XP["body"] if v["b"] else 0)
+            if done and need_ids and need_ids <= v["c"]:
+                x += XP["clear"]
+                clears += 1
+            xp_of[d_] = x
+            if done:
+                n_work += 1
+                nm = v["w"]["name"] or ""
+                st["end" if any(k in nm for k in ("유산소", "가볍게", "걷기")) else "str"] += 1
+            st["wil"] += len(v["c"] - med_ids)
+            st["care"] += len(v["c"] & med_ids) + (1 if v["b"] else 0)
+        total = sum(xp_of.values())
+        lv, left = 1, total
+        while left >= LV_BASE + LV_STEP * (lv - 1):
+            left -= LV_BASE + LV_STEP * (lv - 1)
+            lv += 1
+        d0 = t if xp_of.get(t.isoformat()) else t - timedelta(days=1)
+        streak = 0
+        while xp_of.get(d0.isoformat()):
+            streak += 1
+            d0 -= timedelta(days=1)
+        wk = self.week()
+        # 지난 주들의 보스: 그 주의 운동 횟수가 지금 목표(주간 운동 횟수) 이상이면 처치
+        per_week = {}
+        for d_, v in days.items():
+            if v["w"] and v["w"]["done"]:
+                dd = date.fromisoformat(d_)
+                per_week[(dd - timedelta(days=dd.weekday())).isoformat()] = per_week.get((dd - timedelta(days=dd.weekday())).isoformat(), 0) + 1
+        target = max(1, wk["target"])
+        slain = sum(1 for k, n in per_week.items() if k != wk["start"] and n >= target) + (1 if wk["done"] >= target else 0)
+        rows, latest = self.body()
+        g = c["goal"]
+        start_w = g.get("start_weight") or next((r["weight"] for r in rows if r["weight"] is not None), None)
+        lost = round(start_w - latest["weight"]["value"], 1) if start_w and latest["weight"] else 0
+        B = lambda i, title, desc, got: {"id": i, "title": title, "desc": desc, "got": bool(got)}
+        badges = [B("first", "첫걸음", "첫 운동 완료", n_work >= 1), B("s3", "작심삼일 돌파", "3일 연속 기록", streak >= 3), B("s7", "일주일 전사", "7일 연속 기록", streak >= 7),
+                  B("s21", "습관의 주인", "21일 연속 기록", streak >= 21), B("clear1", "올 클리어", "하루 퀘스트 전부 완료", clears >= 1), B("clear7", "완벽주의자", "올 클리어 7번", clears >= 7),
+                  B("boss1", "보스 사냥꾼", "주간 보스 처치", slain >= 1), B("boss4", "토벌대장", "주간 보스 4마리 처치", slain >= 4),
+                  B("w10", "단골", "운동 10회", n_work >= 10), B("w30", "철인", "운동 30회", n_work >= 30),
+                  B("k1", "첫 1kg", "시작보다 1kg 감량", lost >= 1), B("k3", "가벼워진 몸", "시작보다 3kg 감량", lost >= 3), B("k5", "변신", "시작보다 5kg 감량", lost >= 5)]
+        iso = t.isocalendar()
+        today_q = self.quests(c, t, slots)
+        return {"level": lv, "xp": left, "need": LV_BASE + LV_STEP * (lv - 1), "total": total, "title": next(n for l, n in reversed(TITLES) if lv >= l),
+                "streak": streak, "today": xp_of.get(t.isoformat(), 0), "today_max": sum(q["xp"] for q in today_q) + XP["rpe"] + XP["clear"],
+                "clears": clears, "workouts": n_work, "stats": st,
+                "boss": {"name": BOSSES[(iso[0] * 53 + iso[1]) % len(BOSSES)], "max": target, "hp": max(0, target - wk["done"]), "slain": slain, "i": (iso[0] * 53 + iso[1]) % len(BOSSES)},
+                "badges": badges, "xp_rule": XP}
 
     def brief(self):
         """첫 화면(우석World) 타일에 보일 한 줄."""

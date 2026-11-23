@@ -363,7 +363,7 @@ class AIPick:
         if inv.kr() is None:
             raise ValueError("실시간 순위가 필요해서 키움 계좌 연결(설정 → 계좌 연결)이 있어야 추천할 수 있어요")
         ss = session(mkt)
-        kinds = ("value", "up", "volume") if mkt == "kr" else ("up", "volume")
+        kinds = ("value", "up", "volume")          # 미국도 거래대금 상위를 본다(v5.36: 상승률·거래량만 보면 폭등일에 과열주만 남았다)
         cand, seen, dropped = [], set(), []
         rank_dump = {}
         cap = float(d.get("max_price") or 0)        # 자동매매: 한 번에 쓰는 돈으로 1주도 못 사는 종목은 후보에서 뺀다
@@ -393,7 +393,17 @@ class AIPick:
                     seen.add(it["sym"])
                     continue
                 seen.add(it["sym"])
-                cand.append(it)
+                cand.append(dict(it, _k=k))
+        if mkt == "us":                              # 미국: 거래대금·상승률·거래량 순위를 번갈아 섞어 앞쪽 12개가 한쪽에 몰리지 않게
+            by = {}
+            for it in cand:
+                by.setdefault(it.get("_k"), []).append(it)
+            mix = []
+            while any(by.values()):
+                for k in kinds:
+                    if by.get(k):
+                        mix.append(by[k].pop(0))
+            cand = mix
         # 거래대금·등락 고르게: 앞쪽 12개만 깊게 본다
         deep = []
         for it in cand[:12]:
@@ -588,7 +598,7 @@ class AIPick:
         cap = float(d.get("max_price") or 0)        # 자동매매: 한 번에 쓰는 돈으로 1주도 못 사는 종목은 후보에서 뺀다
         lite = bool(d.get("lite"))
         ex = {str(x).upper() for x in (d.get("exclude") or [])}
-        for k in (("value", "up", "volume") if mkt == "kr" else ("up", "volume")):
+        for k in ("value", "up", "volume"):          # 미국도 거래대금 상위(주도 대형주)를 본다(v5.36)
             try:
                 r = inv.ranking(mkt, k)
             except Exception as e:

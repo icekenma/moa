@@ -1145,7 +1145,7 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
     ids = {x["variant"]: x["id"] for x in L["runs"]}
     lab = L["id"]
     P = lambda k: at._run(ids[k])["params"]
-    assert lab == ids["base"] and (P("loose")["min_win_prob"], P("loose")["min_rr"], P("all")["min_win_prob"]) == (48, 1.2, 40) and P("strict")["min_score"] == 70 and P("watch_skip")["skip_watch"] is True
+    assert lab == ids["base"] and (P("loose")["min_win_prob"], P("loose")["min_rr"], P("all")["min_win_prob"]) == (48, 1.2, 0) and P("strict")["min_score"] == 70 and P("watch_skip")["skip_watch"] is True
     assert (P("tight")["exit_mult"], P("wide")["exit_mult"], P("wide")["tp_cap"], P("base")["exit_mult"]) == (0.5, 1.5, 6.0, 1.0) and (P("focus")["max_positions"], P("spread")["per_trade_pct"]) == (1, 20)
     at.rt.db.x("UPDATE at_runs SET status='paused' WHERE id=?", (solo,))
     calls = []
@@ -1268,7 +1268,7 @@ def test_running_experiments_pick_up_new_and_fixed_plans(env, monkeypatch):
     at._auto_at = 0
     at.tick(force=True)
     runs = {r["variant"]: r for r in at._runs("WHERE lab_id=?", (lab["id"],))}
-    assert len(runs) == NV(lab["style"]) and runs["all"]["params"]["min_win_prob"] == 40 and runs["all"]["status"] == "running"
+    assert len(runs) == NV(lab["style"]) and runs["all"]["params"]["min_win_prob"] == 0 and runs["all"]["params"]["min_score"] == 0 and runs["all"]["status"] == "running"
     assert runs["loose"]["params"]["min_win_prob"] == 43 and runs["loose"]["params"]["idx_floor"] == 0 and runs["wide"]["params"]["exit_mult"] == 1.5
     at._auto_at = 0
     at.tick(force=True)
@@ -2003,6 +2003,10 @@ def test_junk_universe_rules():
     assert J("kr", "000020", "동화약품", dict(ok, warn="5")) == "투자경고" and J("kr", "000020", "동화약품", dict(ok, warn="3")) == "단기과열"
     assert J("kr", "000020", "동화약품", dict(ok, audit="투자주의환기종목")) == "투자주의환기" and J("kr", "000020", "동화약품", dict(ok, state="관리종목|증거금100%")) == "관리종목"
     assert J("us", "TQQQ", "ProShares UltraPro QQQ") and J("us", "SOXL", "Direxion Daily Semiconductor Bull 3X Shares") and J("us", "AAPL", "Apple Inc") == ""
+    # v5.36: 미국 거래량 순위를 채우던 스팩·유닛·워런트, 채권형, 한글 이름 레버리지(키움 이름 그대로)
+    assert J("us", "ITHXU", "ITHAX애퀴지션III유닛") == J("us", "APOGU", "아포지 애퀴지션 유닛/워런트/권리") == "스팩·유닛"
+    assert J("us", "GECCO", "그레이트 엘름 캐피털 채권(2030-12-31 7.") == "채권형" and J("us", "SOXL", "미국 반도체 3배 디렉시온 ETF") == "레버리지·인버스"
+    assert all(J("us", s, n) == "" for s, n in (("UBER", "우버 테크놀로지스"), ("NVDA", "엔비디아"), ("SPY", "S&P 500 SPDR ETF"), ("UNH", "유나이티드헬스 그룹"), ("META", "메타 플랫폼스(페이스북)")))
 
 
 def test_junk_is_skipped_and_logged(env, monkeypatch):
@@ -2639,3 +2643,68 @@ def test_today_groups_trades_and_falls_back_to_last_session(env, monkeypatch):
     T3 = at.today()
     assert T3["mkt"]["kr"]["day"] == "2026-11-19" and T3["mkt"]["kr"]["closed"] == 0 and T3["rows"] == []
     assert at.overview()["today"]["mkt"]["kr"]["day"] == "2026-11-19" and "today" in at.brief()
+
+
+
+def test_us_day_candidates_include_turnover_leaders(env, monkeypatch):
+    """v5.36: 미국 단타·스윙 후보는 거래대금·상승률·거래량 순위를 함께 보고, 앞쪽에 고르게 섞는다(폭등일에 과열주만 남지 않게).
+    거래량 순위의 스팩 유닛은 빠진다."""
+    inv, ap = env.rt.invest, env.rt.aipick
+    R = {"value": [("NVDA", "엔비디아", 165, 31.5), ("AMD", "AMD", 453, 6.9), ("META", "메타 플랫폼스", 597, 6.6), ("GOOGL", "알파벳 A", 282, 6.3)],
+         "up": [("OTLY", "오틀리 그룹(ADR)", 14.5, 109), ("IREN", "아이렌", 14.6, 23.9), ("APLD", "어플라이드 디지털", 13.8, 20.3)],
+         "volume": [("ITHXU", "ITHAX애퀴지션III유닛", 10.15, 0.3), ("PRAXU", "프라이토리안 애퀴지션 유닛", 10.04, 0.0)]}
+    seen = []
+    def rank(mkt, k):
+        seen.append(k)
+        return {"items": [{"rank": i + 1, "sym": s, "name": n, "price": p, "change_pct": c, "value": 1e9, "volume": 1e6} for i, (s, n, p, c) in enumerate(R[k])]}
+    monkeypatch.setattr(inv, "kr", lambda: object())
+    monkeypatch.setattr(inv, "ranking", rank)
+    monkeypatch.setattr(inv, "candles", lambda mkt, sym, tf: {"bars": []})
+    monkeypatch.setattr(env.rt.market, "us_indices", lambda: [])
+    ap.context({"mkt": "us", "horizon": "day"})
+    syms = [c["sym"] for c in ap._cands.get(AP._ck("us", "day"), [])]
+    assert set(seen) == {"value", "up", "volume"} and syms[:4] == ["NVDA", "OTLY", "AMD", "IREN"] and "META" in syms and not {"ITHXU", "PRAXU"} & set(syms)
+    seen.clear()
+    try:
+        ap.context({"mkt": "us", "horizon": "swing"})
+    except Exception:
+        pass
+    sw = [c["sym"] for c in ap._cands.get(AP._ck("us", "swing"), [])]
+    assert "value" in seen and {"AMD", "META"} <= set(sw) and "ITHXU" not in sw
+
+
+def test_trade_journal_month_and_day(env, monkeypatch):
+    """매매 일지: 달력에는 날마다 산·판·승패·평균 수익률·AI 추천 횟수, 그날을 열면 종목별 내역과 '왜 안 샀는지'."""
+    at = env.at
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (0.9, {"fx": 1400.0}))
+    monkeypatch.setattr(env.rt.ai, "fx", lambda: 1400.0)
+    L = at.lab_create({"budget": 3_000_000, "mkt": "kr", "style": "day", "days": 20, "model": "claude-sonnet-5-5"})["labs"][0]
+    a, b = L["runs"][0]["id"], L["runs"][1]["id"]
+    own = env.run()
+    ins = ("INSERT INTO at_trades(run_id,ver,mkt,sym,name,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,exit_ts,exit_price,reason,pnl,pnl_pct,exit_day,last) "
+           "VALUES(?,1,'kr',?,?,?,?,?,?,?,?,3,1.5,?,?,?,?,?,?,?)")
+    d = env.day
+    x = env.rt.db.x
+    x(ins, (a, "005930", "삼성전자", 2, "closed", f"{d}T09:12:00", d, "09:12", 70000, f"{d}T10:40:00", 70700, "익절", 1400, 1.0, d, 70700))
+    x(ins, (b, "005930", "삼성전자", 1, "closed", f"{d}T09:13:00", d, "09:13", 70000, f"{d}T10:05:00", 69300, "손절", -700, -1.0, d, 69300))
+    x(ins, (own, "035420", "NAVER", 1, "closed", "2026-11-17T09:30:00", "2026-11-17", "09:30", 200000, f"{d}T09:50:00", 204000, "익절", 4000, 2.0, d, 204000))
+    for rid in (a, b):          # 실험 플랜 둘이 같은 추천을 받아 한 번은 사고 한 번은 승률 미달로 거름 + 다음 추천은 둘 다 관망
+        at.log(rid, "cycle", "추천", {"view": "지수 강세", "stance": "보통", "decisions": [{"sym": "005930", "act": "buy" if rid == a else "skip", "code": "winprob"}]})
+    env.rt.db.x("UPDATE at_log SET ts=? WHERE kind='cycle'", (f"{d}T09:10:00",))
+    at.log(a, "cycle", "관망", {"watch": True, "view": "지수 강세", "stance": "관망"})
+    J = at.journal(d[:7])
+    D = {x["date"]: x for x in J["days"]}
+    k = D[d]["mk"]["kr"]
+    assert k["bought"] == 1 and k["sold"] == 2 and k["closed"] == 3 and k["wins"] == 2 and k["sim"] == 4000 and k["cycles"] == 2
+    assert D["2026-11-17"]["bought"] == 1 and J["sum"]["active"] == 2 and J["sum"]["closed"] == 3 and J["sum"]["win_rate"] == 67 and J["pick"] == d
+    assert at.journal(d[:7], mode="real")["sum"]["closed"] == 0 and at.journal(d[:7], mkt="us")["sum"]["active"] == 0
+    Y = at.journal_day(d)
+    m = Y["mk"][0]
+    assert m["mkt"] == "kr" and m["stat"]["closed"] == 3 and m["stat"]["sim_krw"] == 4000 and [r["side"] for r in m["rows"]][:2] == ["sell", "sell"]
+    u = next(u for u in m["ai"] if u["kind"] == "lab")
+    assert u["cycles"] == 2 and u["buys"] == 1 and u["plans"] == 2 and {w["code"]: w["n"] for w in u["why"]} == {"winprob": 1, "watch": 1}
+    assert u["views"][0]["text"] == "지수 강세" and Y["prev"] == "2026-11-17" and Y["next"] is None
+    with pytest.raises(ValueError):
+        at.journal("2026-13")
+    c = create_app(env.rt).test_client()
+    assert c.get(f"/api/auto/journal?day={d}").status_code == 200 and c.get("/api/auto/journal?month=x").status_code == 400

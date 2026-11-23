@@ -19,7 +19,7 @@ import math
 import re
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from . import aipick as AP
 from .trading import costs as C
@@ -182,7 +182,7 @@ VARIANTS = {
     "base": ("기본", "처음 플랜 그대로", {}),
     "loose": ("느슨한 기준", "기본보다 승률 -7 · 점수 -10 · 손익비 -0.3", {"min_win_prob": "-7", "min_score": "-10", "min_rr": "-0.3", "chase_pct": "+0.5"}),
     "strict": ("엄격한 기준", "기본보다 승률 +5 · 점수 +10 · 손익비 +0.3", {"min_win_prob": "+5", "min_score": "+10", "min_rr": "+0.3"}),
-    "all": ("가리지 않고 사기", "AI가 낸 종목은 거의 다 사 봄(AI 추천 자체의 성적을 재는 기준선)", {"min_win_prob": 40, "min_score": 30, "min_rr": 1.0, "chase_pct": 2.0, "skip_watch": False}),
+    "all": ("가리지 않고 사기", "AI가 낸 종목은 승률·점수와 상관없이 다 사 봄(AI 추천 자체의 성적을 재는 기준선)", {"min_win_prob": "=0", "min_score": "=0", "min_rr": 1.0, "chase_pct": 2.0, "skip_watch": False}),
     "watch_skip": ("관망엔 쉬기", "AI가 관망이면 사지 않음(실전 기본)", {"skip_watch": True}),
     "watch_full": ("관망 무시", "관망이어도 평소 크기로 매수", {"skip_watch": False, "watch_mult": 1.0}),
     "tight": ("짧게 끊기", "AI가 낸 익절·손절 폭의 절반에서 팔기", {"exit_mult": 0.5}),
@@ -222,6 +222,9 @@ def apply_variant(p, key, keep=()):
     """플랜 값에 실험 플랜의 차이를 입힌다. '*1.5'는 곱하기, '+5'·'-7'은 더하기·빼기, 그 밖은 그 값으로."""
     for k, v in VARIANTS[key][2].items():
         if k in keep:
+            continue
+        if isinstance(v, str) and v[:1] == "=":       # '=값': 범위 밖이어도 그 값 그대로(실험 기준선 전용 — 사용자·AI 개선안으로는 못 만든다)
+            p[k] = float(v[1:])
             continue
         if isinstance(v, str) and v[:1] == "*":
             v = p[k] * float(v[1:])
@@ -2984,6 +2987,9 @@ class AutoTrade:
                 if base:
                     want = apply_variant(json.loads(base["params"]), r["variant"])
                     p.update({k: want[k] for k in VARIANTS[r["variant"]][2]})
+            for k, v in VARIANTS.get(r["variant"] or "", ("", "", {}))[2].items():
+                if isinstance(v, str) and v[:1] == "=":             # 기준선 플랜의 고정값(가리지 않고 사기: 승률·점수 0)
+                    p[k] = float(v[1:])
             em = VARIANTS.get(r["variant"] or "", ("", "", {}))[2].get("exit_mult")
             if em:                                                     # 짧게·길게는 상한만 바꿔 차이가 없었다 → 폭 자체를 바꾼다
                 p["exit_mult"] = em
@@ -3547,6 +3553,206 @@ class AutoTrade:
         last = (r or {}).get("d")
         return (last, False) if last and last < d else (d, True)
 
+    def _events(self, mkt, day, runs):
+        """한 시장의 그 거래일에 산 것·판 것을 (묶음, 종목, 방향)별 한 줄로 묶는다. runs: 볼 자동매매({id: run}).
+        돌려주는 것: (줄 목록, 그날 숫자). 실험 묶음은 플랜마다 따로 사고팔므로 플랜별 내역은 parts에 둔다."""
+        db = self.rt.db
+        rows = []
+        ts = db.q("""SELECT * FROM at_trades WHERE mkt=? AND status!='cancelled' AND (entry_day=? OR (status='closed' AND exit_day=?))
+                     ORDER BY id""", (mkt, day, day))
+        ev = {}
+        M = {"mkt": mkt, "day": day, "bought": set(), "sold": set(), "closed": 0, "wins": 0,
+             "pct_sum": 0.0, "real_pnl": 0.0, "real_n": 0, "sim_pnl": 0.0, "sim_n": 0}
+        for t in ts:
+            run = runs.get(t["run_id"])
+            if not run:
+                continue
+            lab = run.get("lab_id")
+            unit = ("lab", lab) if lab else ("run", run["id"])
+            label = VARIANTS.get(run.get("variant") or "", (run["name"],))[0] if lab else run["name"]
+            base = {"kind": unit[0], "gid": unit[1], "mkt": mkt, "mode": run["mode"], "sym": t["sym"], "name": t["name"],
+                    "unit": f"{STYLES[run['style']]['label']} 실험" if lab else run["name"], "style": run["style"]}
+            if t["entry_day"] == day:
+                e = ev.setdefault((unit, t["sym"], "buy"), dict(base, side="buy", ts=t["entry_ts"], parts=[], why=_why(t.get("why"))))
+                e["ts"] = min(e["ts"], t["entry_ts"])
+                e["parts"].append({"label": label, "ts": t["entry_ts"], "qty": t["qty"], "price": t["entry_price"], "open": t["status"] == "open",
+                                   "target_pct": t["target_pct"], "stop_pct": t["stop_pct"]})
+                M["bought"].add(t["sym"])
+            if t["status"] == "closed" and t.get("exit_day") == day:
+                e = ev.setdefault((unit, t["sym"], "sell"), dict(base, side="sell", ts=t["exit_ts"] or t["entry_ts"], parts=[]))
+                e["ts"] = max(e["ts"], t["exit_ts"] or "")
+                pnl, pc = float(t["pnl"] or 0), float(t["pnl_pct"] or 0)
+                e["parts"].append({"label": label, "ts": t["exit_ts"], "qty": t["qty"], "price": t["exit_price"], "entry": t["entry_price"], "entry_ts": t["entry_ts"],
+                                   "pnl": round(pnl, 2), "pct": round(pc, 2), "reason": t["reason"] or "", "hold_min": t["hold_min"]})
+                M["sold"].add(t["sym"]); M["closed"] += 1; M["wins"] += pnl > 0; M["pct_sum"] += pc
+                if not lab:
+                    k = "real" if run["mode"] == "real" else "sim"
+                    M[k + "_pnl"] += pnl; M[k + "_n"] += 1
+        for e in ev.values():
+            ps = e["parts"]
+            e["n"] = len(ps)
+            e["price"] = round(sum(p["price"] * p["qty"] for p in ps) / max(1, sum(p["qty"] for p in ps)), 4)
+            e["qty"] = sum(p["qty"] for p in ps)
+            if e["side"] == "sell":
+                e["pct"] = round(sum(p["pct"] for p in ps) / len(ps), 2)
+                e["pnl"] = round(sum(p["pnl"] for p in ps), 2)
+                e["wins"] = sum(1 for p in ps if p["pnl"] > 0)
+                rs = {}
+                for p in ps:
+                    rs[p["reason"]] = rs.get(p["reason"], 0) + 1
+                e["reason"] = max(rs, key=rs.get) if rs else ""
+            else:
+                e["still"] = sum(1 for p in ps if p["open"])
+            ps.sort(key=lambda p: p["ts"] or "")
+            del ps[12:]
+            rows.append(e)
+        M.update(bought=len(M["bought"]), sold=len(M["sold"]), losses=M["closed"] - M["wins"],
+                 avg_pct=round(M["pct_sum"] / M["closed"], 2) if M["closed"] else None,
+                 real_pnl=round(M["real_pnl"], 2), sim_pnl=round(M["sim_pnl"], 2))
+        del M["pct_sum"]
+        return rows, M
+
+    # ------------------------------------------------------------------ 매매 일지(날짜별로 무엇을 사고팔았나)
+    def _jruns(self, mode="", mkt=""):
+        return {r["id"]: r for r in self._runs() if (not mode or r["mode"] == mode) and (not mkt or r["mkt"] == mkt)}
+
+    def journal(self, month=None, mode="", mkt=""):
+        """매매 일지의 한 달 달력. 날마다 시장별로 산 종목·판 종목·끝난 거래·승패·평균 수익률, 직접 만든 자동매매의 손익(원), AI 추천 횟수.
+        날짜는 그 시장의 거래일(미국은 뉴욕 날짜: 한국 밤~새벽). 실험은 플랜마다 가상 돈이 따로라 돈 합계에 넣지 않는다."""
+        t0 = AP.kst_now().date()
+        try:
+            y, m = (int(x) for x in str(month or t0.isoformat()[:7]).split("-")[:2])
+            first = date(y, m, 1)
+        except ValueError:
+            raise ValueError("달을 2026-11처럼 넣어 주세요")
+        nxt = (first + timedelta(days=32)).replace(day=1)
+        last = nxt - timedelta(days=1)
+        a, b = first.isoformat(), last.isoformat()
+        runs = self._jruns(mode, mkt)
+        fx = self.rt.ai.fx()
+        per = {}
+
+        def cell(day, mk):
+            return per.setdefault(day, {}).setdefault(mk, {"bought": set(), "sold": set(), "closed": 0, "wins": 0, "pct": 0.0, "real": 0.0, "sim": 0.0,
+                                                          "real_n": 0, "cycles": set(), "lab": False})
+        for t in self.rt.db.q("""SELECT run_id, mkt, sym, entry_day, exit_day, status, pnl, pnl_pct FROM at_trades
+                                 WHERE status!='cancelled' AND (entry_day BETWEEN ? AND ? OR exit_day BETWEEN ? AND ?)""", (a, b, a, b)):
+            run = runs.get(t["run_id"])
+            if not run:
+                continue
+            if a <= (t["entry_day"] or "") <= b:
+                c = cell(t["entry_day"], t["mkt"])
+                c["bought"].add(t["sym"])
+                c["lab"] |= bool(run.get("lab_id"))
+            if t["status"] == "closed" and a <= (t["exit_day"] or "") <= b:
+                c = cell(t["exit_day"], t["mkt"])
+                pnl, pc = float(t["pnl"] or 0), float(t["pnl_pct"] or 0)
+                c["sold"].add(t["sym"]); c["closed"] += 1; c["wins"] += pnl > 0; c["pct"] += pc
+                c["lab"] |= bool(run.get("lab_id"))
+                if not run.get("lab_id"):
+                    k = "real" if run["mode"] == "real" else "sim"
+                    c[k] += pnl * (fx if t["mkt"] == "us" else 1.0)
+                    c["real_n"] += run["mode"] == "real"
+        for r in self.rt.db.q("SELECT run_id, day, substr(ts,1,16) t FROM at_log WHERE kind='cycle' AND day BETWEEN ? AND ?", (a, b)):
+            run = runs.get(r["run_id"])
+            if run:
+                cell(r["day"], run["mkt"])["cycles"].add((run.get("lab_id") or -run["id"], r["t"]))
+        days, S = [], {"active": 0, "bought": 0, "sold": 0, "closed": 0, "wins": 0, "pct": 0.0, "real": 0.0, "sim": 0.0, "real_n": 0, "cycles": 0}
+        for i in range(last.day):
+            dd = first + timedelta(days=i)
+            k = dd.isoformat()
+            mk = {}
+            for m_, c in sorted(per.get(k, {}).items()):
+                mk[m_] = {"bought": len(c["bought"]), "sold": len(c["sold"]), "closed": c["closed"], "wins": c["wins"], "losses": c["closed"] - c["wins"],
+                          "avg_pct": round(c["pct"] / c["closed"], 2) if c["closed"] else None, "real": round(c["real"]), "sim": round(c["sim"]),
+                          "real_n": c["real_n"], "cycles": len(c["cycles"])}
+                S["bought"] += len(c["bought"]); S["sold"] += len(c["sold"]); S["closed"] += c["closed"]; S["wins"] += c["wins"]; S["pct"] += c["pct"]
+                S["real"] += c["real"]; S["sim"] += c["sim"]; S["real_n"] += c["real_n"]; S["cycles"] += len(c["cycles"])
+            tr = sum(x["bought"] + x["sold"] for x in mk.values())
+            S["active"] += tr > 0
+            cl = sum(x["closed"] for x in mk.values())
+            avg = round(sum((x["avg_pct"] or 0) * x["closed"] for x in mk.values()) / cl, 2) if cl else None
+            days.append({"date": k, "d": dd.day, "wd": dd.weekday(), "today": dd == t0, "future": dd > t0, "mk": mk,
+                         "bought": sum(x["bought"] for x in mk.values()), "sold": sum(x["sold"] for x in mk.values()), "closed": cl,
+                         "wins": sum(x["wins"] for x in mk.values()), "avg_pct": avg, "real": sum(x["real"] for x in mk.values()),
+                         "real_n": sum(x["real_n"] for x in mk.values()), "cycles": sum(x["cycles"] for x in mk.values())})
+        S.update(win_rate=round(S["wins"] / S["closed"] * 100) if S["closed"] else None, avg_pct=round(S["pct"] / S["closed"], 2) if S["closed"] else None,
+                 real=round(S["real"]), sim=round(S["sim"]))
+        del S["pct"]
+        r0 = self.rt.db.one("SELECT MIN(entry_day) d FROM at_trades WHERE status!='cancelled'") or {}
+        since = r0.get("d")
+        cur = t0.replace(day=1)
+        prev = (first - timedelta(days=1)).replace(day=1)
+        act = [x for x in days if x["bought"] or x["sold"]]
+        return {"month": first.isoformat()[:7], "title": f"{first.year}년 {first.month}월", "lead": first.weekday(), "today": t0.isoformat(), "fx": fx,
+                "prev": prev.isoformat()[:7] if since and prev.isoformat()[:7] >= since[:7] else None,
+                "next": nxt.isoformat()[:7] if nxt <= cur else None, "this_month": first == cur,
+                "pick": (act[-1]["date"] if act else (t0.isoformat() if first == cur else None)), "days": days, "sum": S,
+                "filters": {"mode": mode, "mkt": mkt}}
+
+    def journal_day(self, day, mode="", mkt=""):
+        """그날 한 일 자세히: 시장별로 산 것·판 것(종목마다 한 줄, 플랜별 내역), 그날 숫자, AI 추천 기록(몇 번 받았고 왜 안 샀는지, AI의 시장 한 줄)."""
+        try:
+            d0 = date.fromisoformat(str(day)[:10])
+        except ValueError:
+            raise ValueError("날짜를 2026-11-23처럼 넣어 주세요")
+        day = d0.isoformat()
+        runs = self._jruns(mode, mkt)
+        fx = self.rt.ai.fx()
+        logs = {}
+        for r in self.rt.db.q("SELECT run_id, ts, msg, data FROM at_log WHERE kind='cycle' AND day=? ORDER BY id", (day,)):
+            run = runs.get(r["run_id"])
+            if run:
+                logs.setdefault(run["mkt"], []).append((run, r))
+        out = []
+        for m_ in ("kr", "us"):
+            if mkt and m_ != mkt:
+                continue
+            rows, M = self._events(m_, day, runs)
+            rows.sort(key=lambda e: e["ts"] or "", reverse=True)
+            units = {}
+            for run, r in logs.get(m_, []):
+                lab = run.get("lab_id")
+                key = ("lab", lab) if lab else ("run", run["id"])
+                U = units.setdefault(key, {"kind": key[0], "gid": key[1], "mode": run["mode"], "style": run["style"],
+                                           "unit": f"{STYLES[run['style']]['label']} 실험" if lab else run["name"], "plans": set(),
+                                           "times": set(), "buys": 0, "why": {}, "views": [], "fail": 0})
+                U["plans"].add(run["id"]); U["times"].add(r["ts"][:16])
+                try:
+                    dd = json.loads(r["data"]) if r["data"] else {}
+                except ValueError:
+                    dd = {}
+                if "받지 못했어요" in r["msg"] or "오류" in r["msg"]:
+                    U["fail"] += 1
+                if dd.get("watch"):
+                    U["why"]["watch"] = U["why"].get("watch", 0) + 1
+                for x in dd.get("decisions") or []:
+                    if x.get("act") == "buy":
+                        U["buys"] += 1
+                    else:
+                        c = x.get("code") or "etc"
+                        U["why"][c] = U["why"].get(c, 0) + 1
+                v = dd.get("view")
+                if v and (not U["views"] or U["views"][-1]["text"] != v):
+                    U["views"].append({"t": r["ts"][11:16], "text": str(v)[:160], "stance": dd.get("stance") or ""})
+            ai = []
+            for U in units.values():
+                tot = sum(U["why"].values())
+                ai.append({k: U[k] for k in ("kind", "gid", "mode", "style", "unit", "buys", "fail")} | {
+                    "cycles": len(U["times"]), "plans": len(U["plans"]), "first": min(U["times"])[11:] if U["times"] else "", "last": max(U["times"])[11:] if U["times"] else "",
+                    "why": [{"code": c, "label": SKIP.get(c, c), "n": n, "pct": round(n / tot * 100) if tot else 0} for c, n in sorted(U["why"].items(), key=lambda kv: -kv[1])][:4],
+                    "views": U["views"][-3:]})
+            ai.sort(key=lambda u: (u["kind"] != "run", u["unit"]))
+            if rows or ai:
+                M["real_krw"] = round(M["real_pnl"] * (fx if m_ == "us" else 1.0))
+                M["sim_krw"] = round(M["sim_pnl"] * (fx if m_ == "us" else 1.0))
+                out.append({"mkt": m_, "stat": M, "rows": rows, "ai": ai,
+                            "when": "한국 낮(09:00~15:30)" if m_ == "kr" else "한국 밤~다음 날 새벽(뉴욕 정규장)"})
+        near = lambda op, srt: (self.rt.db.one(f"""SELECT {srt}(d) d FROM (SELECT entry_day d FROM at_trades WHERE status!='cancelled' AND entry_day {op} ?
+                                                UNION ALL SELECT exit_day FROM at_trades WHERE status='closed' AND exit_day {op} ?)""", (day, day)) or {}).get("d")
+        return {"date": day, "dow": "월화수목금토일"[d0.weekday()], "fx": fx, "mk": out, "prev": near("<", "MAX"), "next": near(">", "MIN"),
+                "filters": {"mode": mode, "mkt": mkt}}
+
     def today(self):
         """오늘 한 거래만 따로 모은다(시세를 새로 묻지 않는다). 시장마다 그 시장의 거래일 기준.
         실험 묶음은 같은 종목을 여러 플랜이 사고팔므로 종목·방향별로 한 줄로 묶고, 플랜별 내역은 parts에 둔다.
@@ -3556,58 +3762,9 @@ class AutoTrade:
         rows, mk = [], {}
         for mkt in ("kr", "us"):
             day, is_today = self._act_day(mkt)
-            ts = db.q("""SELECT * FROM at_trades WHERE mkt=? AND status!='cancelled' AND (entry_day=? OR (status='closed' AND exit_day=?))
-                         ORDER BY id""", (mkt, day, day))
-            ev = {}
-            M = {"mkt": mkt, "day": day, "is_today": is_today, "open": self._session(mkt)["open"], "bought": set(), "sold": set(), "closed": 0, "wins": 0,
-                 "pct_sum": 0.0, "real_pnl": 0.0, "real_n": 0, "sim_pnl": 0.0, "sim_n": 0}
-            for t in ts:
-                run = runs.get(t["run_id"])
-                if not run:
-                    continue
-                lab = run.get("lab_id")
-                unit = ("lab", lab) if lab else ("run", run["id"])
-                label = VARIANTS.get(run.get("variant") or "", (run["name"],))[0] if lab else run["name"]
-                base = {"kind": unit[0], "gid": unit[1], "mkt": mkt, "mode": run["mode"], "sym": t["sym"], "name": t["name"],
-                        "unit": f"{STYLES[run['style']]['label']} 실험" if lab else run["name"], "style": run["style"]}
-                if t["entry_day"] == day:
-                    e = ev.setdefault((unit, t["sym"], "buy"), dict(base, side="buy", ts=t["entry_ts"], parts=[], why=_why(t.get("why"))))
-                    e["ts"] = min(e["ts"], t["entry_ts"])
-                    e["parts"].append({"label": label, "ts": t["entry_ts"], "qty": t["qty"], "price": t["entry_price"], "open": t["status"] == "open",
-                                       "target_pct": t["target_pct"], "stop_pct": t["stop_pct"]})
-                    M["bought"].add(t["sym"])
-                if t["status"] == "closed" and t.get("exit_day") == day:
-                    e = ev.setdefault((unit, t["sym"], "sell"), dict(base, side="sell", ts=t["exit_ts"] or t["entry_ts"], parts=[]))
-                    e["ts"] = max(e["ts"], t["exit_ts"] or "")
-                    pnl, pc = float(t["pnl"] or 0), float(t["pnl_pct"] or 0)
-                    e["parts"].append({"label": label, "ts": t["exit_ts"], "qty": t["qty"], "price": t["exit_price"], "entry": t["entry_price"], "entry_ts": t["entry_ts"],
-                                       "pnl": round(pnl, 2), "pct": round(pc, 2), "reason": t["reason"] or "", "hold_min": t["hold_min"]})
-                    M["sold"].add(t["sym"]); M["closed"] += 1; M["wins"] += pnl > 0; M["pct_sum"] += pc
-                    if not lab:
-                        k = "real" if run["mode"] == "real" else "sim"
-                        M[k + "_pnl"] += pnl; M[k + "_n"] += 1
-            for e in ev.values():
-                ps = e["parts"]
-                e["n"] = len(ps)
-                e["price"] = round(sum(p["price"] * p["qty"] for p in ps) / max(1, sum(p["qty"] for p in ps)), 4)
-                e["qty"] = sum(p["qty"] for p in ps)
-                if e["side"] == "sell":
-                    e["pct"] = round(sum(p["pct"] for p in ps) / len(ps), 2)
-                    e["pnl"] = round(sum(p["pnl"] for p in ps), 2)
-                    e["wins"] = sum(1 for p in ps if p["pnl"] > 0)
-                    rs = {}
-                    for p in ps:
-                        rs[p["reason"]] = rs.get(p["reason"], 0) + 1
-                    e["reason"] = max(rs, key=rs.get) if rs else ""
-                else:
-                    e["still"] = sum(1 for p in ps if p["open"])
-                ps.sort(key=lambda p: p["ts"] or "")
-                del ps[12:]
-                rows.append(e)
-            M.update(bought=len(M["bought"]), sold=len(M["sold"]), losses=M["closed"] - M["wins"],
-                     avg_pct=round(M["pct_sum"] / M["closed"], 2) if M["closed"] else None,
-                     real_pnl=round(M["real_pnl"], 2), sim_pnl=round(M["sim_pnl"], 2))
-            del M["pct_sum"]
+            got, M = self._events(mkt, day, runs)
+            rows += got
+            M.update(is_today=is_today, open=self._session(mkt)["open"])
             mk[mkt] = M
         rows.sort(key=lambda e: e["ts"] or "", reverse=True)
         # 묶음(실험·자동매매)별 오늘 숫자: 첫 화면 칸에 '오늘'을 누적과 따로 적는다

@@ -2,7 +2,7 @@
 
 여기서 빼는 것은 '종목이 좋으냐 나쁘냐'가 아니라 '규칙대로 사고팔기에 맞지 않는 종류'다.
 - 거래소가 경고를 붙인 종목: 관리종목, 투자경고·위험, 단기과열(30분 단일가라 단타가 안 된다), 정리매매, 거래정지
-- 값이 본주·지수와 다르게 움직이는 것: 스팩, 우선주, 레버리지·인버스 상품, ETN
+- 값이 본주·지수와 다르게 움직이는 것: 스팩(미국은 유닛·워런트·권리 포함), 우선주, 레버리지·인버스 상품, ETN, 채권형 상품
 """
 import re
 
@@ -11,6 +11,10 @@ WARN = {"2": "정리매매", "3": "단기과열", "4": "투자위험", "5": "투
 BAD_WORDS = ("관리종목", "투자주의환기", "거래정지", "정리매매", "투자경고", "투자위험", "단기과열", "불성실공시")
 KR_LEVER = re.compile(r"레버리지|인버스|곱버스|2X|3X|ETN", re.I)      # 금·지수 선물을 그대로 따르는 보통 ETF는 빼지 않는다
 US_LEVER = re.compile(r"\b(2X|3X|1\.5X|ULTRA(PRO)?|LEVERAGED?|INVERSE|BULL|BEAR|SHORT)\b", re.I)
+US_LEVER_KO = re.compile(r"\d(?:\.\d)?배|레버리지|인버스")                 # 키움 한글 이름('미국 반도체 3배 디렉시온 ETF')
+# 미국 거래량 순위를 채우는 스팩(인수목적회사)·유닛·워런트·권리와 채권형 상품: 10달러 근처에 붙어 거의 안 움직인다
+US_SPAC = re.compile(r"애퀴지션|기업인수|유닛|워런트|권리|ACQUISITION|\bUNITS?\b|WARRANTS?|\bRIGHTS?\b|\bSPAC\b", re.I)
+US_BOND = re.compile(r"채권|\bNOTES?\b|\bDEBENTURES?\b|\d{4}-\d{2}-\d{2}", re.I)
 KR_PREF = re.compile(r"우[A-C]?$|우\(전환\)$|\d우B?$")
 
 
@@ -32,6 +36,10 @@ def junk_reason(mkt, sym, name="", info=None):
         if (re.fullmatch(r"\d{6}", sym) and sym[-1] != "0" and info.get("market") != "ETF") or KR_PREF.search(name) or re.fullmatch(r"\d{5}[A-Z]", sym):
             return "우선주"
         return ""
-    if US_LEVER.search(name):
+    if US_LEVER.search(name) or US_LEVER_KO.search(name):
         return "레버리지·인버스"
+    if US_SPAC.search(name):
+        return "스팩·유닛"
+    if US_BOND.search(name):
+        return "채권형"
     return ""

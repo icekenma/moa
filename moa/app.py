@@ -1580,6 +1580,16 @@ def create_app(rt, updater=None):
     def auto_history():
         return jsonify(rt.autotrade.history(request.args.to_dict()))
 
+    @app.get("/api/auto/journal")
+    def auto_journal():
+        q = request.args
+        try:
+            if q.get("day"):
+                return jsonify(rt.autotrade.journal_day(q.get("day"), q.get("mode") or "", q.get("mkt") or ""))
+            return jsonify(rt.autotrade.journal(q.get("month") or None, q.get("mode") or "", q.get("mkt") or ""))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+
     @app.get("/api/auto/lab")
     def auto_labs():
         return jsonify(rt.autotrade.labs())

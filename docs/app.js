@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.0821";
+const UI_VERSION = "261124.0828";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1880,6 +1880,8 @@ pages.invest = {
     if (investState.tab === "ai") { this.apSess(); if (!this._apT || Date.now() - this._apT > 5000) { this._apT = Date.now(); this.apGuards(); } return; }
     if (["dividend", "atlog", "evo"].includes(investState.tab)) return;  // 입력·읽는 화면이라 주기적으로 다시 그리지 않는다
     if (investState.tab === "auto") {  // 자세히 보는 화면만 6초마다 새로(입력 화면·펼쳐 읽는 중에는 그대로)
+      // 자동매매 창에서 종목을 눌러 시세 창이 떠 있으면 그 창이 같은 자리를 쓰고 있다: 다시 그리면 시세 창을 덮어 버리니 기다린다
+      if (stockSheet.stack.length || (pgSheet.open && !String(pgSheet.key).startsWith("auto:"))) return;
       const A = this.at;
       const lab = A && A.view === "lab";
       if (A && (typeof A.view === "number" || lab || A.view === "list") && (lab || A.tab !== "plan") && !$(".pgs-in.dragging") && !$("#atBody details[open]:not([data-keep])") && !$(".at-more[open], .at-old[open]")

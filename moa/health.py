@@ -612,34 +612,111 @@ class Health:
         out.sort(key=lambda q: q["t"] or "99")
         return out
 
+    def _daymap(self, a=None, b=None):
+        """날짜별 기록 묶음 {날짜: {c: 체크한 것, w: 운동, b: 신체 기록 여부, m: [(끼니, 등급)]}}. a~b를 주면 그 기간만."""
+        w, arg = (" WHERE date BETWEEN ? AND ?", (a, b)) if a else ("", ())
+        days = {}
+        new = lambda: {"c": set(), "w": None, "b": False, "m": []}
+        for r in self.db.q("SELECT date, key FROM hl_check" + w, arg):
+            days.setdefault(r["date"], new())["c"].add(r["key"])
+        for r in self.db.q("SELECT date, done, rpe, name FROM hl_workout" + w, arg):
+            days.setdefault(r["date"], new())["w"] = r
+        for r in self.db.q("SELECT date FROM hl_body" + w, arg):
+            days.setdefault(r["date"], new())["b"] = True
+        for r in self.db.q("SELECT date, slot, tags FROM hl_meal" + w + " ORDER BY id", arg):
+            days.setdefault(r["date"], new())["m"].append((r["slot"], self.meal_grade(json.loads(r["tags"] or "[]"))))
+        return days
+
+    @staticmethod
+    def _day_xp(v, need_ids):
+        """하루 경험치와 올 클리어 여부. 레벨 셈과 달력이 같은 식을 쓴다."""
+        done = bool(v["w"] and v["w"]["done"])
+        main = {s_ for s_, _ in v["m"] if s_ in ("점심", "저녁")}
+        x = XP["check"] * len(v["c"]) + (XP["gym"] + (XP["rpe"] if v["w"]["rpe"] else 0) if done else 0) + (XP["body"] if v["b"] else 0) \
+            + XP["meal"] * len(main) + XP["plate"] * sum(1 for _, g in v["m"] if g == "균형")
+        clear = bool(done and need_ids and need_ids <= v["c"] and len(main) == 2)
+        return x + (XP["clear"] if clear else 0), clear
+
+    # ---------- 달력: 날마다 무엇을 했는지 ----------
+    def calendar(self, month=None):
+        """한 달 달력. 칸마다 찍을 표시(운동·체크·끼니·신체·경험치)와, 날짜를 눌렀을 때 보일 그날 내역을 함께 준다.
+        앞날은 계획만 보여 준다. '운동 빠짐'은 첫 기록이 생긴 날부터만 센다(쓰기 전 날들을 빠진 날로 만들지 않는다)."""
+        t = self._today()
+        try:
+            y, m = (int(x) for x in str(month or t.isoformat()[:7]).split("-")[:2])
+            first = date(y, m, 1)
+        except ValueError:
+            raise HealthError("달을 2026-11처럼 넣어 주세요")
+        nxt = (first + timedelta(days=32)).replace(day=1)
+        last, prev = nxt - timedelta(days=1), (first - timedelta(days=1)).replace(day=1)
+        c = self.cfg()
+        slots = self.med_slots(c)
+        items = [{"id": m_["key"], "title": m_["label"], "sub": ", ".join(m_["names"]), "kind": "med"} for m_ in slots] + \
+                [{"id": h["id"], "title": h["title"], "sub": h.get("sub") or "", "kind": "habit"} for h in c["habits"]]
+        need_ids = {i["id"] for i in items}
+        a, b = first.isoformat(), last.isoformat()
+        rec = self._daymap(a, b)
+        since = min((r["d"] for r in self.db.q("""SELECT MIN(date) d FROM hl_check UNION ALL SELECT MIN(date) FROM hl_workout
+                     UNION ALL SELECT MIN(date) FROM hl_body UNION ALL SELECT MIN(date) FROM hl_meal""") if r["d"]), default=None)
+        body = {r["date"]: r for r in self.db.q("SELECT * FROM hl_body WHERE date BETWEEN ? AND ?", (a, b))}
+        meals = {}
+        for r in self.db.q("SELECT * FROM hl_meal WHERE date BETWEEN ? AND ? ORDER BY id", (a, b)):
+            tags = json.loads(r["tags"] or "[]")
+            meals.setdefault(r["date"], []).append({"id": r["id"], "slot": r["slot"], "menu": r["menu"], "tags": tags, "note": r["note"], "grade": self.meal_grade(tags)})
+        events = {}
+        for r in self.db.q("SELECT date, title, done FROM hl_follow WHERE date BETWEEN ? AND ? ORDER BY id", (a, b)):
+            events.setdefault(r["date"], []).append({"kind": "follow", "title": r["title"], "done": bool(r["done"])})
+        for r in self.db.q("SELECT date, COUNT(*) n FROM hl_lab WHERE date BETWEEN ? AND ? GROUP BY date", (a, b)):
+            events.setdefault(r["date"], []).append({"kind": "lab", "title": f"검진 수치 {r['n']}개 기록", "done": True})
+        days, S = [], {"active": 0, "workouts": 0, "target": 0, "clears": 0, "xp": 0, "meals": 0, "good": 0, "body": 0, "checks": 0, "streak": 0}
+        run = 0
+        for i in range(last.day):
+            dd = first + timedelta(days=i)
+            k = dd.isoformat()
+            v = rec.get(k) or {"c": set(), "w": None, "b": False, "m": []}
+            p = self.plan_for(dd, c)
+            done = bool(v["w"] and v["w"]["done"])
+            future = dd > t
+            xp, clear = self._day_xp(v, need_ids)
+            started = bool(since) and k >= since
+            gym = "done" if done else "rest" if p["rest"] else "plan" if dd >= t else "miss" if started else ""
+            ms = sorted(meals.get(k, []), key=lambda x: MEAL_SLOTS.index(x["slot"]))
+            on = [i_ for i_ in items if i_["id"] in v["c"]]
+            days.append({"date": k, "d": dd.day, "wd": dd.weekday(), "dow": DOW[dd.weekday()], "today": dd == t, "future": future,
+                         "xp": xp, "clear": clear, "lv": 4 if clear else 0 if not xp else 1 if xp < 40 else 2 if xp < 80 else 3,
+                         "gym": gym, "checks": len(on), "need": len(items), "grades": [x["grade"] for x in ms if x["slot"] != "간식"][:3],
+                         "body": bool(v["b"]), "ev": len(events.get(k, [])),
+                         "workout": {"name": (v["w"] or {}).get("name") or p["name"], "plan": p["name"], "time": p["time"], "rest": p["rest"], "done": done,
+                                     "rpe": (v["w"] or {}).get("rpe"), "items": [x[0] for x in p["items"]][:8]},
+                         "check_list": [dict(i_, on=i_["id"] in v["c"]) for i_ in items], "meal_list": ms,
+                         "body_rec": ({x: body[k][x] for x in ("weight", "waist", "fat", "note")} if k in body else None),
+                         "events": events.get(k, [])})
+            if not future:
+                S["active"] += xp > 0; S["workouts"] += done; S["clears"] += clear; S["xp"] += xp; S["body"] += bool(v["b"]); S["checks"] += len(on)
+                S["meals"] += len(ms); S["good"] += sum(1 for x in ms if x["grade"] == "균형")
+                S["target"] += (not p["rest"]) and (started or done)
+                run = run + 1 if xp > 0 else 0
+                S["streak"] = max(S["streak"], run)
+        ws = [body[k]["weight"] for k in sorted(body) if body[k]["weight"] is not None]
+        S["weight"] = {"first": ws[0], "last": ws[-1], "diff": round(ws[-1] - ws[0], 1)} if ws else None
+        cur = t.replace(day=1)
+        return {"month": first.isoformat()[:7], "title": f"{first.year}년 {first.month}월", "lead": first.weekday(), "today": t.isoformat(), "since": since,
+                "prev": prev.isoformat()[:7] if since and prev.isoformat()[:7] >= since[:7] else None,
+                "next": nxt.isoformat()[:7] if nxt <= (cur + timedelta(days=32)).replace(day=1) else None,
+                "this_month": first == cur, "days": days, "sum": S, "xp_rule": XP}
+
     def rpg(self, c, t, slots):
         """레벨·경험치·연속 기록·이번 주 보스·능력치·업적. 체크·운동·신체 기록에서 셈한다."""
         need_ids = {m["key"] for m in slots} | {h["id"] for h in c["habits"]}
         med_ids = {m["key"] for m in slots}
-        days = {}
-        for r in self.db.q("SELECT date, key FROM hl_check"):
-            days.setdefault(r["date"], {"c": set(), "w": None, "b": False})["c"].add(r["key"])
-        for r in self.db.q("SELECT date, done, rpe, name FROM hl_workout"):
-            days.setdefault(r["date"], {"c": set(), "w": None, "b": False})["w"] = r
-        for r in self.db.q("SELECT date FROM hl_body"):
-            days.setdefault(r["date"], {"c": set(), "w": None, "b": False})["b"] = True
-        meals = {}
-        for r in self.db.q("SELECT date, slot, tags FROM hl_meal"):
-            meals.setdefault(r["date"], []).append((r["slot"], self.meal_grade(json.loads(r["tags"] or "[]"))))
-            days.setdefault(r["date"], {"c": set(), "w": None, "b": False})
+        days = self._daymap()
         xp_of, clears, st = {}, 0, {"str": 0, "end": 0, "wil": 0, "care": 0, "diet": 0}
         n_work = 0
         for d_, v in days.items():
             done = bool(v["w"] and v["w"]["done"])
-            ms = meals.get(d_, [])
-            main = {s_ for s_, _ in ms if s_ in ("점심", "저녁")}
-            x = XP["check"] * len(v["c"]) + (XP["gym"] + (XP["rpe"] if v["w"]["rpe"] else 0) if done else 0) + (XP["body"] if v["b"] else 0) \
-                + XP["meal"] * len(main) + XP["plate"] * sum(1 for _, g in ms if g == "균형")
-            st["diet"] += sum(1 for _, g in ms if g == "균형")
-            if done and need_ids and need_ids <= v["c"] and len(main) == 2:
-                x += XP["clear"]
-                clears += 1
-            xp_of[d_] = x
+            st["diet"] += sum(1 for _, g in v["m"] if g == "균형")
+            xp_of[d_], clear = self._day_xp(v, need_ids)
+            clears += clear
             if done:
                 n_work += 1
                 nm = v["w"]["name"] or ""

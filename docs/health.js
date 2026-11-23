@@ -7,6 +7,7 @@
     body: '<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>',
     gym: '<path d="M6 7v10M18 7v10M3 10v4M21 10v4M6 12h12"/>',
     meal: '<path d="M7 3v8a2 2 0 0 0 2 2v8M5 3v5M9 3v5M17 3c-2 2-3 4-3 7h3v11"/>',
+    cal: '<rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M3 10h18M8 3v4M16 3v4"/>',
     chk: '<path d="M9 3h6v4H9z"/><path d="M5 5h4M15 5h4v16H5V5"/><path d="M9 13h6M12 10v6"/>',
   };
   const svg = (p, s = 20, w = 2) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
@@ -17,7 +18,7 @@
 
   addApp({
     id: "health", name: "건강관리", desc: "체중, 운동, 검진", home: "#health", secs: ["health"],
-    tabs: [["health/today", "홈", IC.home], ["health/body", "기록", IC.body], ["health/workout", "운동", IC.gym], ["health/meal", "식단", IC.meal], ["health/checkup", "검진", IC.chk]],
+    tabs: [["health/today", "홈", IC.home], ["health/cal", "달력", IC.cal], ["health/body", "기록", IC.body], ["health/workout", "운동", IC.gym], ["health/meal", "식단", IC.meal], ["health/checkup", "검진", IC.chk]],
     skin: { meta: "#F4F5F1", vars: { "--deep": "#17201B", "--deep2": "#24332B", "--bg": "#F4F5F1", "--hl": "#6FD39A", "--solid": "#17201B",
       "--on-deep": "#F4F5F1", "--on-deep2": "#B9C4BC", "--on-deep-strong": "#FFFFFF", "--sub-bg": "rgba(255,255,255,.08)" } },
     tile: { bg: "linear-gradient(150deg,#2A7A55 0%,#17201B 78%)", ink: "#FFFFFF", sub: "#C6D3CA", accent: "#6FD39A" },
@@ -45,13 +46,14 @@
     <div class="hl-head-r">${extra}<a class="hl-ico" href="#world" aria-label="우석World 첫 화면으로">${GLOBE}</a></div></header>`;
 
   async function load() {
-    H.d = await GET("/api/health" + (H.sub === "workout" && H.week ? `?week=${H.week}` : ""));
+    const [d] = await Promise.all([GET("/api/health" + (H.sub === "workout" && H.week ? `?week=${H.week}` : "")), H.sub === "cal" ? loadCal() : null]);
+    H.d = d;
     return H.d;
   }
   function draw() {
     const d = H.d;
     if (!d || !$("#hlApp")) return;
-    $("#hlApp").innerHTML = ({ today, body, workout, meal, checkup }[H.sub] || today)(d);
+    $("#hlApp").innerHTML = ({ today, cal, body, workout, meal, checkup }[H.sub] || today)(d);
     hydrate($("#hlApp"));
   }
   async function reload() { await load(); draw(); }
@@ -199,8 +201,8 @@
       async (v) => { await send("POST", "/api/health/recipe", Object.assign(v, { id: id || 0 })); await recipes(true); },
       id ? async () => { await send("DELETE", `/api/health/recipe/${id}`); await recipes(true); } : null);
   }
-  function mealSheet(slot, mid, rc) {
-    const d = H.d, m = mid ? d.meals.find((x) => x.id === +mid) : null, on = new Set(m ? m.tags : rc ? rc.tags.filter((t) => d.meal_tags.includes(t)) : []);
+  function mealSheet(slot, mid, rc, opt = {}) {      // opt.date: 달력에서 고른 날, opt.meal: 그날의 끼니(고치기)
+    const d = H.d, m = opt.meal || (mid ? d.meals.find((x) => x.id === +mid) : null), on = new Set(m ? m.tags : rc ? rc.tags.filter((t) => d.meal_tags.includes(t)) : []);
     const names = (H.rc || []).map((x) => `<option value="${esc(x.title)}">`).join("");
     sheetForm(m ? `${slot} 고치기` : `${slot} 기록`, `<div class="ml-seg" role="group" aria-label="끼니">${d.meal_slots.map((s) => `<label><input type="radio" name="slot" value="${s}" ${s === (m ? m.slot : slot) ? "checked" : ""}><span>${s}</span></label>`).join("")}</div>
       <label class="field">무엇을 먹었나요<input name="menu" list="mlNames" maxlength="60" value="${esc(m ? m.menu : rc ? rc.title : "")}" placeholder="예: 불고기 덮밥 + 브로콜리" autocomplete="off"><datalist id="mlNames">${names}</datalist></label>
@@ -210,9 +212,61 @@
       async (v, f) => {
         const tags = [...f.querySelectorAll('input[name="t"]:checked')].map((x) => x.value), menu = (v.menu || "").trim();
         const hit = (H.rc || []).find((x) => x.title === menu);
-        await send("POST", "/api/health/meal", { id: m ? m.id : 0, slot: v.slot, menu, tags, note: v.note, recipe: hit ? hit.id : rc && rc.title === menu ? rc.id : 0 });
+        await send("POST", "/api/health/meal", { id: m ? m.id : 0, date: opt.date || undefined, slot: v.slot, menu, tags, note: v.note, recipe: hit ? hit.id : rc && rc.title === menu ? rc.id : 0 });
       },
       m ? () => send("DELETE", `/api/health/meal/${m.id}`) : null);
+  }
+
+  // ---------- 달력: 날마다 무엇을 했는지 ----------
+  // 칸 색이 진할수록 경험치가 많은 날(올 클리어는 가장 진한 칸 + 별). 칸 아래 표시: 막대=운동, 동그라미=끼니, 마름모=신체 기록
+  async function loadCal() {
+    H.cal = await GET("/api/health/calendar" + (H.calM ? `?month=${H.calM}` : ""));
+    return H.cal;
+  }
+  const STAR = '<svg class="cl-star" viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path fill="currentColor" d="M12 2.5l2.9 6.2 6.6.8-4.9 4.6 1.3 6.6L12 17.4l-5.9 3.3 1.3-6.6L2.5 9.5l6.6-.8z"/></svg>';
+  function cal() {
+    const C = H.cal;
+    if (!C) return `${head("날마다 한 일", "달력")}<div class="hl-hint">달력을 여는 중</div>`;
+    const S = C.sum, sel = C.days.find((x) => x.date === H.calD) || C.days.find((x) => x.today) || [...C.days].reverse().find((x) => x.xp > 0) || C.days[0];
+    H.calD = sel.date;
+    const say = (x) => `${x.d}일 ${x.dow}요일` + (x.future ? `, 예정${x.workout.rest ? " 쉬는 날" : " " + x.workout.plan}` : `, 경험치 ${x.xp}${x.gym === "done" ? ", 운동 완료" : x.gym === "miss" ? ", 운동 빠짐" : ""}${x.grades.length ? `, 끼니 ${x.grades.length}번` : ""}${x.body ? ", 신체 기록" : ""}${x.clear ? ", 올 클리어" : ""}`);
+    const cell = (x) => `<button type="button" class="cl-d lv${x.lv}${x.today ? " today" : ""}${x.future ? " future" : ""}${x.wd > 4 ? " we" : ""}" data-cday="${x.date}" aria-pressed="${x.date === sel.date}" aria-label="${esc(say(x))}">
+        <b>${x.d}</b>${x.clear ? STAR : ""}<span class="cl-m">${x.gym === "done" || x.gym === "miss" || x.gym === "plan" ? `<i class="gm ${x.gym}"></i>` : ""}${x.grades.map((g) => `<i class="pl ${GRADE[g][0] || "mid"}"></i>`).join("")}${x.body ? `<i class="bd"></i>` : ""}${x.ev ? `<i class="ev"></i>` : ""}</span></button>`;
+    const nav = (m, label, path) => `<button type="button" class="hl-ico line" data-cmo="${m || ""}" ${m ? "" : "disabled"} aria-label="${label}">${svg(path, 18, 2.2)}</button>`;
+    return `${head("날마다 한 일", "달력")}
+      <section class="cl-top"><div class="cl-nav">${nav(C.prev, "이전 달", '<path d="M15 6l-6 6 6 6"/>')}<h2>${esc(C.title)}</h2>${nav(C.next, "다음 달", '<path d="M9 6l6 6-6 6"/>')}
+          ${C.this_month ? "" : `<button type="button" class="hl-link" data-cmo="now">이번 달</button>`}</div>
+        <dl class="cl-sum"><div><dt>기록한 날</dt><dd>${S.active}<small>일</small></dd></div><div><dt>운동</dt><dd>${S.workouts}<small>/${S.target}회</small></dd></div>
+          <div><dt>올 클리어</dt><dd>${S.clears}<small>번</small></dd></div><div><dt>경험치</dt><dd>+${S.xp}</dd></div></dl>
+        ${S.active || S.weight ? `<p class="cl-line">${[S.streak > 1 ? `가장 길게 ${S.streak}일 연속` : "", S.meals ? `끼니 ${S.meals}번 중 균형 접시 ${S.good}번` : "", S.weight ? `체중 ${f1(S.weight.first)} → ${f1(S.weight.last)} kg (${S.weight.diff > 0 ? "+" : S.weight.diff < 0 ? "−" : ""}${Math.abs(S.weight.diff).toFixed(1)})` : ""].filter(Boolean).join(" · ")}</p>` : ""}</section>
+      <section class="cl-grid" aria-label="${esc(C.title)} 달력"><div class="cl-wk" aria-hidden="true">${["월", "화", "수", "목", "금", "토", "일"].map((w, i) => `<span class="${i > 4 ? "we" : ""}">${w}</span>`).join("")}</div>
+        <div class="cl-days">${"<span></span>".repeat(C.lead)}${C.days.map(cell).join("")}</div>
+        <p class="cl-legend"><span><i class="gm done"></i>운동</span><span><i class="gm miss"></i>빠짐</span><span><i class="pl good"></i>균형 끼니</span><span><i class="pl warn"></i>가끔만</span><span><i class="bd"></i>체중·허리</span><span><i class="ev"></i>검진·일정</span><span>${STAR}올 클리어</span></p>
+        <p class="hl-hint">칸이 진할수록 경험치를 많이 얻은 날이에요. 날짜를 누르면 그날 한 일이 아래에 나와요.</p></section>
+      ${calDay(sel, C)}`;
+  }
+  function calDay(x, C) {
+    const w = x.workout, lock = x.future, mo = +x.date.slice(5, 7);
+    const row = (ic, label, body) => `<div class="cl-row"><span class="cl-ic">${svg(ic, 18, 1.9)}</span><div class="cl-rb"><small>${label}</small>${body}</div></div>`;
+    const gym = w.rest && !w.done ? `<b>쉬는 날</b>`
+      : `<b>${esc(w.name)}${w.done ? ` <em class="cl-ok">완료</em>` : x.gym === "miss" ? ` <em class="cl-no">빠짐</em>` : ""}</b>
+         <span class="cl-sub">${[w.done && w.rpe ? `힘든 정도 ${w.rpe}/10` : "", !w.done && w.time ? `계획 ${esc(w.time)}` : "", w.items.slice(0, 4).map(esc).join(", ") + (w.items.length > 4 ? ` 외 ${w.items.length - 4}` : "")].filter(Boolean).join(" · ")}</span>`;
+    const gymBtn = lock ? "" : `<button type="button" class="cl-btn" data-cgym="${w.done ? 0 : 1}">${w.done ? "완료 취소" : "운동 완료로 표시"}</button>`;
+    const checks = x.check_list.length ? `<div class="cl-chips">${x.check_list.map((c) => `<button type="button" data-cchk="${esc(c.id)}" aria-pressed="${c.on}" ${lock ? "disabled" : ""}>${c.on ? svg('<path d="M5 12.5l4.5 4.5L19 7.5"/>', 14, 2.6) : ""}${esc(c.title)}</button>`).join("")}</div>` : `<span class="cl-sub">체크 항목이 없어요</span>`;
+    const meals = `${x.meal_list.map((m, i) => `<button type="button" class="cl-meal" data-cmid="${i}"><span>${esc(m.slot)}</span><b>${esc(m.menu)}</b><em class="ml-g ${GRADE[m.grade][0]}">${GRADE[m.grade][1]}</em></button>`).join("")}
+      ${lock ? (x.meal_list.length ? "" : `<span class="cl-sub">아직 오지 않은 날이에요</span>`) : `<button type="button" class="cl-btn" data-cmeal="${x.meal_list.some((m) => m.slot === "점심") ? "저녁" : "점심"}">+ 끼니 ${x.meal_list.length ? "더 넣기" : "넣기"}</button>`}`;
+    const br = x.body_rec, body = br ? `<b>${[br.weight != null ? `${f1(br.weight)} kg` : "", br.waist != null ? `허리 ${f1(br.waist)} cm` : "", br.fat != null ? `체지방 ${f1(br.fat)}%` : ""].filter(Boolean).join(" · ")}</b>${br.note ? `<span class="cl-sub">${esc(br.note)}</span>` : ""}`
+      : `<span class="cl-sub">${lock ? "–" : `기록 없음${x.today ? ` · <a href="#health/body">기록 탭에서 넣기</a>` : ""}`}</span>`;
+    const none = !lock && !x.xp && !x.meal_list.length && !x.events.length;
+    return `<section class="cl-day" id="clDay" aria-live="polite"><div class="cl-day-h"><div><h2>${mo}월 ${x.d}일 ${x.dow}요일</h2>
+          <p>${lock ? "앞날 · 계획만 보여요" : x.today ? "오늘" : none ? "이날은 기록이 없어요. 아래에서 채울 수 있어요" : "이날 한 일"}</p></div>
+        ${lock ? "" : `<div class="cl-xp${x.clear ? " clear" : ""}"><b>+${x.xp}</b><small>${x.clear ? "올 클리어" : "경험치"}</small></div>`}</div>
+      ${row(IC.gym, "운동", gym + gymBtn)}
+      ${row('<path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/>', `체크 ${x.checks}/${x.need}`, checks)}
+      ${lock && !x.meal_list.length ? "" : row(IC.meal, "식단", meals)}
+      ${lock && !br ? "" : row(IC.body, "신체", body)}
+      ${x.events.length ? row(IC.chk, "검진·일정", x.events.map((e) => `<b>${esc(e.title)}${e.kind === "follow" ? ` <em class="${e.done ? "cl-ok" : "cl-wait"}">${e.done ? "다녀옴" : "예정"}</em>` : ""}</b>`).join("")) : ""}
+      ${lock || C.today === x.date ? "" : `<p class="hl-hint">지난 날도 여기서 고칠 수 있어요. 고치면 경험치와 레벨에 바로 반영돼요.</p>`}</section>`;
   }
 
   // ---------- 기록 ----------
@@ -505,6 +559,30 @@
       return save(() => (id === "gym" ? send("POST", "/api/health/workout", { done: on }) : send("POST", "/api/health/check", { key: id, on })));
     }
     if ((b = el("[data-meal]"))) { if (!H.rc) recipes().catch(() => {}); return mealSheet(b.dataset.meal, b.dataset.mid); }
+    if ((b = el("[data-cmo]"))) {                                    // 달력: 달 옮기기
+      if (!b.dataset.cmo) return;
+      H.calM = b.dataset.cmo === "now" ? "" : b.dataset.cmo; H.calD = "";
+      await loadCal();
+      return draw();
+    }
+    if ((b = el("[data-cday]"))) {                                   // 달력: 날짜 고르기
+      H.calD = b.dataset.cday;
+      draw();
+      const p = $("#clDay");
+      if (p && p.getBoundingClientRect().top > innerHeight - 220) p.scrollIntoView({ block: "nearest", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+      return;
+    }
+    if (H.sub === "cal" && H.cal && H.calD) {                        // 달력: 고른 날의 기록 고치기
+      const x = H.cal.days.find((v) => v.date === H.calD);
+      if ((b = el("[data-cchk]")) && x) {
+        const on = b.getAttribute("aria-pressed") !== "true";
+        b.setAttribute("aria-pressed", on);
+        return save(() => send("POST", "/api/health/check", { date: x.date, key: b.dataset.cchk, on }));
+      }
+      if ((b = el("[data-cgym]")) && x) return save(() => send("POST", "/api/health/workout", { date: x.date, done: b.dataset.cgym === "1" }), b.dataset.cgym === "1" ? "운동 완료로 표시했어요" : "완료를 취소했어요");
+      if ((b = el("[data-cmid]")) && x) { if (!H.rc) recipes().catch(() => {}); const m = x.meal_list[+b.dataset.cmid]; return mealSheet(m.slot, null, null, { date: x.date, meal: m }); }
+      if ((b = el("[data-cmeal]")) && x) { if (!H.rc) recipes().catch(() => {}); return mealSheet(b.dataset.cmeal, null, null, { date: x.date }); }
+    }
     if ((b = el("[data-rc]"))) return recipeSheet(b.dataset.rc);
     if ((b = el("[data-rt]"))) { H.rt = b.dataset.rt; return draw(); }
     if ((b = el("[data-act]"))) return ({ recipe: () => recipeEdit(0), goal: goalSheet, manage: manageSheet, import: importPick, plan: planSheet, lab: () => labSheet(0), follow: () => followSheet(0), med: () => medSheet(-1) }[b.dataset.act] || (() => {}))();
@@ -536,7 +614,7 @@
 
   pages.health = {
     async mount(h) {
-      H.sub = ["today", "body", "workout", "meal", "checkup"].includes(h.sub) ? h.sub : "today";
+      H.sub = ["today", "cal", "body", "workout", "meal", "checkup"].includes(h.sub) ? h.sub : "today";
       if (H.sub !== "workout") { H.week = ""; H.sel = ""; }
       setTop("건강관리", {});
       await load();

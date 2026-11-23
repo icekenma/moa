@@ -1309,6 +1309,13 @@ def create_app(rt, updater=None):
         rt.health.delete_follow(fid)
         return jsonify(ok=True)
 
+    @app.get("/api/health/calendar")
+    def health_calendar():
+        try:
+            return jsonify(rt.health.calendar(request.args.get("month") or None))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+
     @app.get("/api/health/recipes")
     def health_recipes():
         return jsonify(recipes=rt.health.recipes())

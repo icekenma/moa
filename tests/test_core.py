@@ -3127,3 +3127,38 @@ def test_health_recipes_and_meals(rt):
     assert c.get("/api/health/recipes").status_code == 200
     assert c.post("/api/health/meal", json={"slot": "점심", "menu": ""}).status_code == 400
     assert "애호박 고추장찌개" in [x["title"] for x in h.export()["recipes"]]
+
+
+def test_health_calendar_shows_what_was_done_each_day(rt):
+    """달력: 날마다 한 일(체크·운동·끼니·신체)과 경험치가 레벨 셈과 같은 식으로 찍힌다. 쓰기 전 날은 '빠짐'으로 만들지 않고, 앞날은 계획만."""
+    from datetime import date
+    from moa.health import Health
+    h = Health(rt.db, today=lambda: date(2026, 11, 24))                   # 화요일
+    c = h.cfg()
+    for hb in c["habits"]:
+        h.set_check({"date": "2026-11-23", "key": hb["id"], "on": True})
+    h.set_workout({"date": "2026-11-23", "done": True, "rpe": 7})
+    h.save_meal({"date": "2026-11-23", "slot": "점심", "menu": "불고기 덮밥", "tags": ["채소", "단백질"]})
+    h.save_meal({"date": "2026-11-23", "slot": "저녁", "menu": "두부김치", "tags": ["과식"]})
+    h.save_body({"date": "2026-11-20", "weight": 80.0})
+    h.save_body({"date": "2026-11-24", "weight": 79.4})
+    h.set_check({"date": "2026-11-24", "key": c["habits"][0]["id"], "on": True})
+    C = h.calendar("2026-11")
+    assert C["title"] == "2026년 11월" and C["lead"] == 6 and len(C["days"]) == 30 and C["this_month"] and C["since"] == "2026-11-20"   # 11/1은 일요일
+    D = {x["d"]: x for x in C["days"]}
+    n = len(c["habits"])
+    d23 = D[23]
+    assert d23["gym"] == "done" and d23["clear"] and d23["lv"] == 4 and d23["checks"] == d23["need"] == n and d23["grades"] == ["균형", "가끔"]
+    assert d23["xp"] == 10 * n + 40 + 10 + 10 * 2 + 5 + 20 and d23["workout"]["rpe"] == 7 and [m["menu"] for m in d23["meal_list"]] == ["불고기 덮밥", "두부김치"]
+    assert all(x["on"] for x in d23["check_list"]) and D[24]["today"] and D[24]["body_rec"]["weight"] == 79.4 and D[24]["xp"] == 10 + 15 and D[24]["lv"] == 1
+    assert D[10]["gym"] in ("", "rest") and D[10]["xp"] == 0 and D[10]["lv"] == 0                       # 첫 기록(11/20) 전은 빠짐이 아니다
+    miss = [x["d"] for x in C["days"] if x["gym"] == "miss"]
+    assert miss and all(20 <= d_ < 24 for d_ in miss) and D[25]["future"] and D[25]["gym"] in ("plan", "rest") and D[25]["workout"]["plan"]
+    S = C["sum"]
+    assert S["workouts"] == 1 and S["clears"] == 1 and S["meals"] == 2 and S["good"] == 1 and S["body"] == 2 and S["active"] == 3 and S["streak"] == 2
+    assert S["xp"] == sum(x["xp"] for x in C["days"]) == h.overview()["rpg"]["total"] and S["weight"] == {"first": 80.0, "last": 79.4, "diff": -0.6}
+    assert C["prev"] is None and C["next"] == "2026-12" and h.calendar("2026-12")["next"] is None and h.calendar("2026-12")["prev"] == "2026-11"
+    with pytest.raises(ValueError):
+        h.calendar("2026-13")
+    cl = create_app(rt).test_client()
+    assert cl.get("/api/health/calendar?month=2026-11").status_code == 200 and cl.get("/api/health/calendar?month=x").status_code == 400

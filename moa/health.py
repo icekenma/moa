@@ -640,7 +640,7 @@ class Health:
     # ---------- 달력: 날마다 무엇을 했는지 ----------
     def calendar(self, month=None):
         """한 달 달력. 칸마다 찍을 표시(운동·체크·끼니·신체·경험치)와, 날짜를 눌렀을 때 보일 그날 내역을 함께 준다.
-        앞날은 계획만 보여 준다. '운동 빠짐'은 첫 기록이 생긴 날부터만 센다(쓰기 전 날들을 빠진 날로 만들지 않는다)."""
+        앞날은 계획만 보여 준다. '운동 빠짐'은 체크·운동·끼니를 쓰기 시작한 날부터만 센다(쓰기 전 날들을 빠진 날로 만들지 않는다)."""
         t = self._today()
         try:
             y, m = (int(x) for x in str(month or t.isoformat()[:7]).split("-")[:2])
@@ -658,6 +658,8 @@ class Health:
         rec = self._daymap(a, b)
         since = min((r["d"] for r in self.db.q("""SELECT MIN(date) d FROM hl_check UNION ALL SELECT MIN(date) FROM hl_workout
                      UNION ALL SELECT MIN(date) FROM hl_body UNION ALL SELECT MIN(date) FROM hl_meal""") if r["d"]), default=None)
+        # '빠짐'은 체크·운동·끼니를 쓰기 시작한 날부터만(예전 체중을 나중에 넣어도 그 사이가 빠진 날이 되지 않게)
+        began = min((r["d"] for r in self.db.q("SELECT MIN(date) d FROM hl_check UNION ALL SELECT MIN(date) FROM hl_workout UNION ALL SELECT MIN(date) FROM hl_meal") if r["d"]), default=None)
         body = {r["date"]: r for r in self.db.q("SELECT * FROM hl_body WHERE date BETWEEN ? AND ?", (a, b))}
         meals = {}
         for r in self.db.q("SELECT * FROM hl_meal WHERE date BETWEEN ? AND ? ORDER BY id", (a, b)):
@@ -678,7 +680,7 @@ class Health:
             done = bool(v["w"] and v["w"]["done"])
             future = dd > t
             xp, clear = self._day_xp(v, need_ids)
-            started = bool(since) and k >= since
+            started = bool(began) and k >= began
             gym = "done" if done else "rest" if p["rest"] else "plan" if dd >= t else "miss" if started else ""
             ms = sorted(meals.get(k, []), key=lambda x: MEAL_SLOTS.index(x["slot"]))
             on = [i_ for i_ in items if i_["id"] in v["c"]]

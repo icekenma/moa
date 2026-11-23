@@ -3140,11 +3140,12 @@ def test_health_calendar_shows_what_was_done_each_day(rt):
     h.set_workout({"date": "2026-11-23", "done": True, "rpe": 7})
     h.save_meal({"date": "2026-11-23", "slot": "점심", "menu": "불고기 덮밥", "tags": ["채소", "단백질"]})
     h.save_meal({"date": "2026-11-23", "slot": "저녁", "menu": "두부김치", "tags": ["과식"]})
-    h.save_body({"date": "2026-11-20", "weight": 80.0})
+    h.save_body({"date": "2026-11-17", "weight": 80.0})                 # 예전 체중만 넣은 날: 그 뒤가 '빠짐'이 되면 안 된다
+    h.set_check({"date": "2026-11-20", "key": c["habits"][0]["id"], "on": True})
     h.save_body({"date": "2026-11-24", "weight": 79.4})
     h.set_check({"date": "2026-11-24", "key": c["habits"][0]["id"], "on": True})
     C = h.calendar("2026-11")
-    assert C["title"] == "2026년 11월" and C["lead"] == 6 and len(C["days"]) == 30 and C["this_month"] and C["since"] == "2026-11-20"   # 11/1은 일요일
+    assert C["title"] == "2026년 11월" and C["lead"] == 6 and len(C["days"]) == 30 and C["this_month"] and C["since"] == "2026-11-17"   # 11/1은 일요일
     D = {x["d"]: x for x in C["days"]}
     n = len(c["habits"])
     d23 = D[23]
@@ -3153,9 +3154,9 @@ def test_health_calendar_shows_what_was_done_each_day(rt):
     assert all(x["on"] for x in d23["check_list"]) and D[24]["today"] and D[24]["body_rec"]["weight"] == 79.4 and D[24]["xp"] == 10 + 15 and D[24]["lv"] == 1
     assert D[10]["gym"] in ("", "rest") and D[10]["xp"] == 0 and D[10]["lv"] == 0                       # 첫 기록(11/20) 전은 빠짐이 아니다
     miss = [x["d"] for x in C["days"] if x["gym"] == "miss"]
-    assert miss and all(20 <= d_ < 24 for d_ in miss) and D[25]["future"] and D[25]["gym"] in ("plan", "rest") and D[25]["workout"]["plan"]
+    assert all(20 <= d_ < 23 for d_ in miss) and D[18]["gym"] != "miss" and D[19]["gym"] != "miss" and D[25]["future"] and D[25]["gym"] in ("plan", "rest") and D[25]["workout"]["plan"]
     S = C["sum"]
-    assert S["workouts"] == 1 and S["clears"] == 1 and S["meals"] == 2 and S["good"] == 1 and S["body"] == 2 and S["active"] == 3 and S["streak"] == 2
+    assert S["workouts"] == 1 and S["clears"] == 1 and S["meals"] == 2 and S["good"] == 1 and S["body"] == 2 and S["active"] == 4 and S["streak"] == 2
     assert S["xp"] == sum(x["xp"] for x in C["days"]) == h.overview()["rpg"]["total"] and S["weight"] == {"first": 80.0, "last": 79.4, "diff": -0.6}
     assert C["prev"] is None and C["next"] == "2026-12" and h.calendar("2026-12")["next"] is None and h.calendar("2026-12")["prev"] == "2026-11"
     with pytest.raises(ValueError):

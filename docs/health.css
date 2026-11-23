@@ -312,3 +312,18 @@ html[data-sec="health"]{--ember:#E8862E;--ember-s:#FDEBD8;--ember-d:#8A4708}
 .hq-up span{font-size:15px;font-weight:700}
 @keyframes hqUp{0%{opacity:0;transform:translate(-50%,-40%) scale(.8)}12%{opacity:1;transform:translate(-50%,-50%) scale(1.04)}18%{transform:translate(-50%,-50%) scale(1)}85%{opacity:1}100%{opacity:0;transform:translate(-50%,-56%) scale(1)}}
 @media (prefers-reduced-motion:reduce){.hq-boss:not(.dead) .hq-boss-a,.hq-up{animation:none}.hq-xp i,.hq-qb{transition:none}}
+
+/* 기구 이름 앞의 작은 사진(루틴 줄 · 홈의 오늘 쓸 기구) */
+.hl-it-pic{flex:0 0 auto;width:46px;height:46px;border-radius:12px;object-fit:cover;background:var(--hg-s);display:block}
+.hl-it-pic.none{display:grid;place-items:center;color:var(--hg)}
+.hl-items .hl-it-pic.none svg{margin:0;color:var(--hg)}
+.hl-items div{justify-content:flex-start}
+.hl-items div .hl-it-n{flex:1 1 auto;min-width:0}
+.hl-items button span:not(.hl-it-pic){text-decoration:none}
+.hl-items div span.hl-it-pic{font-size:0}
+.hq-pics{grid-column:2 / -1;display:flex;gap:8px;overflow-x:auto;padding:2px 0 4px;scrollbar-width:none}
+.hq-pics::-webkit-scrollbar{display:none}
+.hq-pics button{flex:0 0 auto;display:grid;justify-items:center;gap:3px;width:60px;padding:0;border:0;background:none;color:var(--ink2);font:inherit}
+.hq-pic{width:56px;height:56px;border-radius:14px;object-fit:cover;background:var(--hg-s);display:block}
+.hq-pic.none{display:grid;place-items:center;color:var(--hg)}
+.hq-pics small{font-size:10.5px;line-height:1.2;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

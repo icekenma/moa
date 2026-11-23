@@ -90,6 +90,8 @@
         <div class="hq-boss-t"><p>이번 주 보스</p><h3>${esc(B.name)}${B.hp ? "" : ` <em>처치!</em>`}</h3>
           <div class="hq-hp" role="img" aria-label="보스 체력 ${B.hp} / ${B.max}">${Array.from({ length: B.max }, (_, k) => `<i class="${k < B.hp ? "on" : ""}"></i>`).join("")}</div>
           <span>${B.hp ? `운동 한 번에 체력 1칸. ${B.hp}번 남았어요` : "이번 주 운동 목표를 다 채웠어요"}${B.slain ? ` · 지금까지 ${B.slain}마리` : ""}</span></div></section>`;
+    const tItems = ((d.week.days.find((x) => x.today) || {}).items || []).map((it) => [gymOf(it[0]), it]).filter(([g2]) => g2);
+    const pics = tItems.length ? `<div class="hq-pics" aria-label="오늘 쓸 기구">${tItems.slice(0, 6).map(([g2, it]) => `<button type="button" data-gym="${g2.id}" aria-label="${esc(it[0])} 기구 안내 보기">${gymPic(g2, d, "hq-pic")}<small>${esc(g2.name.split(" (")[0].split("(")[0])}</small></button>`).join("")}</div>` : "";
     const row = (q) => {
       const cls = `hq-q ${q.on ? "on" : ""} ${q === next ? "next" : ""} k-${q.kind}`, tm = `<time>${q.t || ""}</time>`;
       const txt = `<span class="hq-qt"><b>${esc(q.title)}</b>${q.sub ? `<small>${esc(q.sub)}</small>` : ""}</span>`;
@@ -97,7 +99,7 @@
       const box = `<span class="hq-box">${q.on ? TICK : ""}</span>`, xp = `<em class="hq-rw">+${q.xp}</em>`;
       if (q.kind === "body") return `<li class="${cls}">${tm}<a class="hq-qb" href="#health/body">${box}${txt}${xp}</a></li>`;
       return `<li class="${cls}">${tm}<button type="button" class="hq-qb" data-check="${esc(q.id)}" aria-pressed="${q.on}">${box}${txt}${xp}</button>
-        ${q.kind === "gym" ? `<a class="hq-go" href="#health/workout" aria-label="오늘 루틴 보기">루틴 ${NEXT}</a>` : ""}</li>`;
+        ${q.kind === "gym" ? `<a class="hq-go" href="#health/workout" aria-label="오늘 루틴 보기">루틴 ${NEXT}</a>${pics}` : ""}</li>`;
     };
     const nx = d.follows.find((f) => f.next);
     return `${head(`${+d.today.slice(5, 7)}월 ${+d.today.slice(8, 10)}일 ${d.dow}요일${mode ? ` · ${mode}` : ""}`, "오늘의 모험",
@@ -201,8 +203,8 @@
         aria-label="${x.dow}요일 ${esc(x.name || plan.days[k].name)}${x.done ? ", 완료" : ""}" class="${x.today ? "today" : ""}"><span>${x.dow}</span><b>${+x.date.slice(8, 10)}</b><i class="${x.done ? "on" : ""}"></i></button>`).join("")}</div>
       <section class="hl-card"><div class="hl-sec-h"><div><p class="hl-over">${day.dow}요일${day.today ? " · 오늘" : ""}${day.mode ? ` · ${esc(day.mode)}` : ""}</p><h2 class="big">${esc(p.name)}</h2></div>${p.time ? `<span class="hl-chip">${esc(p.time)}</span>` : ""}</div>
         <div class="hl-items">${p.items.map((it) => { const g = gymOf(it[0]); return g
-          ? `<button type="button" data-gym="${g.id}" aria-label="${esc(it[0])} ${esc(it[1] || "")}, 기구 안내 보기"><span>${esc(it[0])}</span><b>${esc(it[1] || "")}</b>${NEXT}</button>`
-          : `<div><span>${esc(it[0])}</span><b>${esc(it[1] || "")}</b></div>`; }).join("") || `<div><span class="dim">루틴이 비어 있어요</span></div>`}</div>
+          ? `<button type="button" data-gym="${g.id}" aria-label="${esc(it[0])} ${esc(it[1] || "")}, 기구 안내 보기">${gymPic(g, d, "hl-it-pic")}<span>${esc(it[0])}</span><b>${esc(it[1] || "")}</b>${NEXT}</button>`
+          : `<div><span class="hl-it-pic none" aria-hidden="true">${svg('<circle cx="12" cy="5" r="2.2"/><path d="M5 21l4-7 3 2 3-2 4 7M7 11l5-2 5 2"/>', 22, 1.7)}</span><span class="hl-it-n">${esc(it[0])}</span><b>${esc(it[1] || "")}</b></div>`; }).join("") || `<div><span class="dim">루틴이 비어 있어요</span></div>`}</div>
         <button type="button" class="hl-btn ${day.done ? "done" : "green"} wide" data-done="${day.done ? 0 : 1}" ${day.future ? "disabled" : ""}>${day.future ? "아직 오지 않은 날이에요" : day.done ? "완료됨 · 취소하려면 누르기" : p.rest ? "오늘 할 일 완료" : "운동 완료"}</button></section>
       <section class="hl-card"><div class="hl-sec-h"><h2>힘들었던 정도</h2><span>대화는 되고 노래는 힘들면 6~7</span></div>
         <div class="hl-rpe" role="group" aria-label="힘들었던 정도 1부터 10">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((v) =>

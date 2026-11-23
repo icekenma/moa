@@ -356,10 +356,11 @@
     return best;
   }
   const gymDays = (d, id) => d.cfg.plan.days.map((p, i) => (p.items.some((it) => (gymOf(it[0]) || {}).id === id) ? "월화수목금토일"[i] : "")).filter(Boolean);
-  const gymPic = (g, d, cls) => (d.photos && d.photos[g.id] ? `<img class="${cls}" data-ph="${g.id}" data-ver="${esc(d.photos[g.id])}" alt="${esc(g.name)} 사진">` : `<span class="${cls} none" aria-hidden="true">${svg(GYM_ICON[g.icon] || "", 26, 1.7)}</span>`);
+  const gymPic = (g, d, cls) => (d.photos && d.photos[g.id] ? `<img class="${cls}" data-ph="${g.id}" data-ver="${esc(d.photos[g.id])}" alt="${esc(g.name)} 사진">`
+    : g.art ? `<span class="${cls} art" aria-hidden="true">${gymArt(g.art)}</span>` : `<span class="${cls} none" aria-hidden="true">${svg(GYM_ICON[g.icon] || "", 26, 1.7)}</span>`);
   function gymList(d) {
-    const n = Object.keys(d.photos || {}).filter((k) => GYM.some((g) => g.id === k)).length;
-    return `<p class="hl-hint">기구를 누르면 맞추는 법과 하는 법이 나와요. 사진은 기구마다 직접 찍어 넣을 수 있어요${n ? ` (${n} / ${GYM.length}개 넣음)` : ""}.</p>
+    const mach = GYM.filter((g) => !g.art), n = Object.keys(d.photos || {}).filter((k) => mach.some((g) => g.id === k)).length;
+    return `<p class="hl-hint">기구를 누르면 맞추는 법과 하는 법이 나와요. 사진은 기구마다 직접 찍어 넣을 수 있어요${n ? ` (${n} / ${mach.length}개 넣음)` : ""}. 플랭크·스트레칭 같은 맨몸 동작은 그림으로 보여 줘요.</p>
       ${GYM_CATS.map(([cat, label]) => `<section class="hl-sec"><div class="hl-sec-h"><h2>${label}</h2><span>${GYM.filter((g) => g.cat === cat).length}가지</span></div>
         <div class="hl-card flush">${GYM.filter((g) => g.cat === cat).map((g) => { const days = gymDays(d, g.id); return `<button type="button" class="hl-gym" data-gym="${g.id}">${gymPic(g, d, "hl-gym-ph")}
           <span class="hl-lab-t"><b>${esc(g.name)}</b><small>${esc(g.aka)} · ${esc(g.target)}</small></span>${days.length ? `<em>${days.join("·")}</em>` : ""}</button>`; }).join("")}</div></section>`).join("")}`;
@@ -399,21 +400,44 @@
     };
     inp.click();
   }
+  // 버티기 타이머: 고른 초만큼 거꾸로 센다. 창을 닫으면 멈춘다(화면에서 사라진 것을 보고 스스로 그만둔다)
+  function gymTimer(root, sec0) {
+    let sec = sec0, left = 0, iv = null, round = 0;
+    const face = $("#gyT", root), sub = $("#gyTs", root), go = $("#gyGo", root), box = $("#gyTimer", root);
+    const stop = (msg) => { clearInterval(iv); iv = null; box.classList.remove("run"); go.textContent = "시작"; face.textContent = sec; sub.textContent = msg || "초 · 버틸 시간을 고르고 시작"; };
+    root.querySelectorAll("[data-sec]").forEach((b) => { b.onclick = () => { if (iv) return; sec = +b.dataset.sec; root.querySelectorAll("[data-sec]").forEach((x) => x.setAttribute("aria-pressed", x === b)); face.textContent = sec; }; });
+    go.onclick = () => {
+      if (iv) return stop();
+      left = sec; round += 1; box.classList.add("run"); go.textContent = "멈추기"; face.textContent = left; sub.textContent = `초 남음 · ${round}번째`;
+      iv = setInterval(() => {
+        if (!box.isConnected || !sheet.open) return clearInterval(iv);
+        left -= 1; face.textContent = Math.max(0, left);
+        if (left <= 0) { try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch (e) { /* 진동이 없는 기기 */ } stop(`초 · ${round}번 했어요. 숨 고르고 다시`); }
+      }, 1000);
+    };
+  }
   function gymSheet(id) {
     const g = GYM.find((x) => x.id === id), d = H.d;
     if (!g) return;
     const has = !!(d.photos && d.photos[g.id]), days = gymDays(d, g.id), li = (a) => a.map((x) => `<li>${esc(x)}</li>`).join("");
     openSheet(g.name, `<div class="hl-guide">
-      <div class="hl-guide-ph">${has ? `<img data-ph="${g.id}" data-full="1" data-ver="${esc(d.photos[g.id])}" alt="${esc(g.name)} 사진">` : `<span class="none">${svg(GYM_ICON[g.icon] || "", 54, 1.4)}<small>아직 사진이 없어요</small></span>`}</div>
+      <div class="hl-guide-ph${!has && g.art ? " art" : ""}">${has ? `<img data-ph="${g.id}" data-full="1" data-ver="${esc(d.photos[g.id])}" alt="${esc(g.name)} 사진">`
+        : g.art ? `<span class="art" role="img" aria-label="${esc(g.name)} 자세 그림">${gymArt(g.art)}</span>` : `<span class="none">${svg(GYM_ICON[g.icon] || "", 54, 1.4)}<small>아직 사진이 없어요</small></span>`}</div>
       ${Object.keys(d.photos || {}).filter((k) => k.startsWith(g.id + "_")).sort().map((k) => `<div class="hl-guide-ph"><img data-ph="${k}" data-full="1" data-ver="${esc(d.photos[k])}" alt="${esc(g.name)} 사진 더"></div>`).join("")}
-      <div class="hl-row2"><button type="button" class="btn ${has ? "soft" : "dark"} wide" id="hlPic">${has ? "사진 바꾸기" : "사진 넣기"}</button>${has ? `<button type="button" class="btn soft" id="hlPicDel">사진 지우기</button>` : ""}</div>
+      ${g.art && !has ? "" : `<div class="hl-row2"><button type="button" class="btn ${has ? "soft" : "dark"} wide" id="hlPic">${has ? "사진 바꾸기" : "사진 넣기"}</button>${has ? `<button type="button" class="btn soft" id="hlPicDel">사진 지우기</button>` : ""}</div>`}
       <p class="hl-guide-tag"><b>${esc(g.aka)}</b><span>${esc(g.target)}</span>${days.length ? `<em>내 루틴 ${days.join("·")}요일</em>` : ""}</p>
       <p class="hl-guide-what">${esc(g.what)}</p>
-      <h3>자리 맞추기</h3><ul>${li(g.setup)}</ul>
+      ${g.timer ? `<div class="gy-timer" id="gyTimer"><div class="gy-t-face" aria-live="off"><b id="gyT">${g.timer[1] || g.timer[0]}</b><small id="gyTs">초 · 버틸 시간을 고르고 시작</small></div>
+        <div class="gy-t-pick" role="group" aria-label="시간 고르기">${g.timer.map((s) => `<button type="button" data-sec="${s}" aria-pressed="${s === (g.timer[1] || g.timer[0])}">${s}초</button>`).join("")}</div>
+        <button type="button" class="btn dark wide" id="gyGo">시작</button></div>` : ""}
+      ${g.moves ? `<h3>${g.id === "stretch" ? "차례로 따라 하기" : "내 수준에 맞게"}</h3><ol class="gy-moves">${g.moves.map((m, i) => `<li><span class="gy-mv-art" aria-hidden="true">${gymArt(m.art)}</span><div><b>${g.id === "stretch" ? `${i + 1}. ` : ""}${esc(m.name)}</b><p>${esc(m.how)}</p><em>${esc(m.time)}</em></div></li>`).join("")}</ol>` : ""}
+      <h3>${g.art ? "준비" : "자리 맞추기"}</h3><ul>${li(g.setup)}</ul>
       <h3>하는 법</h3><ol>${li(g.how)}</ol>
       <h3>처음에는</h3><p>${esc(g.start)}</p>
-      <h3>조심할 점</h3><ul class="care">${li(g.care)}</ul></div>`, (root) => {
+      <h3>조심할 점</h3><ul class="care">${li(g.care)}</ul>
+      ${g.art && !has ? `<button type="button" class="hl-link" id="hlPic">내 사진으로 바꾸기</button>` : ""}</div>`, (root) => {
       hydrate(root);
+      if (g.timer) gymTimer(root, g.timer[1] || g.timer[0]);
       $("#hlPic", root).onclick = () => pickPhoto(g);
       if (has) $("#hlPicDel", root).onclick = async (e) => { if (!confirmTap(e.currentTarget, "한 번 더 누르면 지워요")) return; if (await save(() => send("DELETE", `/api/health/photo/${g.id}`), "지웠어요")) gymSheet(g.id); };
     });

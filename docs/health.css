@@ -470,3 +470,30 @@ html[data-sec="health"]{--ember:#E8862E;--ember-s:#FDEBD8;--ember-d:#8A4708}
 .cl-meal{display:flex;align-items:center;gap:8px;width:100%;min-height:44px;padding:6px 12px;border-radius:12px;border:1px solid var(--line);background:#FAFBF8;font:inherit;color:inherit;text-align:left}
 .cl-meal span{font-size:12px;font-weight:700;color:var(--ink3);flex:0 0 auto}
 .cl-meal b{flex:1 1 auto;min-width:0;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ===== 맨몸 동작: 사진 대신 자세 그림, 따라 하기 목록, 버티기 타이머 ===== */
+.gy-art{display:block;width:100%;height:auto}
+.hl-it-pic.art,.hq-pic.art,.hl-gym-ph.art{display:flex;align-items:center;justify-content:center;color:var(--hg-d);background:var(--hg-s);overflow:hidden;padding:0 2px}
+.hl-it-pic.art{flex:0 0 46px;width:46px;max-width:46px}
+.hq-pic.art,.hl-gym-ph.art{flex:0 0 56px;width:56px;max-width:56px}
+.hl-it-pic.art .gy-art,.hq-pic.art .gy-art,.hl-gym-ph.art .gy-art{flex:0 0 auto;width:100%;height:auto}
+.hl-guide-ph.art{background:var(--hg-s);min-height:0}
+.hl-guide-ph .art{display:block;padding:14px 18px 6px;color:var(--hg-d)}
+.gy-moves{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.gy-moves li{display:grid;grid-template-columns:104px minmax(0,1fr);gap:12px;align-items:center;padding:10px;border-radius:16px;border:1px solid var(--line);background:#fff}
+.gy-mv-art{display:block;border-radius:12px;background:var(--hg-s);color:var(--hg-d);padding:4px 2px 0}
+.gy-moves b{font-size:14.5px}
+.gy-moves p{margin:2px 0 4px;font-size:13px;line-height:1.5;color:var(--ink2)}
+.gy-moves em{font-style:normal;display:inline-block;font-size:12px;font-weight:800;padding:2px 8px;border-radius:999px;background:var(--ember-s);color:var(--ember-d)}
+.gy-timer{display:grid;gap:10px;padding:14px;border-radius:18px;background:#17201B;color:#F4F5F1}
+.gy-t-face{display:flex;align-items:baseline;gap:8px}
+.gy-t-face b{font-size:52px;font-weight:800;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums;min-width:1.3em}
+.gy-t-face small{font-size:12.5px;color:#B9C4BC}
+.gy-timer.run .gy-t-face b{color:var(--mint)}
+.gy-t-pick{display:flex;gap:6px}
+.gy-t-pick button{flex:1;min-height:40px;border-radius:12px;border:1px solid rgba(255,255,255,.22);background:transparent;color:#F4F5F1;font:inherit;font-size:13.5px;font-weight:700}
+.gy-t-pick button[aria-pressed="true"]{background:#F4F5F1;border-color:#F4F5F1;color:#17201B}
+.gy-timer.run .gy-t-pick{opacity:.4}
+.gy-timer .btn.dark{background:var(--mint);color:#10301F}
+.hl-items .hl-it-pic.art svg{margin:0;color:var(--hg-d)}
+.hl-items button .hl-it-pic{flex:0 0 46px}

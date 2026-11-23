@@ -423,7 +423,7 @@
     openSheet(g.name, `<div class="hl-guide">
       <div class="hl-guide-ph${!has && g.art ? " art" : ""}">${has ? `<img data-ph="${g.id}" data-full="1" data-ver="${esc(d.photos[g.id])}" alt="${esc(g.name)} 사진">`
         : g.art ? `<span class="art" role="img" aria-label="${esc(g.name)} 자세 그림">${gymArt(g.art)}</span>` : `<span class="none">${svg(GYM_ICON[g.icon] || "", 54, 1.4)}<small>아직 사진이 없어요</small></span>`}</div>
-      ${Object.keys(d.photos || {}).filter((k) => k.startsWith(g.id + "_")).sort().map((k) => `<div class="hl-guide-ph"><img data-ph="${k}" data-full="1" data-ver="${esc(d.photos[k])}" alt="${esc(g.name)} 사진 더"></div>`).join("")}
+      ${Object.keys(d.photos || {}).filter((k) => k.startsWith(g.id + "_")).sort().map((k) => `<div class="hl-guide-ph"><img data-ph="${k}" data-full="1" data-ver="${esc(d.photos[k])}" alt="${esc(g.name)} ${g.art ? "하는 곳 사진" : "사진 더"}"></div>`).join("")}
       ${g.art && !has ? "" : `<div class="hl-row2"><button type="button" class="btn ${has ? "soft" : "dark"} wide" id="hlPic">${has ? "사진 바꾸기" : "사진 넣기"}</button>${has ? `<button type="button" class="btn soft" id="hlPicDel">사진 지우기</button>` : ""}</div>`}
       <p class="hl-guide-tag"><b>${esc(g.aka)}</b><span>${esc(g.target)}</span>${days.length ? `<em>내 루틴 ${days.join("·")}요일</em>` : ""}</p>
       <p class="hl-guide-what">${esc(g.what)}</p>

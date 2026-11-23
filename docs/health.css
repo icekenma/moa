@@ -497,3 +497,6 @@ html[data-sec="health"]{--ember:#E8862E;--ember-s:#FDEBD8;--ember-d:#8A4708}
 .gy-timer .btn.dark{background:var(--mint);color:#10301F}
 .hl-items .hl-it-pic.art svg{margin:0;color:var(--hg-d)}
 .hl-items button .hl-it-pic{flex:0 0 46px}
+
+.ml-cnt{font-size:12px;font-weight:700;color:var(--ink3);padding:10px 0 2px}
+.ml-book>.ml-more{justify-content:center;min-height:48px;font-weight:800;color:var(--hg);border-top:1px solid #EEF0EB}

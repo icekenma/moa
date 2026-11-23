@@ -84,3 +84,15 @@ SEED = [
      "steps": ["닭가슴살을 해동해 소금·후추로 밑간한다.", "중불에 앞뒤 5~6분씩 굽고 뚜껑을 덮어 속까지 익힌다.", "브로콜리를 데쳐 곁들인다."],
      "memo": "코스트코 식단 메뉴. 양념간장(찍먹용)을 곁들이면 덜 퍽퍽함.", "from": "코스트코 식단"},
 ]
+
+# 처음 자료 16개의 분류(요리책 꼬리표 맨 앞에 붙는다)
+CAT = {"eomuk": "반찬", "gyeran": "반찬", "kongnamul": "반찬", "gochu": "반찬", "oi": "반찬", "myeongran": "국·찌개", "dakkal": "밥·면",
+       "kimchibap": "밥·면", "eohyang": "메인", "suyuk": "메인", "sauce1": "양념장", "sauce2": "양념장", "sauce3": "양념장",
+       "bulgogi": "밥·면", "tofukimchi": "메인", "chicken": "메인"}
+for _r in SEED:
+    _r["tags"] = [CAT[_r["key"]]] + [t for t in _r["tags"] if t != CAT[_r["key"]]]
+
+from .recipes_home import CATS, HOME  # noqa: E402  집에서 많이 해 먹는 레시피 118개
+
+SEED = SEED + HOME
+

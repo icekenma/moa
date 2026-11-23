@@ -451,8 +451,14 @@ class Health:
     # ---------- 식단: 요리책 ----------
     def _seed_recipes(self):
         """지난 대화에서 만든 레시피를 처음 한 번 넣는다. 사용자가 지운 처음 자료는 다시 넣지 않는다."""
-        from .recipes import SEED
-        have = {r["key"] for r in self.db.q("SELECT key FROM hl_recipe WHERE key IS NOT NULL")}
+        from .recipes import SEED, CATS
+        rows = {r["key"]: r for r in self.db.q("SELECT id, key, tags FROM hl_recipe WHERE key IS NOT NULL")}
+        have = set(rows)
+        cat_of = {r["key"]: r["tags"][0] for r in SEED}
+        for k, row in rows.items():                    # 예전에 넣은 처음 자료에 분류가 없으면 붙인다(사용자가 바꾼 꼬리표는 그대로 두고 앞에만)
+            tg = json.loads(row["tags"] or "[]")
+            if k in cat_of and not any(t in CATS for t in tg):
+                self.db.x("UPDATE hl_recipe SET tags=? WHERE id=?", (json.dumps([cat_of[k]] + tg, ensure_ascii=False), row["id"]))
         gone = set(self.db.get_setting("health_recipe_gone") or [])
         now = datetime.now().isoformat(timespec="seconds")
         for r in SEED:
@@ -505,7 +511,7 @@ class Health:
         """오늘 뭐 먹지: 균형 잡힌 요리(채소+단백질)를 먼저, 최근 3일에 먹은 것은 뒤로. 날마다 순서가 바뀐다."""
         t = t or self._today()
         recent = {r["recipe"] for r in self.db.q("SELECT recipe FROM hl_meal WHERE date>=? AND recipe IS NOT NULL", ((t - timedelta(days=3)).isoformat(),))}
-        rs = [r for r in self.recipes() if "양념장" not in r["tags"] and "밑반찬" not in r["tags"]]
+        rs = [r for r in self.recipes() if not {"양념장", "밑반찬", "반찬"} & set(r["tags"])]
         seed = t.toordinal()
         rs.sort(key=lambda r: (r["id"] in recent, {"균형": 0, "": 1, "가끔": 2}[r["grade"]], (r["id"] * 7919 + seed) % 97))
         return [{"id": r["id"], "title": r["title"], "grade": r["grade"], "time": r["time"], "tags": r["tags"]} for r in rs[:n]]

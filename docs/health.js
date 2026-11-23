@@ -166,13 +166,19 @@
         <div class="ml-sug">${d.suggest.map((r) => `<button type="button" data-rc="${r.id}"><em class="ml-g ${(GRADE[r.grade] || [""])[0]}">${(GRADE[r.grade] || ["", ""])[1] || "한 끼"}</em><b>${esc(r.title)}</b><small>${esc(r.time || "")}</small></button>`).join("")}</div></section>` : ""}
       <section class="hl-sec" id="mlBook"><div class="hl-sec-h"><h2>요리책</h2><button type="button" class="hl-link" data-act="recipe">+ 레시피</button></div>${view}</section>`;
   }
+  // 요리책: 분류 칩(밥·면, 국·찌개 …)과 '균형 접시'·'간편' 칩으로 거르고, 이름·재료·꼬리표로 찾는다. 많으니 30개씩 보여 준다
+  const RCATS = ["밥·면", "국·찌개", "메인", "반찬", "샐러드", "양념장"], RPAGE = 30;
   function bookHtml(list) {
-    const tags = [...new Set(list.flatMap((r) => r.tags))].slice(0, 10), q = (H.rq || "").trim(), tg = H.rt || "";
-    const f = list.filter((r) => (!tg || r.tags.includes(tg)) && (!q || r.title.includes(q) || r.ingredients.join(" ").includes(q)));
-    return `<input class="ml-q" id="mlQ" type="search" placeholder="요리 이름이나 재료로 찾기" value="${esc(q)}" aria-label="레시피 찾기" autocomplete="off">
-      <div class="ml-chips" role="group" aria-label="꼬리표로 거르기"><button type="button" data-rt="" aria-pressed="${!tg}">전체 ${list.length}</button>${tags.map((t) => `<button type="button" data-rt="${esc(t)}" aria-pressed="${tg === t}">${esc(t)}</button>`).join("")}</div>
-      <div class="ml-book">${f.map((r) => `<button type="button" data-rc="${r.id}"><span class="ml-bt"><b>${r.fav ? "★ " : ""}${esc(r.title)}</b><small>${esc([r.time, r.serves, r.cooked ? `${r.cooked}번 해 먹음` : ""].filter(Boolean).join(" · "))}</small></span>
-        ${r.grade ? `<em class="ml-g ${GRADE[r.grade][0]}">${GRADE[r.grade][1]}</em>` : ""}${NEXT}</button>`).join("") || `<div class="hl-hint">찾는 레시피가 없어요</div>`}</div>`;
+    const q = (H.rq || "").trim(), tg = H.rt || "", n = H.rn || RPAGE;
+    const chips = RCATS.filter((c) => list.some((r) => r.tags.includes(c))).concat(["균형 접시", "간편", "즐겨찾기"]);
+    const hit = (r) => (!tg || (tg === "균형 접시" ? r.grade === "균형" : tg === "즐겨찾기" ? r.fav : r.tags.includes(tg)))
+      && (!q || r.title.includes(q) || r.ingredients.join(" ").includes(q) || r.tags.some((t) => t.includes(q)));
+    const f = list.filter(hit), cat = (r) => r.tags.find((t) => RCATS.includes(t));
+    return `<input class="ml-q" id="mlQ" type="search" placeholder="요리 이름이나 재료로 찾기 (예: 두부, 닭)" value="${esc(q)}" aria-label="레시피 찾기" autocomplete="off">
+      <div class="ml-chips" role="group" aria-label="종류로 거르기"><button type="button" data-rt="" aria-pressed="${!tg}">전체 ${list.length}</button>${chips.map((t) => `<button type="button" data-rt="${esc(t)}" aria-pressed="${tg === t}">${esc(t)}</button>`).join("")}</div>
+      <div class="ml-book">${(tg || q ? `<p class="ml-cnt">${f.length}개</p>` : "") + f.slice(0, n).map((r) => `<button type="button" data-rc="${r.id}"><span class="ml-bt"><b>${r.fav ? "★ " : ""}${esc(r.title)}</b><small>${esc([cat(r), r.time, r.serves, r.cooked ? `${r.cooked}번 해 먹음` : ""].filter(Boolean).join(" · "))}</small></span>
+        ${r.grade ? `<em class="ml-g ${GRADE[r.grade][0]}">${GRADE[r.grade][1]}</em>` : ""}${NEXT}</button>`).join("") || `<div class="hl-hint">찾는 레시피가 없어요</div>`}
+        ${f.length > n ? `<button type="button" class="ml-more" data-rmore="1">${f.length - n}개 더 보기</button>` : ""}</div>`;
   }
   async function recipeSheet(id) {
     const r = (await recipes()).find((x) => x.id === +id);
@@ -608,7 +614,8 @@
       if ((b = el("[data-cmeal]")) && x) { if (!H.rc) recipes().catch(() => {}); return mealSheet(b.dataset.cmeal, null, null, { date: x.date }); }
     }
     if ((b = el("[data-rc]"))) return recipeSheet(b.dataset.rc);
-    if ((b = el("[data-rt]"))) { H.rt = b.dataset.rt; return draw(); }
+    if ((b = el("[data-rt]"))) { H.rt = b.dataset.rt; H.rn = 0; return draw(); }
+    if ((b = el("[data-rmore]"))) { H.rn = (H.rn || RPAGE) + RPAGE * 2; return draw(); }
     if ((b = el("[data-act]"))) return ({ recipe: () => recipeEdit(0), goal: goalSheet, manage: manageSheet, import: importPick, plan: planSheet, lab: () => labSheet(0), follow: () => followSheet(0), med: () => medSheet(-1) }[b.dataset.act] || (() => {}))();
     if ((b = el("[data-tab]"))) { H.tab = b.dataset.tab; return draw(); }
     if ((b = el("[data-wtab]"))) { H.wtab = b.dataset.wtab; draw(); return window.scrollTo(0, 0); }
@@ -648,7 +655,7 @@
       host.addEventListener("submit", (e) => { onSubmit(e).catch((err) => toast(err.message, true)); });
       host.addEventListener("input", (e) => {                       // 요리책 찾기: 글자를 칠 때마다 목록만 다시 그린다
         if (e.target.id !== "mlQ" || !H.rc) return;
-        H.rq = e.target.value;
+        H.rq = e.target.value; H.rn = 0;
         const box = $("#mlBook .ml-book"), tmp = document.createElement("div");
         tmp.innerHTML = bookHtml(H.rc);
         if (box) box.replaceWith(tmp.querySelector(".ml-book"));

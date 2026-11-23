@@ -3102,6 +3102,10 @@ def test_health_recipes_and_meals(rt):
     assert len(rs) == len(SEED) and {r["title"] for r in rs} >= {"어묵볶음", "명란젓 맑은국", "닭칼국수", "만능 고추장 양념장"}
     by = {r["key"]: r for r in rs}
     assert by["bulgogi"]["grade"] == "균형" and by["eomuk"]["grade"] == "가끔" and by["eomuk"]["steps"][0].startswith("팬에")
+    from moa.recipes import CATS
+    assert len(SEED) >= 130 and len({r["key"] for r in SEED}) == len(SEED)                          # 처음 16개 + 집밥 118개, 키 중복 없음
+    assert all(r["tags"][0] in CATS and len(r["ingredients"]) >= 2 and len(r["steps"]) >= 2 for r in rs)
+    assert by["kimchijjigae"]["tags"][0] == "국·찌개" and by["eomuk"]["tags"][0] == "반찬" and sum(r["grade"] == "균형" for r in rs) >= 40
     h.delete_recipe(by["eomuk"]["id"])
     Health(rt.db, today=lambda: date(2026, 11, 23))                    # 다시 켜도 지운 처음 자료는 돌아오지 않는다
     assert "eomuk" not in {r["key"] for r in h.recipes()}
@@ -3120,7 +3124,7 @@ def test_health_recipes_and_meals(rt):
     w = h.meal_week()
     assert w["n"] == 1 and w["tags"]["늦은 식사"] == 1 and w["days"][-1]["today"] and w["days"][-1]["grades"] == ["가끔"]
     sg = h.suggest()
-    assert len(sg) == 3 and all(x["id"] != rid for x in sg) and sg[0]["grade"] == "균형"        # 최근에 먹은 것은 뒤로, 균형 접시 먼저
+    assert len(sg) == 3 and all(x["id"] != rid for x in sg) and sg[0]["grade"] == "균형" and not any("반찬" in x["tags"] for x in sg)        # 최근에 먹은 것은 뒤로, 균형 접시 먼저
     h.delete_meal(m)
     assert h.meals(date(2026, 11, 23)) == []
     c = create_app(rt).test_client()
@@ -3163,3 +3167,20 @@ def test_health_calendar_shows_what_was_done_each_day(rt):
         h.calendar("2026-13")
     cl = create_app(rt).test_client()
     assert cl.get("/api/health/calendar?month=2026-11").status_code == 200 and cl.get("/api/health/calendar?month=x").status_code == 400
+
+
+
+def test_recipe_seed_adds_category_to_old_rows(rt):
+    """예전 판에서 분류 없이 들어간 처음 레시피에는 분류를 앞에 붙이고, 새 레시피는 더한다(지운 것은 다시 넣지 않는다)."""
+    import json
+    from datetime import date
+    from moa.health import Health
+    h = Health(rt.db, today=lambda: date(2026, 11, 24))
+    rid = next(r["id"] for r in h.recipes() if r["key"] == "eomuk")
+    rt.db.x("UPDATE hl_recipe SET tags=? WHERE id=?", (json.dumps(["밑반찬", "짭짤"], ensure_ascii=False), rid))
+    gone = next(r["id"] for r in h.recipes() if r["key"] == "bibimbap")
+    h.delete_recipe(gone)
+    rt.db.x("DELETE FROM hl_recipe WHERE key='curry'")
+    Health(rt.db, today=lambda: date(2026, 11, 24))
+    by = {r["key"]: r for r in h.recipes()}
+    assert by["eomuk"]["tags"] == ["반찬", "밑반찬", "짭짤"] and "curry" in by and "bibimbap" not in by

@@ -3535,6 +3535,123 @@ class AutoTrade:
             labs.append(L)
         return {"labs": labs, "presets": [{"key": k, "label": v[0], "desc": v[1]} for k, v in VARIANTS.items()], "auto": self.auto_state()}
 
+    # ------------------------------------------------------------------ 오늘 한 일(누적과 따로)
+    def _act_day(self, mkt):
+        """그 시장에서 '오늘'로 보여 줄 거래일. 장이 열려 있거나 오늘 거래가 있으면 오늘, 아니면 거래가 있었던 가장 최근 날(지난 장).
+        미국장은 한국 낮에 날짜가 바뀌어 '오늘'이 비어 보이므로, 그때는 지난밤 장을 보여 준다."""
+        d = AP.mkt_date(mkt)
+        if self._session(mkt)["open"]:
+            return d, True
+        r = self.rt.db.one("""SELECT MAX(d) d FROM (SELECT MAX(entry_day) d FROM at_trades WHERE mkt=? AND status!='cancelled' AND entry_day<=?
+                              UNION ALL SELECT MAX(exit_day) FROM at_trades WHERE mkt=? AND status='closed' AND exit_day<=?)""", (mkt, d, mkt, d))
+        last = (r or {}).get("d")
+        return (last, False) if last and last < d else (d, True)
+
+    def today(self):
+        """오늘 한 거래만 따로 모은다(시세를 새로 묻지 않는다). 시장마다 그 시장의 거래일 기준.
+        실험 묶음은 같은 종목을 여러 플랜이 사고팔므로 종목·방향별로 한 줄로 묶고, 플랜별 내역은 parts에 둔다.
+        돈 합계는 직접 만든 자동매매만(실전·모의 따로). 실험은 플랜마다 가상 돈이 따로라 건수·승패·평균 수익률로만 말한다."""
+        db = self.rt.db
+        runs = {r["id"]: r for r in self._runs()}
+        rows, mk = [], {}
+        for mkt in ("kr", "us"):
+            day, is_today = self._act_day(mkt)
+            ts = db.q("""SELECT * FROM at_trades WHERE mkt=? AND status!='cancelled' AND (entry_day=? OR (status='closed' AND exit_day=?))
+                         ORDER BY id""", (mkt, day, day))
+            ev = {}
+            M = {"mkt": mkt, "day": day, "is_today": is_today, "open": self._session(mkt)["open"], "bought": set(), "sold": set(), "closed": 0, "wins": 0,
+                 "pct_sum": 0.0, "real_pnl": 0.0, "real_n": 0, "sim_pnl": 0.0, "sim_n": 0}
+            for t in ts:
+                run = runs.get(t["run_id"])
+                if not run:
+                    continue
+                lab = run.get("lab_id")
+                unit = ("lab", lab) if lab else ("run", run["id"])
+                label = VARIANTS.get(run.get("variant") or "", (run["name"],))[0] if lab else run["name"]
+                base = {"kind": unit[0], "gid": unit[1], "mkt": mkt, "mode": run["mode"], "sym": t["sym"], "name": t["name"],
+                        "unit": f"{STYLES[run['style']]['label']} 실험" if lab else run["name"], "style": run["style"]}
+                if t["entry_day"] == day:
+                    e = ev.setdefault((unit, t["sym"], "buy"), dict(base, side="buy", ts=t["entry_ts"], parts=[], why=_why(t.get("why"))))
+                    e["ts"] = min(e["ts"], t["entry_ts"])
+                    e["parts"].append({"label": label, "ts": t["entry_ts"], "qty": t["qty"], "price": t["entry_price"], "open": t["status"] == "open",
+                                       "target_pct": t["target_pct"], "stop_pct": t["stop_pct"]})
+                    M["bought"].add(t["sym"])
+                if t["status"] == "closed" and t.get("exit_day") == day:
+                    e = ev.setdefault((unit, t["sym"], "sell"), dict(base, side="sell", ts=t["exit_ts"] or t["entry_ts"], parts=[]))
+                    e["ts"] = max(e["ts"], t["exit_ts"] or "")
+                    pnl, pc = float(t["pnl"] or 0), float(t["pnl_pct"] or 0)
+                    e["parts"].append({"label": label, "ts": t["exit_ts"], "qty": t["qty"], "price": t["exit_price"], "entry": t["entry_price"], "entry_ts": t["entry_ts"],
+                                       "pnl": round(pnl, 2), "pct": round(pc, 2), "reason": t["reason"] or "", "hold_min": t["hold_min"]})
+                    M["sold"].add(t["sym"]); M["closed"] += 1; M["wins"] += pnl > 0; M["pct_sum"] += pc
+                    if not lab:
+                        k = "real" if run["mode"] == "real" else "sim"
+                        M[k + "_pnl"] += pnl; M[k + "_n"] += 1
+            for e in ev.values():
+                ps = e["parts"]
+                e["n"] = len(ps)
+                e["price"] = round(sum(p["price"] * p["qty"] for p in ps) / max(1, sum(p["qty"] for p in ps)), 4)
+                e["qty"] = sum(p["qty"] for p in ps)
+                if e["side"] == "sell":
+                    e["pct"] = round(sum(p["pct"] for p in ps) / len(ps), 2)
+                    e["pnl"] = round(sum(p["pnl"] for p in ps), 2)
+                    e["wins"] = sum(1 for p in ps if p["pnl"] > 0)
+                    rs = {}
+                    for p in ps:
+                        rs[p["reason"]] = rs.get(p["reason"], 0) + 1
+                    e["reason"] = max(rs, key=rs.get) if rs else ""
+                else:
+                    e["still"] = sum(1 for p in ps if p["open"])
+                ps.sort(key=lambda p: p["ts"] or "")
+                del ps[12:]
+                rows.append(e)
+            M.update(bought=len(M["bought"]), sold=len(M["sold"]), losses=M["closed"] - M["wins"],
+                     avg_pct=round(M["pct_sum"] / M["closed"], 2) if M["closed"] else None,
+                     real_pnl=round(M["real_pnl"], 2), sim_pnl=round(M["sim_pnl"], 2))
+            del M["pct_sum"]
+            mk[mkt] = M
+        rows.sort(key=lambda e: e["ts"] or "", reverse=True)
+        # 묶음(실험·자동매매)별 오늘 숫자: 첫 화면 칸에 '오늘'을 누적과 따로 적는다
+        units = {}
+        for e in rows:
+            u = units.setdefault(f"{e['kind']}:{e['gid']}", {"bought": 0, "sold": 0, "closed": 0, "wins": 0, "pct": 0.0})
+            if e["side"] == "buy":
+                u["bought"] += 1
+            else:
+                u["sold"] += 1; u["closed"] += e["n"]; u["wins"] += e["wins"]; u["pct"] += e["pct"] * e["n"]
+        for u in units.values():
+            u["avg_pct"] = round(u.pop("pct") / u["closed"], 2) if u["closed"] else None
+        # 지금 들고 있는 것(마지막으로 받은 시세 기준)
+        hold = {}
+        for t in db.q("SELECT run_id, mkt, sym, name, qty, entry_price, last FROM at_trades WHERE status='open'"):
+            if t["run_id"] not in runs:
+                continue
+            g = hold.setdefault((t["mkt"], t["sym"]), {"mkt": t["mkt"], "sym": t["sym"], "name": t["name"], "cost": 0.0, "value": 0.0, "real": False})
+            g["cost"] += t["qty"] * t["entry_price"]; g["value"] += t["qty"] * (t["last"] or t["entry_price"])
+            g["real"] = g["real"] or runs[t["run_id"]]["mode"] == "real"
+        hs = [dict(g, pct=round((g["value"] / g["cost"] - 1) * 100, 2) if g["cost"] else 0.0) for g in hold.values()]
+        hs.sort(key=lambda g: -g["pct"])
+        for g in hs:
+            del g["cost"], g["value"]
+        # 한 줄 알림: 숫자에서 바로 읽히는 것만(판단·권유 없이)
+        notes = []
+        won = lambda v, m: f"{v:+,.0f}원" if m == "kr" else f"{'-' if v < 0 else '+'}${abs(v):,.2f}"
+        for mkt in ("kr", "us"):
+            M, nm = mk[mkt], "국내" if mkt == "kr" else "미국"
+            when = "오늘" if M["is_today"] else f"지난 장({M['day'][5:].replace('-', '/')})"
+            if M["real_n"]:
+                notes.append({"k": "real", "mkt": mkt, "tone": "up" if M["real_pnl"] > 0 else "down" if M["real_pnl"] < 0 else "", "text": f"{nm} 실전 {when} {M['real_n']}건 끝남 · 손익 {won(M['real_pnl'], mkt)}"})
+            if M["closed"]:
+                notes.append({"k": "result", "mkt": mkt, "tone": "up" if M["avg_pct"] > 0 else "down" if M["avg_pct"] < 0 else "",
+                              "text": f"{nm} {when} 끝난 거래 {M['closed']}건 · {M['wins']}승 {M['losses']}패 · 평균 {M['avg_pct']:+.2f}%"})
+        if hs:
+            up = sum(1 for g in hs if g["pct"] > 0)
+            notes.append({"k": "hold", "tone": "", "text": f"들고 있는 {len(hs)}종목 중 {up}종목이 플러스 · 가장 좋은 {hs[0]['name']} {hs[0]['pct']:+.2f}%"
+                          + (f", 가장 나쁜 {hs[-1]['name']} {hs[-1]['pct']:+.2f}%" if len(hs) > 1 else "")})
+        for r in runs.values():
+            if r["mode"] == "real" and not r.get("lab_id") and r["status"] in ACTIVE and r["end_date"] <= AP.mkt_date(r["mkt"]):
+                notes.append({"k": "warn", "tone": "warn", "text": f"실전 '{r['name']}' 기간이 {r['end_date'][5:].replace('-', '/')}에 끝나요. 새로 사지 않아요", "run": r["id"]})
+        return {"mkt": mk, "rows": rows[:60], "more": max(0, len(rows) - 60), "units": units, "hold": hs[:12], "hold_n": len(hs), "notes": notes}
+
     def brief(self):
         """홈 화면용: 돌고 있는 자동매매의 지금 상태를 가볍게(시세를 새로 묻지 않는다)."""
         out = []
@@ -3551,7 +3668,12 @@ class AutoTrade:
                     for L in self.labs()["labs"] if L["status"] != "ended"]
         except Exception as e:
             self.rt.db.log("system", "error", f"실험 요약 오류: {type(e).__name__}: {e}", self._now())
-        return {"runs": out, "labs": labs, "ended": self.rt.db.one("SELECT COUNT(*) n FROM at_runs WHERE status='ended'")["n"]}
+        try:
+            today = self.today()
+        except Exception as e:
+            today = None
+            self.rt.db.log("system", "error", f"오늘 거래 요약 오류: {type(e).__name__}: {e}", self._now())
+        return {"runs": out, "labs": labs, "today": today, "ended": self.rt.db.one("SELECT COUNT(*) n FROM at_runs WHERE status='ended'")["n"]}
 
     def overview(self):
         from .ai import MODELS
@@ -3563,7 +3685,7 @@ class AutoTrade:
                 n = self.now(r)
                 x["now"] = {k: n[k] for k in ("phase", "busy", "scan", "next", "today", "size", "period", "engine")}
             runs.append(x)
-        return {"ready": self.ready(), "runs": runs,
+        return {"ready": self.ready(), "runs": runs, "today": self.today(),
                 "models": [{"id": k, "label": v[0]} for k, v in MODELS.items()], "default_model": c.get("model") or "claude-sonnet-5-5",
                 "styles": [{"id": k, **v} for k, v in STYLES.items()], "min_budget": MIN_BUDGET,
                 "sessions": {"kr": self._session("kr"), "us": self._session("us")}}

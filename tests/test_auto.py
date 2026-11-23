@@ -589,7 +589,7 @@ def test_now_tells_what_happens_next_and_what_happened_today(env):
     at.tick(force=True)
     assert at._run(rid)["status"] == "ended"
     d = c.get(f"/api/auto/runs/{rid}").get_json()
-    assert d["now"] is None and c.get("/api/auto/brief").get_json() == {"runs": [], "labs": [], "ended": 1} and "now" not in c.get("/api/auto").get_json()["runs"][0]
+    assert d["now"] is None and {k: v for k, v in c.get("/api/auto/brief").get_json().items() if k != "today"} == {"runs": [], "labs": [], "ended": 1} and "now" not in c.get("/api/auto").get_json()["runs"][0]
 
 
 def test_now_us_shows_korean_time(env, monkeypatch):
@@ -2600,3 +2600,42 @@ def test_my_notes_block_list_and_votes(env, monkeypatch):
     assert "내 판단" in {k for k, _, _ in _defs("swing")}
     c.post("/api/ai/vote", json={"pick_id": pid, "sym": "005930", "vote": 0})
     assert mv.votes() == {}
+
+
+def test_today_groups_trades_and_falls_back_to_last_session(env, monkeypatch):
+    """오늘 한 일: 실험은 종목·방향별 한 줄(플랜 내역은 parts), 돈 합계는 직접 만든 것만. 장이 닫혀 있고 오늘 거래가 없으면 지난 장을 보여 준다."""
+    at = env.at
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (0.9, {"fx": 1400.0}))
+    L = at.lab_create({"budget": 3_000_000, "mkt": "kr", "style": "day", "days": 20, "model": "claude-sonnet-5-5"})["labs"][0]
+    a, b = L["runs"][0]["id"], L["runs"][1]["id"]
+    own = env.run()
+    ins = ("INSERT INTO at_trades(run_id,ver,mkt,sym,name,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,exit_ts,exit_price,reason,pnl,pnl_pct,exit_day,last) "
+           "VALUES(?,1,'kr',?,?,?,?,?,?,?,?,3,1.5,?,?,?,?,?,?,?)")
+    d = env.day
+    x = env.rt.db.x
+    x(ins, (a, "005930", "삼성전자", 2, "closed", f"{d}T09:12:00", d, "09:12", 70000, f"{d}T10:40:00", 70700, "익절", 1400, 1.0, d, 70700))
+    x(ins, (b, "005930", "삼성전자", 1, "closed", f"{d}T09:13:00", d, "09:13", 70000, f"{d}T10:05:00", 69300, "손절", -700, -1.0, d, 69300))
+    x(ins, (b, "000660", "SK하이닉스", 1, "open", f"{d}T09:30:00", d, "09:30", 150000, None, None, None, None, None, None, 153000))
+    x(ins, (own, "035420", "NAVER", 1, "closed", "2026-11-17T09:30:00", "2026-11-17", "09:30", 200000, f"{d}T09:50:00", 204000, "익절", 4000, 2.0, d, 204000))
+    x(ins, (own, "005930", "삼성전자", 1, "cancelled", f"{d}T09:20:00", d, "09:20", 70000, None, None, "체결 안 됨", None, None, None, None))
+    T = at.today()
+    K = T["mkt"]["kr"]
+    assert K["is_today"] and K["day"] == d and K["bought"] == 2 and K["sold"] == 2 and K["closed"] == 3 and K["wins"] == 2 and K["losses"] == 1
+    assert K["avg_pct"] == round((1.0 - 1.0 + 2.0) / 3, 2) and K["sim_pnl"] == 4000 and K["sim_n"] == 1 and K["real_n"] == 0
+    rows = T["rows"]
+    assert [(r["ts"][11:16], r["sym"], r["side"], r["n"]) for r in rows] == [("10:40", "005930", "sell", 2), ("09:50", "035420", "sell", 1), ("09:30", "000660", "buy", 1), ("09:12", "005930", "buy", 2)]
+    s = rows[0]
+    assert s["kind"] == "lab" and s["pct"] == 0.0 and s["wins"] == 1 and s["pnl"] == 700 and {p["reason"] for p in s["parts"]} == {"익절", "손절"} and s["unit"].endswith("실험")
+    assert rows[3]["still"] == 0 and rows[2]["still"] == 1 and rows[1]["kind"] == "run" and rows[1]["pnl"] == 4000
+    u = T["units"][f"lab:{L['id']}"]
+    assert u == {"bought": 2, "sold": 1, "closed": 2, "wins": 1, "avg_pct": 0.0} and T["units"][f"run:{own}"]["closed"] == 1
+    assert T["hold_n"] == 1 and T["hold"][0]["name"] == "SK하이닉스" and T["hold"][0]["pct"] == 2.0
+    assert any("3건" in n["text"] and "2승 1패" in n["text"] for n in T["notes"]) and any("들고 있는 1종목" in n["text"] for n in T["notes"])
+    assert T["mkt"]["us"]["closed"] == 0 and T["mkt"]["us"]["is_today"]
+    env.open, env.day = False, "2026-11-19"                          # 다음 날 장 열기 전: 어제(지난 장)를 보여 준다
+    T2 = at.today()
+    assert T2["mkt"]["kr"]["day"] == d and not T2["mkt"]["kr"]["is_today"] and T2["mkt"]["kr"]["closed"] == 3 and "지난 장(11/18)" in T2["notes"][0]["text"]
+    env.open = True                                                   # 장이 열리면 오늘로 넘어간다(아직 거래 없음)
+    T3 = at.today()
+    assert T3["mkt"]["kr"]["day"] == "2026-11-19" and T3["mkt"]["kr"]["closed"] == 0 and T3["rows"] == []
+    assert at.overview()["today"]["mkt"]["kr"]["day"] == "2026-11-19" and "today" in at.brief()

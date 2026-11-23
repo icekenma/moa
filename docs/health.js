@@ -6,6 +6,7 @@
     home: '<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
     body: '<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>',
     gym: '<path d="M6 7v10M18 7v10M3 10v4M21 10v4M6 12h12"/>',
+    meal: '<path d="M7 3v8a2 2 0 0 0 2 2v8M5 3v5M9 3v5M17 3c-2 2-3 4-3 7h3v11"/>',
     chk: '<path d="M9 3h6v4H9z"/><path d="M5 5h4M15 5h4v16H5V5"/><path d="M9 13h6M12 10v6"/>',
   };
   const svg = (p, s = 20, w = 2) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
@@ -16,7 +17,7 @@
 
   addApp({
     id: "health", name: "건강관리", desc: "체중, 운동, 검진", home: "#health", secs: ["health"],
-    tabs: [["health/today", "홈", IC.home], ["health/body", "기록", IC.body], ["health/workout", "운동", IC.gym], ["health/checkup", "검진", IC.chk]],
+    tabs: [["health/today", "홈", IC.home], ["health/body", "기록", IC.body], ["health/workout", "운동", IC.gym], ["health/meal", "식단", IC.meal], ["health/checkup", "검진", IC.chk]],
     skin: { meta: "#F4F5F1", vars: { "--deep": "#17201B", "--deep2": "#24332B", "--bg": "#F4F5F1", "--hl": "#6FD39A", "--solid": "#17201B",
       "--on-deep": "#F4F5F1", "--on-deep2": "#B9C4BC", "--on-deep-strong": "#FFFFFF", "--sub-bg": "rgba(255,255,255,.08)" } },
     tile: { bg: "linear-gradient(150deg,#2A7A55 0%,#17201B 78%)", ink: "#FFFFFF", sub: "#C6D3CA", accent: "#6FD39A" },
@@ -50,7 +51,7 @@
   function draw() {
     const d = H.d;
     if (!d || !$("#hlApp")) return;
-    $("#hlApp").innerHTML = ({ today, body, workout, checkup }[H.sub] || today)(d);
+    $("#hlApp").innerHTML = ({ today, body, workout, meal, checkup }[H.sub] || today)(d);
     hydrate($("#hlApp"));
   }
   async function reload() { await load(); draw(); }
@@ -65,7 +66,7 @@
   const BOSS_C = ["#6FD39A", "#F2A65A", "#9AA7B8", "#C98BDB", "#7FB7F0", "#F07F7F"];
   const bossArt = (i, dead) => `<svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true"><path d="M8 46c0-18 8-34 24-34s24 16 24 34c0 6-6 8-12 6-4-1-8 2-12 2s-8-3-12-2c-6 2-12 0-12-6z" fill="${BOSS_C[i % 6]}" opacity="${dead ? 0.35 : 1}"/>
     ${dead ? `<path d="M21 30l6 6m0-6l-6 6M37 30l6 6m0-6l-6 6" stroke="#17201B" stroke-width="2.6" stroke-linecap="round"/>` : `<circle cx="24" cy="33" r="4" fill="#17201B"/><circle cx="40" cy="33" r="4" fill="#17201B"/><circle cx="25.3" cy="31.6" r="1.3" fill="#fff"/><circle cx="41.3" cy="31.6" r="1.3" fill="#fff"/><path d="M27 43q5 4 10 0" stroke="#17201B" stroke-width="2.4" fill="none" stroke-linecap="round"/>`}</svg>`;
-  const STATS = [["str", "근력", "근력 운동"], ["end", "지구력", "유산소"], ["wil", "절제", "생활 습관"], ["care", "관리", "약·측정"]];
+  const STATS = [["str", "근력", "근력 운동"], ["end", "지구력", "유산소"], ["diet", "식단", "균형 접시"], ["wil", "절제", "생활 습관"], ["care", "관리", "약·측정"]];
   function today(d) {
     const g = d.cfg.goal, L = d.body.latest, w = L.weight, R = d.rpg, Q = d.quests, B = R.boss;
     const now = new Date(), hm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
@@ -98,6 +99,7 @@
       if (q.kind === "info") return `<li class="${cls}">${tm}<div class="hq-qi">${txt}</div></li>`;
       const box = `<span class="hq-box">${q.on ? TICK : ""}</span>`, xp = `<em class="hq-rw">+${q.xp}</em>`;
       if (q.kind === "body") return `<li class="${cls}">${tm}<a class="hq-qb" href="#health/body">${box}${txt}${xp}</a></li>`;
+      if (q.kind === "meal") return `<li class="${cls}">${tm}<button type="button" class="hq-qb" data-meal="${esc(q.slot)}" aria-label="${esc(q.slot)} 기록하기">${box}${txt}${xp}</button></li>`;
       return `<li class="${cls}">${tm}<button type="button" class="hq-qb" data-check="${esc(q.id)}" aria-pressed="${q.on}">${box}${txt}${xp}</button>
         ${q.kind === "gym" ? `<a class="hq-go" href="#health/workout" aria-label="오늘 루틴 보기">루틴 ${NEXT}</a>${pics}` : ""}</li>`;
     };
@@ -130,6 +132,87 @@
     } else if (before.boss.hp > 0 && R.boss.hp === 0) toast(`${R.boss.name} 처치! 이번 주 목표 달성 (+${diff} 경험치)`);
     else if (R.clears > before.clears) toast(`올 클리어! +${diff} 경험치`);
     else if (diff > 0) toast(`+${diff} 경험치`);
+  }
+
+  // ---------- 식단: 오늘의 식탁 · 이번 주 접시 · 오늘 뭐 먹지 · 요리책 ----------
+  const GRADE = { 균형: ["good", "균형 접시"], 보통: ["mid", "보통"], 가끔: ["warn", "가끔만"], "": ["", ""] };
+  const MEAL_ICON = { 아침: '<circle cx="12" cy="13" r="4"/><path d="M12 3v3M5 6l2 2M19 6l-2 2M3 13h3M18 13h3"/>', 점심: '<circle cx="12" cy="12" r="5"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/>',
+    저녁: '<path d="M20 14a8 8 0 1 1-10-10 6.5 6.5 0 0 0 10 10z"/>', 간식: '<path d="M8 4c2 0 3 2 4 2s2-2 4-2c3 0 4 3 4 6 0 5-4 10-8 10S4 15 4 10c0-3 1-6 4-6z"/>' };
+  const plate = (gs) => `<span class="ml-pl">${[0, 1].map((k) => `<i class="${gs[k] ? (GRADE[gs[k]] || [""])[0] || "mid" : ""}"></i>`).join("")}</span>`;
+  async function recipes(force) {
+    if (!H.rc || force) H.rc = (await GET("/api/health/recipes")).recipes;
+    return H.rc;
+  }
+  function meal(d) {
+    const W = d.meal_week, ms = d.meals, show = ["점심", "저녁"].concat(ms.some((m) => m.slot === "아침") ? ["아침"] : []);
+    const card = (sl) => { const m = ms.find((x) => x.slot === sl), g = m ? GRADE[m.grade] : null;
+      return m ? `<button type="button" class="ml-card on" data-meal="${sl}" data-mid="${m.id}" aria-label="${sl} ${esc(m.menu)} 고치기"><span class="ml-ic">${svg(MEAL_ICON[sl], 22, 1.8)}</span>
+          <span class="ml-ct"><small>${sl}</small><b>${esc(m.menu)}</b><span class="ml-tags">${m.tags.map((t) => `<i>${esc(t)}</i>`).join("")}</span></span><em class="ml-g ${g[0]}">${g[1]}</em></button>`
+        : `<button type="button" class="ml-card" data-meal="${sl}"><span class="ml-ic">${svg(MEAL_ICON[sl], 22, 1.8)}</span><span class="ml-ct"><small>${sl}</small><b>아직 기록 전</b><span class="ml-sub">누르고 메뉴만 적으면 +10 경험치</span></span><em class="ml-g add">+ 기록</em></button>`; };
+    const snacks = ms.filter((m) => m.slot === "간식");
+    const top = Object.entries(W.tags).filter(([, n]) => n).sort((a, b) => b[1] - a[1]);
+    const view = H.rc ? bookHtml(H.rc) : `<div class="hl-hint">요리책을 여는 중</div>`;
+    if (!H.rc) recipes().then(() => { if (H.sub === "meal") draw(); }).catch(() => {});
+    return `${head(`${+d.today.slice(5, 7)}월 ${+d.today.slice(8, 10)}일 ${d.dow}요일`, "오늘의 식탁", `<button type="button" class="hl-ico" data-meal="간식" aria-label="간식 기록">${svg('<path d="M12 5v14M5 12h14"/>', 20, 2.2)}</button>`)}
+      <section class="hl-sec">${show.map(card).join("")}
+        ${snacks.map((m) => `<button type="button" class="ml-snack" data-meal="간식" data-mid="${m.id}"><span>간식</span><b>${esc(m.menu)}</b><em class="ml-g ${GRADE[m.grade][0]}">${GRADE[m.grade][1]}</em></button>`).join("")}</section>
+      <section class="ml-week" aria-label="최근 7일 식단"><div class="hl-sec-h"><h2>최근 7일 접시</h2><span>균형 접시 <b>${W.good}</b> / ${W.n}끼</span></div>
+        <div class="ml-days">${W.days.map((x) => `<div class="${x.today ? "today" : ""}"><span>${x.dow}</span>${plate(x.grades.filter((g) => g))}</div>`).join("")}</div>
+        <p class="ml-legend"><i class="good"></i>채소+단백질 <i class="mid"></i>보통 <i class="warn"></i>튀김·과식·늦은 식사</p>
+        ${top.length ? `<div class="ml-tags wide">${top.map(([k, n]) => `<i class="${["튀김·기름", "과식", "늦은 식사"].includes(k) ? "w" : ""}">${esc(k)} ${n}</i>`).join("")}</div>` : ""}</section>
+      ${d.suggest.length ? `<section class="hl-sec"><div class="hl-sec-h"><h2>오늘 뭐 먹지</h2><span>균형 접시 먼저 · 최근 3일 메뉴는 뒤로</span></div>
+        <div class="ml-sug">${d.suggest.map((r) => `<button type="button" data-rc="${r.id}"><em class="ml-g ${(GRADE[r.grade] || [""])[0]}">${(GRADE[r.grade] || ["", ""])[1] || "한 끼"}</em><b>${esc(r.title)}</b><small>${esc(r.time || "")}</small></button>`).join("")}</div></section>` : ""}
+      <section class="hl-sec" id="mlBook"><div class="hl-sec-h"><h2>요리책</h2><button type="button" class="hl-link" data-act="recipe">+ 레시피</button></div>${view}</section>`;
+  }
+  function bookHtml(list) {
+    const tags = [...new Set(list.flatMap((r) => r.tags))].slice(0, 10), q = (H.rq || "").trim(), tg = H.rt || "";
+    const f = list.filter((r) => (!tg || r.tags.includes(tg)) && (!q || r.title.includes(q) || r.ingredients.join(" ").includes(q)));
+    return `<input class="ml-q" id="mlQ" type="search" placeholder="요리 이름이나 재료로 찾기" value="${esc(q)}" aria-label="레시피 찾기" autocomplete="off">
+      <div class="ml-chips" role="group" aria-label="꼬리표로 거르기"><button type="button" data-rt="" aria-pressed="${!tg}">전체 ${list.length}</button>${tags.map((t) => `<button type="button" data-rt="${esc(t)}" aria-pressed="${tg === t}">${esc(t)}</button>`).join("")}</div>
+      <div class="ml-book">${f.map((r) => `<button type="button" data-rc="${r.id}"><span class="ml-bt"><b>${r.fav ? "★ " : ""}${esc(r.title)}</b><small>${esc([r.time, r.serves, r.cooked ? `${r.cooked}번 해 먹음` : ""].filter(Boolean).join(" · "))}</small></span>
+        ${r.grade ? `<em class="ml-g ${GRADE[r.grade][0]}">${GRADE[r.grade][1]}</em>` : ""}${NEXT}</button>`).join("") || `<div class="hl-hint">찾는 레시피가 없어요</div>`}</div>`;
+  }
+  async function recipeSheet(id) {
+    const r = (await recipes()).find((x) => x.id === +id);
+    if (!r) return;
+    const html = `<div class="ml-rh">${r.grade ? `<em class="ml-g ${GRADE[r.grade][0]}">${GRADE[r.grade][1]}</em>` : ""}<span>${esc([r.time, r.serves].filter(Boolean).join(" · "))}</span>${r.tags.map((t) => `<i>#${esc(t)}</i>`).join("")}</div>
+      <div class="hx-sub">재료 <small>누르면 준비 완료</small></div><ul class="ml-ing">${r.ingredients.map((x) => `<li><button type="button" aria-pressed="false">${esc(x)}</button></li>`).join("")}</ul>
+      <div class="hx-sub">만드는 법 <small id="mlProg">0 / ${r.steps.length}</small></div><ol class="ml-steps">${r.steps.map((x, i) => `<li><button type="button" aria-pressed="false"><b>${i + 1}</b><span>${esc(x)}</span></button></li>`).join("")}</ol>
+      ${r.memo ? `<div class="ml-memo">${esc(r.memo)}</div>` : ""}<p class="hl-hint">출처: ${esc(r.src || "")}</p>
+      <div class="hl-row2"><button type="button" class="btn dark wide" id="mlEat">이걸로 끼니 기록</button></div>
+      <div class="hl-row2"><button type="button" class="btn soft" id="mlFav">${r.fav ? "★ 즐겨찾기 풀기" : "☆ 즐겨찾기"}</button><button type="button" class="btn soft" id="mlEdit">고치기</button></div>`;
+    openSheet(r.title, html, (root) => {
+      root.querySelectorAll(".ml-ing button, .ml-steps button").forEach((b) => { b.onclick = () => { b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") !== "true"); $("#mlProg", root).textContent = `${root.querySelectorAll('.ml-steps [aria-pressed="true"]').length} / ${r.steps.length}`; }; });
+      $("#mlEat", root).onclick = () => { closeSheet(); const h = new Date().getHours(); mealSheet(h < 10 ? "아침" : h < 16 ? "점심" : "저녁", null, r); };
+      $("#mlEdit", root).onclick = () => { closeSheet(); recipeEdit(r.id); };
+      $("#mlFav", root).onclick = async () => { await send("POST", "/api/health/recipe", { id: r.id, fav: !r.fav }); await recipes(true); closeSheet(); draw(); toast(r.fav ? "즐겨찾기를 풀었어요" : "즐겨찾기에 넣었어요"); };
+    });
+  }
+  async function recipeEdit(id) {
+    const r = id ? (await recipes()).find((x) => x.id === +id) : { title: "", tags: [], ingredients: [], steps: [], memo: "", time: "", serves: "" };
+    sheetForm(id ? "레시피 고치기" : "새 레시피", `${fld("요리 이름", "title", r.title, 'maxlength="40" required')}
+      <label class="field">재료 <small>쉼표나 줄바꿈으로 나눠요</small><textarea name="ingredients" rows="4">${esc(r.ingredients.join("\n"))}</textarea></label>
+      <label class="field">만드는 법 <small>한 줄에 한 단계</small><textarea name="steps" rows="6">${esc(r.steps.join("\n"))}</textarea></label>
+      <div class="hl-row2">${fld("시간", "time", r.time, 'maxlength="16" placeholder="20분"')}${fld("양", "serves", r.serves, 'maxlength="20" placeholder="2인"')}</div>
+      ${fld("꼬리표", "tags", r.tags.join(" "), 'maxlength="80"', "채소·단백질이 함께 있으면 '균형 접시'로 보여요. 짭짤·기름은 '가끔만'")}
+      <label class="field">메모<textarea name="memo" rows="2">${esc(r.memo)}</textarea></label>`,
+      async (v) => { await send("POST", "/api/health/recipe", Object.assign(v, { id: id || 0 })); await recipes(true); },
+      id ? async () => { await send("DELETE", `/api/health/recipe/${id}`); await recipes(true); } : null);
+  }
+  function mealSheet(slot, mid, rc) {
+    const d = H.d, m = mid ? d.meals.find((x) => x.id === +mid) : null, on = new Set(m ? m.tags : rc ? rc.tags.filter((t) => d.meal_tags.includes(t)) : []);
+    const names = (H.rc || []).map((x) => `<option value="${esc(x.title)}">`).join("");
+    sheetForm(m ? `${slot} 고치기` : `${slot} 기록`, `<div class="ml-seg" role="group" aria-label="끼니">${d.meal_slots.map((s) => `<label><input type="radio" name="slot" value="${s}" ${s === (m ? m.slot : slot) ? "checked" : ""}><span>${s}</span></label>`).join("")}</div>
+      <label class="field">무엇을 먹었나요<input name="menu" list="mlNames" maxlength="60" value="${esc(m ? m.menu : rc ? rc.title : "")}" placeholder="예: 불고기 덮밥 + 브로콜리" autocomplete="off"><datalist id="mlNames">${names}</datalist></label>
+      <div class="hx-sub">접시에 있던 것 <small>채소+단백질이면 균형 접시 +5</small></div>
+      <div class="ml-tagpick">${d.meal_tags.map((t) => `<label class="${["튀김·기름", "과식", "늦은 식사"].includes(t) ? "w" : ""}"><input type="checkbox" name="t" value="${esc(t)}" ${on.has(t) ? "checked" : ""}><span>${esc(t)}</span></label>`).join("")}</div>
+      ${fld("메모", "note", m ? m.note : "", 'maxlength="120" placeholder="선택"')}`,
+      async (v, f) => {
+        const tags = [...f.querySelectorAll('input[name="t"]:checked')].map((x) => x.value), menu = (v.menu || "").trim();
+        const hit = (H.rc || []).find((x) => x.title === menu);
+        await send("POST", "/api/health/meal", { id: m ? m.id : 0, slot: v.slot, menu, tags, note: v.note, recipe: hit ? hit.id : rc && rc.title === menu ? rc.id : 0 });
+      },
+      m ? () => send("DELETE", `/api/health/meal/${m.id}`) : null);
   }
 
   // ---------- 기록 ----------
@@ -421,7 +504,10 @@
       draw();
       return save(() => (id === "gym" ? send("POST", "/api/health/workout", { done: on }) : send("POST", "/api/health/check", { key: id, on })));
     }
-    if ((b = el("[data-act]"))) return ({ goal: goalSheet, manage: manageSheet, import: importPick, plan: planSheet, lab: () => labSheet(0), follow: () => followSheet(0), med: () => medSheet(-1) }[b.dataset.act] || (() => {}))();
+    if ((b = el("[data-meal]"))) { if (!H.rc) recipes().catch(() => {}); return mealSheet(b.dataset.meal, b.dataset.mid); }
+    if ((b = el("[data-rc]"))) return recipeSheet(b.dataset.rc);
+    if ((b = el("[data-rt]"))) { H.rt = b.dataset.rt; return draw(); }
+    if ((b = el("[data-act]"))) return ({ recipe: () => recipeEdit(0), goal: goalSheet, manage: manageSheet, import: importPick, plan: planSheet, lab: () => labSheet(0), follow: () => followSheet(0), med: () => medSheet(-1) }[b.dataset.act] || (() => {}))();
     if ((b = el("[data-tab]"))) { H.tab = b.dataset.tab; return draw(); }
     if ((b = el("[data-wtab]"))) { H.wtab = b.dataset.wtab; draw(); return window.scrollTo(0, 0); }
     if ((b = el("[data-gym]"))) return gymSheet(b.dataset.gym);
@@ -450,7 +536,7 @@
 
   pages.health = {
     async mount(h) {
-      H.sub = ["today", "body", "workout", "checkup"].includes(h.sub) ? h.sub : "today";
+      H.sub = ["today", "body", "workout", "meal", "checkup"].includes(h.sub) ? h.sub : "today";
       if (H.sub !== "workout") { H.week = ""; H.sel = ""; }
       setTop("건강관리", {});
       await load();
@@ -458,6 +544,13 @@
       const host = $("#hlApp");
       host.addEventListener("click", (e) => { onClick(e).catch((err) => toast(err.message, true)); });
       host.addEventListener("submit", (e) => { onSubmit(e).catch((err) => toast(err.message, true)); });
+      host.addEventListener("input", (e) => {                       // 요리책 찾기: 글자를 칠 때마다 목록만 다시 그린다
+        if (e.target.id !== "mlQ" || !H.rc) return;
+        H.rq = e.target.value;
+        const box = $("#mlBook .ml-book"), tmp = document.createElement("div");
+        tmp.innerHTML = bookHtml(H.rc);
+        if (box) box.replaceWith(tmp.querySelector(".ml-book"));
+      });
       draw();
     },
   };

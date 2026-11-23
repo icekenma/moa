@@ -10,7 +10,11 @@ import zlib
 from datetime import date, datetime, timedelta
 
 # 퀘스트 경험치: 체크 하나 10, 운동 40(+힘든 정도 기록 10), 신체 기록 15, 하루 전부 완료 보너스 20
-XP = {"check": 10, "gym": 40, "rpe": 10, "body": 15, "clear": 20, "info": 0}
+XP = {"check": 10, "gym": 40, "rpe": 10, "body": 15, "clear": 20, "info": 0, "meal": 10, "plate": 5}
+MEAL_SLOTS = ["아침", "점심", "저녁", "간식"]
+MEAL_TAGS = ["채소", "단백질", "잡곡", "국물", "튀김·기름", "과식", "늦은 식사", "외식·배달"]
+MEAL_Q = {"meal_lunch": "점심", "meal_dinner": "저녁"}
+MEAL_T = {"meal_lunch": "12:30", "meal_dinner": "18:40"}
 LV_BASE, LV_STEP = 100, 50       # 다음 레벨까지: 100, 150, 200 … (하루를 다 채우면 100 남짓)
 TITLES = [(1, "견습 모험가"), (3, "초보 전사"), (5, "단련된 전사"), (8, "숙련 전사"), (12, "베테랑"), (16, "용사"), (20, "전설")]
 BOSSES = ["게으름 슬라임", "야식 고블린", "소파 골렘", "작심삼일 오크", "핑계 마법사", "뱃살 드래곤"]
@@ -84,6 +88,14 @@ class Health:
             done INTEGER NOT NULL DEFAULT 0)""")
         # 헬스장 기구 사진(내 휴대폰으로 찍은 것). 저장소가 아니라 이 서버에만 둔다
         db.x("CREATE TABLE IF NOT EXISTS hl_photo(key TEXT PRIMARY KEY, full BLOB NOT NULL, thumb BLOB NOT NULL, updated TEXT NOT NULL)")
+        # 식단: 끼니 기록(무엇을, 어떤 접시였는지 꼬리표)과 요리책(지난 대화의 레시피가 처음 자료)
+        db.x("""CREATE TABLE IF NOT EXISTS hl_meal(id INTEGER PRIMARY KEY, date TEXT NOT NULL, slot TEXT NOT NULL, menu TEXT NOT NULL DEFAULT '',
+                recipe INTEGER, tags TEXT NOT NULL DEFAULT '[]', note TEXT NOT NULL DEFAULT '', ts TEXT NOT NULL)""")
+        db.x("CREATE INDEX IF NOT EXISTS ix_hl_meal ON hl_meal(date)")
+        db.x("""CREATE TABLE IF NOT EXISTS hl_recipe(id INTEGER PRIMARY KEY, key TEXT, title TEXT NOT NULL, tags TEXT NOT NULL DEFAULT '[]',
+                ingredients TEXT NOT NULL DEFAULT '[]', steps TEXT NOT NULL DEFAULT '[]', memo TEXT NOT NULL DEFAULT '', time TEXT NOT NULL DEFAULT '',
+                serves TEXT NOT NULL DEFAULT '', src TEXT NOT NULL DEFAULT '', fav INTEGER NOT NULL DEFAULT 0, cooked INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL)""")
+        self._seed_recipes()
 
     # ---------- 설정(목표·루틴·체크 항목) ----------
     def cfg(self):
@@ -432,7 +444,137 @@ class Health:
                 "checks": [r["key"] for r in self.db.q("SELECT key FROM hl_check WHERE date=?", (t.isoformat(),))],
                 "week": self.week(week), "now_week": self.week() if week else None,
                 "labs": labs, "lab_date": lab_date, "follows": self.follows(), "empty": not rows and not labs, "photos": self.photos(),
-                "quests": self.quests(c, t, slots), "rpg": self.rpg(c, t, slots)}
+                "quests": self.quests(c, t, slots), "rpg": self.rpg(c, t, slots),
+                "meals": self.meals(t), "meal_week": self.meal_week(t), "suggest": self.suggest(t), "meal_tags": MEAL_TAGS, "meal_slots": MEAL_SLOTS,
+                "recipe_n": (self.db.one("SELECT COUNT(*) n FROM hl_recipe") or {"n": 0})["n"]}
+
+    # ---------- 식단: 요리책 ----------
+    def _seed_recipes(self):
+        """지난 대화에서 만든 레시피를 처음 한 번 넣는다. 사용자가 지운 처음 자료는 다시 넣지 않는다."""
+        from .recipes import SEED
+        have = {r["key"] for r in self.db.q("SELECT key FROM hl_recipe WHERE key IS NOT NULL")}
+        gone = set(self.db.get_setting("health_recipe_gone") or [])
+        now = datetime.now().isoformat(timespec="seconds")
+        for r in SEED:
+            if r["key"] not in have and r["key"] not in gone:
+                self.db.x("INSERT INTO hl_recipe(key,title,tags,ingredients,steps,memo,time,serves,src,updated) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                          (r["key"], r["title"], json.dumps(r["tags"], ensure_ascii=False), json.dumps(r["ingredients"], ensure_ascii=False),
+                           json.dumps(r["steps"], ensure_ascii=False), r["memo"], r["time"], r["serves"], r["from"], now))
+
+    @staticmethod
+    def _rrow(r):
+        out = dict(r)
+        for k in ("tags", "ingredients", "steps"):
+            out[k] = json.loads(out[k] or "[]")
+        t = set(out["tags"])
+        out["grade"] = "균형" if {"채소", "단백질"} <= t else "가끔" if t & {"짭짤", "기름"} else ""
+        return out
+
+    def recipes(self):
+        return [self._rrow(r) for r in self.db.q("SELECT * FROM hl_recipe ORDER BY fav DESC, cooked DESC, id")]
+
+    def save_recipe(self, d):
+        title = _txt(d.get("title"), 40)
+        if not title:
+            raise HealthError("요리 이름을 넣어 주세요")
+        lines = lambda v, n, m: [_txt(x, m) for x in (v if isinstance(v, list) else re.split(r"[\n,，]" if n == "i" else r"\n", str(v or ""))) if _txt(x, m)][:30]
+        ing, steps = lines(d.get("ingredients"), "i", 60), [re.sub(r"^\d+[.)]\s*", "", x) for x in lines(d.get("steps"), "s", 200)]
+        if not ing or not steps:
+            raise HealthError("재료와 만드는 법을 한 가지 이상 넣어 주세요")
+        tags = [_txt(x, 10).lstrip("#") for x in (d.get("tags") if isinstance(d.get("tags"), list) else re.split(r"[,，\s]+", str(d.get("tags") or ""))) if _txt(x, 10).lstrip("#")][:8]
+        vals = (title, json.dumps(tags, ensure_ascii=False), json.dumps(ing, ensure_ascii=False), json.dumps(steps, ensure_ascii=False),
+                _txt(d.get("memo"), 400), _txt(d.get("time"), 16), _txt(d.get("serves"), 20), datetime.now().isoformat(timespec="seconds"))
+        rid = int(d.get("id") or 0)
+        if rid and self.db.one("SELECT 1 x FROM hl_recipe WHERE id=?", (rid,)):
+            self.db.x("UPDATE hl_recipe SET title=?,tags=?,ingredients=?,steps=?,memo=?,time=?,serves=?,updated=? WHERE id=?", vals + (rid,))
+        else:
+            rid = self.db.x("INSERT INTO hl_recipe(title,tags,ingredients,steps,memo,time,serves,updated,src) VALUES(?,?,?,?,?,?,?,?,'직접 넣음')", vals)
+        return rid
+
+    def fav_recipe(self, rid, on):
+        self.db.x("UPDATE hl_recipe SET fav=? WHERE id=?", (1 if on else 0, int(rid)))
+
+    def delete_recipe(self, rid):
+        r = self.db.one("SELECT key FROM hl_recipe WHERE id=?", (int(rid),))
+        if r and r["key"]:
+            gone = set(self.db.get_setting("health_recipe_gone") or []) | {r["key"]}
+            self.db.set_setting("health_recipe_gone", sorted(gone))
+        self.db.x("DELETE FROM hl_recipe WHERE id=?", (int(rid),))
+
+    def suggest(self, t=None, n=3):
+        """오늘 뭐 먹지: 균형 잡힌 요리(채소+단백질)를 먼저, 최근 3일에 먹은 것은 뒤로. 날마다 순서가 바뀐다."""
+        t = t or self._today()
+        recent = {r["recipe"] for r in self.db.q("SELECT recipe FROM hl_meal WHERE date>=? AND recipe IS NOT NULL", ((t - timedelta(days=3)).isoformat(),))}
+        rs = [r for r in self.recipes() if "양념장" not in r["tags"] and "밑반찬" not in r["tags"]]
+        seed = t.toordinal()
+        rs.sort(key=lambda r: (r["id"] in recent, {"균형": 0, "": 1, "가끔": 2}[r["grade"]], (r["id"] * 7919 + seed) % 97))
+        return [{"id": r["id"], "title": r["title"], "grade": r["grade"], "time": r["time"], "tags": r["tags"]} for r in rs[:n]]
+
+    # ---------- 식단: 끼니 기록 ----------
+    def save_meal(self, d):
+        day = _d(d.get("date") or self._today().isoformat())
+        if day > self._today():
+            raise HealthError("앞날의 끼니는 미리 기록할 수 없어요")
+        slot = d.get("slot") if d.get("slot") in MEAL_SLOTS else "간식"
+        menu = _txt(d.get("menu"), 60)
+        rid = int(d.get("recipe") or 0) or None
+        if rid:
+            r = self.db.one("SELECT title FROM hl_recipe WHERE id=?", (rid,))
+            if not r:
+                rid = None
+            elif not menu:
+                menu = r["title"]
+        if not menu:
+            raise HealthError("무엇을 먹었는지 적어 주세요")
+        tags = [x for x in (d.get("tags") or []) if x in MEAL_TAGS]
+        now = datetime.now().isoformat(timespec="seconds")
+        mid = int(d.get("id") or 0)
+        if mid and self.db.one("SELECT 1 x FROM hl_meal WHERE id=?", (mid,)):
+            self.db.x("UPDATE hl_meal SET date=?,slot=?,menu=?,recipe=?,tags=?,note=? WHERE id=?",
+                      (day.isoformat(), slot, menu, rid, json.dumps(tags, ensure_ascii=False), _txt(d.get("note"), 120), mid))
+        else:
+            mid = self.db.x("INSERT INTO hl_meal(date,slot,menu,recipe,tags,note,ts) VALUES(?,?,?,?,?,?,?)",
+                            (day.isoformat(), slot, menu, rid, json.dumps(tags, ensure_ascii=False), _txt(d.get("note"), 120), now))
+            if rid:
+                self.db.x("UPDATE hl_recipe SET cooked=cooked+1 WHERE id=?", (rid,))
+        return mid
+
+    def delete_meal(self, mid):
+        self.db.x("DELETE FROM hl_meal WHERE id=?", (int(mid),))
+
+    @staticmethod
+    def meal_grade(tags):
+        t = set(tags)
+        if t & {"튀김·기름", "과식", "늦은 식사"}:
+            return "가끔"
+        return "균형" if {"채소", "단백질"} <= t else "보통"
+
+    def meals(self, day):
+        out = []
+        for r in self.db.q("SELECT * FROM hl_meal WHERE date=? ORDER BY id", (day.isoformat() if hasattr(day, "isoformat") else day,)):
+            r = dict(r)
+            r["tags"] = json.loads(r["tags"] or "[]")
+            r["grade"] = self.meal_grade(r["tags"])
+            out.append(r)
+        out.sort(key=lambda m: MEAL_SLOTS.index(m["slot"]))
+        return out
+
+    def meal_week(self, t=None):
+        t = t or self._today()
+        days = [t - timedelta(days=i) for i in range(6, -1, -1)]
+        rows = self.db.q("SELECT date, tags FROM hl_meal WHERE date BETWEEN ? AND ?", (days[0].isoformat(), t.isoformat()))
+        by = {}
+        cnt = {k: 0 for k in MEAL_TAGS}
+        good = 0
+        for r in rows:
+            tg = json.loads(r["tags"] or "[]")
+            g = self.meal_grade(tg)
+            by.setdefault(r["date"], []).append(g)
+            good += g == "균형"
+            for k in tg:
+                cnt[k] = cnt.get(k, 0) + 1
+        return {"n": len(rows), "good": good, "tags": cnt,
+                "days": [{"date": dd.isoformat(), "dow": DOW[dd.weekday()], "grades": by.get(dd.isoformat(), []), "today": dd == t} for dd in days]}
 
     # ---------- 퀘스트 · 레벨(기록에서 그때그때 셈한다. 따로 저장하지 않는다) ----------
     def quests(self, c, t, slots):
@@ -445,6 +587,10 @@ class Health:
         base = {m["key"]: ("check", f"{m['label']} {len(m['names'])}가지", ", ".join(m["names"])) for m in slots}
         base["gym"] = ("gym", ("오늘 할 일 · " if p["rest"] else "운동 · ") + p["name"], " · ".join(x for x in (p["time"], ", ".join(i[0] for i in p["items"][:4])) if x))
         base.update({h["id"]: ("check", h["title"], h.get("sub") or "") for h in c["habits"]})
+        logged = {m["slot"]: m for m in self.meals(t)}
+        for sl, qid in (("점심", "meal_lunch"), ("저녁", "meal_dinner")):
+            m = logged.get(sl)
+            base[qid] = ("meal", f"{sl} 기록", f"{m['menu']} · {m['grade']}" if m else "무엇을 먹었는지 남기면 식단 점수가 쌓여요")
         out, seen = [], set()
 
         def add(qid, tm, title, sub):
@@ -452,14 +598,18 @@ class Health:
             if qid in seen and kind != "info":
                 return
             seen.add(qid)
-            on = (qid in checks) if kind == "check" else bool(w.get("done")) if kind == "gym" else body if kind == "body" else False
+            on = (qid in checks) if kind == "check" else bool(w.get("done")) if kind == "gym" else body if kind == "body" else \
+                (MEAL_Q[qid] in logged) if kind == "meal" else False
+            if kind == "meal":                             # 끼니는 기록한 내용이 보이게(시간표 제목보다 우선)
+                title, sub = base[qid][1], base[qid][2]
             out.append({"id": qid, "kind": kind, "t": tm, "title": title or (base[qid][1] if qid in base else ""), "sub": sub or (base[qid][2] if qid in base else ""),
-                        "xp": XP.get(kind, 0), "on": on})
+                        "xp": XP.get(kind, 0), "on": on, **({"slot": MEAL_Q[qid]} if kind == "meal" else {})})
         for b in p["blocks"]:
             add(b[1], b[0], b[2], b[3])
-        for qid in base:                               # 시간표에 없는 항목은 뒤에(시간 없이)
+        for qid in base:                               # 시간표에 없는 항목은 뒤에(시간 없이). 끼니는 기본 시각을 붙인다
             if qid not in seen:
-                add(qid, "", "", "")
+                add(qid, MEAL_T.get(qid, ""), "", "")
+        out.sort(key=lambda q: q["t"] or "99")
         return out
 
     def rpg(self, c, t, slots):
@@ -473,12 +623,20 @@ class Health:
             days.setdefault(r["date"], {"c": set(), "w": None, "b": False})["w"] = r
         for r in self.db.q("SELECT date FROM hl_body"):
             days.setdefault(r["date"], {"c": set(), "w": None, "b": False})["b"] = True
-        xp_of, clears, st = {}, 0, {"str": 0, "end": 0, "wil": 0, "care": 0}
+        meals = {}
+        for r in self.db.q("SELECT date, slot, tags FROM hl_meal"):
+            meals.setdefault(r["date"], []).append((r["slot"], self.meal_grade(json.loads(r["tags"] or "[]"))))
+            days.setdefault(r["date"], {"c": set(), "w": None, "b": False})
+        xp_of, clears, st = {}, 0, {"str": 0, "end": 0, "wil": 0, "care": 0, "diet": 0}
         n_work = 0
         for d_, v in days.items():
             done = bool(v["w"] and v["w"]["done"])
-            x = XP["check"] * len(v["c"]) + (XP["gym"] + (XP["rpe"] if v["w"]["rpe"] else 0) if done else 0) + (XP["body"] if v["b"] else 0)
-            if done and need_ids and need_ids <= v["c"]:
+            ms = meals.get(d_, [])
+            main = {s_ for s_, _ in ms if s_ in ("점심", "저녁")}
+            x = XP["check"] * len(v["c"]) + (XP["gym"] + (XP["rpe"] if v["w"]["rpe"] else 0) if done else 0) + (XP["body"] if v["b"] else 0) \
+                + XP["meal"] * len(main) + XP["plate"] * sum(1 for _, g in ms if g == "균형")
+            st["diet"] += sum(1 for _, g in ms if g == "균형")
+            if done and need_ids and need_ids <= v["c"] and len(main) == 2:
                 x += XP["clear"]
                 clears += 1
             xp_of[d_] = x
@@ -516,6 +674,8 @@ class Health:
                   B("s21", "습관의 주인", "21일 연속 기록", streak >= 21), B("clear1", "올 클리어", "하루 퀘스트 전부 완료", clears >= 1), B("clear7", "완벽주의자", "올 클리어 7번", clears >= 7),
                   B("boss1", "보스 사냥꾼", "주간 보스 처치", slain >= 1), B("boss4", "토벌대장", "주간 보스 4마리 처치", slain >= 4),
                   B("w10", "단골", "운동 10회", n_work >= 10), B("w30", "철인", "운동 30회", n_work >= 30),
+                  B("chef1", "첫 요리", "요리책 레시피로 한 끼", bool(self.db.one("SELECT 1 x FROM hl_meal WHERE recipe IS NOT NULL"))),
+                  B("plate10", "균형 접시", "채소+단백질 접시 10번", st["diet"] >= 10),
                   B("k1", "첫 1kg", "시작보다 1kg 감량", lost >= 1), B("k3", "가벼워진 몸", "시작보다 3kg 감량", lost >= 3), B("k5", "변신", "시작보다 5kg 감량", lost >= 5)]
         iso = t.isocalendar()
         today_q = self.quests(c, t, slots)
@@ -548,7 +708,9 @@ class Health:
                 "checks": self.db.q("SELECT * FROM hl_check ORDER BY date, key"),
                 "workouts": self.db.q("SELECT * FROM hl_workout ORDER BY date"),
                 "labs": self.db.q("SELECT date,name,value,ref,flag,sort FROM hl_lab ORDER BY date, sort, id"),
-                "follows": self.db.q("SELECT date,title,why,done FROM hl_follow ORDER BY date, id")}
+                "follows": self.db.q("SELECT date,title,why,done FROM hl_follow ORDER BY date, id"),
+                "meals": self.db.q("SELECT date,slot,menu,tags,note FROM hl_meal ORDER BY date, id"),
+                "recipes": [{k: r[k] for k in ("title", "tags", "ingredients", "steps", "memo", "time", "serves")} for r in self.recipes() if not r.get("key")]}
 
     def import_(self, d):
         """내보낸 파일(또는 처음 자료 파일)을 넣는다. 같은 날짜·같은 항목은 파일 값으로 바꾸고, 나머지는 그대로 둔다."""

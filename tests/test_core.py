@@ -3071,20 +3071,59 @@ def test_health_dated_plan_quests_and_rpg(rt):
     assert p["time"] == "14:00–14:50" and p["items"] == [["체스트프레스", "3×12"]] and h.plan_for(date(2026, 11, 24))["rest"] and h.plan_for(date(2026, 11, 25))["blocks"] == []
     o = h.overview()
     q = o["quests"]
-    assert [x["id"] for x in q[:3]] == ["water", "info", "gym"] and q[0]["t"] == "07:10" and q[0]["title"] == "물 한 컵으로 시작" and q[1]["kind"] == "info" and q[1]["xp"] == 0
-    assert q[2]["kind"] == "gym" and q[2]["xp"] == 40 and "전신 A" in q[2]["title"] and {x["id"] for x in q[3:]} == {x["id"] for x in c["habits"]} - {"water"}
+    assert [x["id"] for x in q[:5]] == ["water", "info", "meal_lunch", "gym", "meal_dinner"] and q[0]["t"] == "07:10" and q[0]["title"] == "물 한 컵으로 시작" and q[1]["kind"] == "info" and q[1]["xp"] == 0
+    assert q[3]["kind"] == "gym" and q[3]["xp"] == 40 and "전신 A" in q[3]["title"] and q[2]["kind"] == "meal" and q[2]["slot"] == "점심" and not q[2]["on"]
+    assert {x["id"] for x in q[5:]} == {x["id"] for x in c["habits"]} - {"water"}
     assert o["week"]["days"][0]["time"] == "14:00–14:50" and o["week"]["target"] == sum(1 for d in o["week"]["days"] if not d["rest"])
     r0 = o["rpg"]
     assert (r0["level"], r0["xp"], r0["total"], r0["streak"]) == (1, 0, 0, 0) and r0["boss"]["hp"] == r0["boss"]["max"] and not any(b["got"] for b in r0["badges"])
     for hb in c["habits"]:
         h.set_check({"key": hb["id"], "on": True})
     h.set_workout({"done": True, "rpe": 6})
+    h.save_meal({"slot": "점심", "menu": "불고기 덮밥", "tags": ["채소", "단백질", "없는꼬리표"]})
+    h.save_meal({"slot": "저녁", "recipe": h.recipes()[0]["id"], "tags": ["튀김·기름"]})
     r1 = h.overview()["rpg"]
     n = len(c["habits"])
-    assert r1["total"] == 10 * n + 40 + 10 + 20 and r1["today"] == r1["total"] and r1["clears"] == 1 and r1["streak"] == 1 and r1["boss"]["hp"] == r0["boss"]["max"] - 1
-    assert r1["level"] == 2 and r1["xp"] == r1["total"] - 100 and r1["need"] == 150 and {b["id"] for b in r1["badges"] if b["got"]} == {"first", "clear1"} and r1["stats"]["str"] == 1 and r1["stats"]["wil"] == n
+    assert r1["total"] == 10 * n + 40 + 10 + 20 + 10 * 2 + 5 and r1["today"] == r1["total"] and r1["clears"] == 1 and r1["streak"] == 1 and r1["boss"]["hp"] == r0["boss"]["max"] - 1
+    assert r1["level"] == 2 and r1["xp"] == r1["total"] - 100 and r1["need"] == 150 and {b["id"] for b in r1["badges"] if b["got"]} == {"first", "clear1", "chef1"} and r1["stats"]["str"] == 1 and r1["stats"]["wil"] == n and r1["stats"]["diet"] == 1
     assert all(x["on"] for x in h.overview()["quests"] if x["kind"] != "info")
     day["t"] = date(2026, 11, 25)                                     # 하루 건너뛰면 연속 기록이 끊긴다
     assert h.overview()["rpg"]["streak"] == 0 and h.overview()["rpg"]["total"] == r1["total"]
     its = rt.agenda.items(3, date(2026, 11, 23))
     assert next(x for x in its if x["kind"] == "workout" and x["date"] == "2026-11-23")["time"] == "14:00" and not any(x["kind"] == "workout" and x["date"] == "2026-11-24" for x in its)
+
+
+def test_health_recipes_and_meals(rt):
+    from datetime import date
+    from moa.health import Health
+    from moa.recipes import SEED
+    h = Health(rt.db, today=lambda: date(2026, 11, 23))
+    rs = h.recipes()
+    assert len(rs) == len(SEED) and {r["title"] for r in rs} >= {"어묵볶음", "명란젓 맑은국", "닭칼국수", "만능 고추장 양념장"}
+    by = {r["key"]: r for r in rs}
+    assert by["bulgogi"]["grade"] == "균형" and by["eomuk"]["grade"] == "가끔" and by["eomuk"]["steps"][0].startswith("팬에")
+    h.delete_recipe(by["eomuk"]["id"])
+    Health(rt.db, today=lambda: date(2026, 11, 23))                    # 다시 켜도 지운 처음 자료는 돌아오지 않는다
+    assert "eomuk" not in {r["key"] for r in h.recipes()}
+    rid = h.save_recipe({"title": "애호박 고추장찌개", "ingredients": "뒷다리살 500g, 애호박 1/2개", "steps": "1. 고기 볶기\n2) 고추장 넣고 끓이기", "tags": "#국물 채소 단백질"})
+    r = next(x for x in h.recipes() if x["id"] == rid)
+    assert r["steps"] == ["고기 볶기", "고추장 넣고 끓이기"] and r["tags"] == ["국물", "채소", "단백질"] and r["grade"] == "균형" and r["src"] == "직접 넣음"
+    with pytest.raises(ValueError):
+        h.save_recipe({"title": "빈 것", "ingredients": "", "steps": ""})
+    with pytest.raises(ValueError):
+        h.save_meal({"slot": "점심", "menu": ""})
+    with pytest.raises(ValueError):
+        h.save_meal({"date": "2026-11-24", "slot": "점심", "menu": "x"})
+    m = h.save_meal({"slot": "저녁", "recipe": rid, "tags": ["채소", "단백질", "늦은 식사"]})
+    ms = h.meals(date(2026, 11, 23))
+    assert ms[0]["menu"] == "애호박 고추장찌개" and ms[0]["grade"] == "가끔" and next(x for x in h.recipes() if x["id"] == rid)["cooked"] == 1
+    w = h.meal_week()
+    assert w["n"] == 1 and w["tags"]["늦은 식사"] == 1 and w["days"][-1]["today"] and w["days"][-1]["grades"] == ["가끔"]
+    sg = h.suggest()
+    assert len(sg) == 3 and all(x["id"] != rid for x in sg) and sg[0]["grade"] == "균형"        # 최근에 먹은 것은 뒤로, 균형 접시 먼저
+    h.delete_meal(m)
+    assert h.meals(date(2026, 11, 23)) == []
+    c = create_app(rt).test_client()
+    assert c.get("/api/health/recipes").status_code == 200
+    assert c.post("/api/health/meal", json={"slot": "점심", "menu": ""}).status_code == 400
+    assert "애호박 고추장찌개" in [x["title"] for x in h.export()["recipes"]]

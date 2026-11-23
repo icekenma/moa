@@ -1309,6 +1309,38 @@ def create_app(rt, updater=None):
         rt.health.delete_follow(fid)
         return jsonify(ok=True)
 
+    @app.get("/api/health/recipes")
+    def health_recipes():
+        return jsonify(recipes=rt.health.recipes())
+
+    @app.post("/api/health/recipe")
+    def health_recipe_save():
+        d = body()
+        try:
+            if "fav" in d and d.get("id") and len(d) == 2:
+                rt.health.fav_recipe(d["id"], d["fav"])
+                return jsonify(ok=True)
+            return jsonify(id=rt.health.save_recipe(d))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+
+    @app.delete("/api/health/recipe/<int:rid>")
+    def health_recipe_del(rid):
+        rt.health.delete_recipe(rid)
+        return jsonify(ok=True)
+
+    @app.post("/api/health/meal")
+    def health_meal():
+        try:
+            return jsonify(id=rt.health.save_meal(body()))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+
+    @app.delete("/api/health/meal/<int:mid>")
+    def health_meal_del(mid):
+        rt.health.delete_meal(mid)
+        return jsonify(ok=True)
+
     @app.post("/api/health/photo-folder")
     def health_photo_folder():
         # 이 컴퓨터의 '사진\\moa_gym_photos' 폴더에 놓인 기구 사진을 한꺼번에 넣는다(폴더는 정해져 있고 바깥에서 고를 수 없다)

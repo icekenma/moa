@@ -4077,3 +4077,28 @@ html.gm-on dialog.sheet .sheet-in{border-radius:24px}
 .nf-push.on{background:color-mix(in srgb,var(--in) 12%,transparent)}.nf-push.on .nf-dot{background:var(--in);box-shadow:0 0 0 4px color-mix(in srgb,var(--in) 22%,transparent)}
 .nf-push.wait .nf-dot{background:var(--amber,#E9A00F)}
 .nf-sheet .nf-log ul{max-height:none}
+
+/* ---------- 매매 일지: 그날 거래한 종목을 한 줄씩(산 것·판 것을 합쳐서) ---------- */
+.jx-sts{--td-ink:var(--ink);--td-ink2:var(--ink2);--td-ink3:var(--ink3);--td-line:color-mix(in srgb,var(--line) 75%,transparent);display:flex;flex-direction:column}
+.jx-st{all:unset;box-sizing:border-box;display:grid;grid-template-columns:52px minmax(0,1fr) auto;align-items:center;gap:10px;min-height:60px;padding:9px 0;border-top:1px solid var(--td-line);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.jx-st:first-child{border-top:0}
+.jx-st:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:8px}
+.jx-st:active{background:color-mix(in srgb,var(--ink) 5%,transparent)}
+.jx-bdg{font-style:normal;font-size:11px;font-weight:800;text-align:center;padding:4px 0;border-radius:7px;white-space:nowrap;letter-spacing:-.2px}
+.jx-bdg.win{background:color-mix(in srgb,var(--up) 15%,transparent);color:var(--up)}
+.jx-bdg.loss{background:color-mix(in srgb,var(--down) 15%,transparent);color:var(--down)}
+.jx-bdg.flat,.jx-bdg.later{background:color-mix(in srgb,var(--ink) 8%,transparent);color:var(--ink2)}
+.jx-bdg.held,.jx-bdg.mix{background:color-mix(in srgb,var(--amber,#E9A00F) 16%,transparent);color:var(--amber-i,#8A5B00)}
+.jx-stn{display:flex;flex-direction:column;gap:2px;min-width:0}
+.jx-stn b{font-size:14px;font-weight:800;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jx-stn small{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jx-stn .jx-flow{font-variant-numeric:tabular-nums;color:var(--ink2)}
+.jx-st .td-v b{font-size:14px;font-weight:800}
+.jx-st .td-v small{font-size:11.5px;color:var(--ink3)}
+.jx-trades li span small{display:flex;align-items:center;gap:5px}
+.jx-in,.jx-out{font-style:normal;font-size:10px;font-weight:800;padding:1px 5px;border-radius:5px}
+.jx-in{background:color-mix(in srgb,var(--up) 14%,transparent);color:var(--up)}
+.jx-out{background:color-mix(in srgb,var(--down) 14%,transparent);color:var(--down)}
+.td-why li.risk{color:var(--ink3)}
+.td-why li.risk::marker{content:"⚠ "}
+.hx-kv b small{font-size:11px;font-weight:600;color:var(--ink3)}

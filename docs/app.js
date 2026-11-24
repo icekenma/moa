@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.1419";
+const UI_VERSION = "261124.1451";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -3335,17 +3335,90 @@ atAttrHtml(st) {
       <div><dt>${tot.rn ? "실전 손익" : "평균 수익률"}</dt><dd class="${tone(tot.rn ? tot.r : avg)}">${tot.rn ? `${signed(tot.r)}<small>원</small>` : avg == null ? "-" : pct(avg, 2)}</dd></div></dl>`;
     return `<section class="card jx-day">${head}${kpi}${all.map((m, mi) => this.jxMkHtml(m, mi)).join("")}</section>`;
   },
+  // 그날 산 것·판 것을 종목마다 한 덩어리로: 사고판 거래(플랜·묶음마다)를 짝지어 한 줄로 보여 주고, 누르면 자세히
+  jxStocks(m) {
+    const by = {};
+    m.rows.forEach((e) => {
+      const g = by[e.sym] || (by[e.sym] = { sym: e.sym, name: e.name, mkt: e.mkt, real: false, units: [], trades: [], why: null, first: "9", last: "" });
+      g.real = g.real || e.mode === "real";
+      if (!g.units.some((u) => u.k === `${e.kind}:${e.gid}`)) g.units.push({ k: `${e.kind}:${e.gid}`, kind: e.kind, gid: e.gid, unit: e.unit, real: e.mode === "real" });
+      if (e.side === "buy" && e.why && !g.why) g.why = e.why;
+      e.parts.forEach((p) => {
+        const id = `${e.kind}:${e.gid}|${p.label}|${e.side === "sell" ? p.entry_ts : p.ts}`;
+        let t = g.trades.find((x) => x.id === id);
+        if (!t) g.trades.push(t = { id, unit: e.unit, label: p.label, lab: e.kind === "lab", real: e.mode === "real", qty: p.qty });
+        if (e.side === "buy") Object.assign(t, { bought: true, in_ts: p.ts, in_px: p.price, open: p.open, tp: p.target_pct, sl: p.stop_pct });
+        else Object.assign(t, { in_ts: t.in_ts || p.entry_ts, in_px: t.in_px || p.entry, out_ts: p.ts, out_px: p.price, pct: p.pct, pnl: p.pnl, reason: p.reason, hold: p.hold_min, open: false });
+      });
+    });
+    Object.values(by).forEach((g) => g.trades.forEach((t) => { t.prev = !t.bought; }));   // 이날 산 기록이 없으면 앞서 산 것
+    return Object.values(by).map((g) => {
+      const T = g.trades, done = T.filter((t) => t.out_ts), held = T.filter((t) => t.open), later = T.filter((t) => !t.out_ts && !t.open);
+      T.forEach((t) => { const a = t.in_ts && !t.prev ? t.in_ts : t.out_ts; if (a && a < g.first) g.first = a; const b = t.out_ts || t.in_ts; if (b > g.last) g.last = b; });
+      T.sort((a, b) => String(a.in_ts || a.out_ts).localeCompare(String(b.in_ts || b.out_ts)));
+      const avg = (xs, k) => (xs.length ? xs.reduce((s, t) => s + (t[k] || 0), 0) / xs.length : null);
+      const pnl = done.reduce((s, t) => s + (t.pnl || 0), 0), w = done.filter((t) => t.pnl > 0).length;
+      const ins = T.filter((t) => t.in_ts && !t.prev);
+      return Object.assign(g, { done, held, later, pnl, wins: w, pct: avg(done, "pct"), n: T.length, lab: T.some((t) => t.lab),
+        state: done.length && held.length ? "mix" : done.length ? "sold" : held.length ? "held" : "later",
+        in_hm: ins.length ? ins.map((t) => t.in_ts).sort()[0].slice(11, 16) : "", out_hm: done.length ? done.map((t) => t.out_ts).sort().slice(-1)[0].slice(11, 16) : "",
+        in_px: ins.length ? ins.reduce((s, t) => s + t.in_px * t.qty, 0) / ins.reduce((s, t) => s + t.qty, 0) : null });
+    }).sort((a, b) => a.first.localeCompare(b.first));
+  },
+  jxStockRow(g, key) {
+    const M = (v, sg) => this.atM(g.mkt, v, sg);
+    const many = g.lab && g.done.length > 1;
+    const badge = { sold: g.pnl > 0 ? ["win", "익절"] : g.pnl < 0 ? ["loss", "손실"] : ["flat", "본전"], mix: ["mix", "일부 팖"], held: ["held", "보유 중"], later: ["later", "다른 날 팖"] }[g.state];
+    if (g.state === "sold" && g.done.length > 1) badge[1] = `${g.wins}승 ${g.done.length - g.wins}패`;
+    const flow = [g.in_hm ? `${g.in_hm} 삼` : g.done.some((t) => t.prev) ? "전에 삼" : "", g.out_hm ? `${g.out_hm} 팖` : g.held.length ? "들고 있음" : ""].filter(Boolean).join(" → ");
+    const units = g.units.map((u) => u.unit).join(" · ");
+    const right = g.done.length
+      ? `<b class="${tone(g.pct)}">${pct(g.pct, 2)}</b><small class="${tone(g.pnl)}">${many ? `플랜당 ${M(g.pnl / g.done.length, true)}` : M(g.pnl, true)}</small>`
+      : `<b>${M(g.in_px)}</b><small>${g.held.length ? (g.lab ? `${g.held.length}개 플랜 보유` : "보유 중") : "다른 날 팖"}</small>`;
+    return `<button type="button" class="jx-st ${g.mkt}" data-jst="${key}">
+      <i class="jx-bdg ${badge[0]}">${badge[1]}</i>
+      <span class="jx-stn"><b>${esc(g.name)}${g.real ? `<em class="td-real">실전</em>` : ""}</b><small><i class="td-mkd ${g.mkt}"></i>${esc(units)}${g.n > 1 ? ` · ${g.lab ? `플랜 ${g.n}개` : `거래 ${g.n}건`}` : ""}</small><small class="jx-flow">${esc(flow)}</small></span>
+      <span class="td-v">${right}</span></button>`;
+  },
+  jxStockSheet(g, box) {
+    const M = (v, sg) => this.atM(g.mkt, v, sg), hm = (t) => (t ? esc(t.slice(11, 16)) : "-");
+    const md = (t) => (t ? `${Number(t.slice(5, 7))}/${Number(t.slice(8, 10))} ` : "");
+    const many = g.lab && g.done.length > 1;
+    const kv = [];
+    if (g.done.length) {
+      kv.push(["결과", `<i class="${tone(g.pct)}">${pct(g.pct, 2)}</i>${g.done.length > 1 ? ` <small>평균</small>` : ""}`]);
+      kv.push([many ? "손익(플랜 합계)" : "손익", `<i class="${tone(g.pnl)}">${M(g.pnl, true)}</i>${many ? ` <small>플랜당 ${M(g.pnl / g.done.length, true)}</small>` : ""}`]);
+      kv.push(["끝난 거래", `${g.done.length}건 · ${g.wins}승 ${g.done.length - g.wins}패`]);
+    }
+    if (g.in_px != null) kv.push(["산 가격(평균)", M(g.in_px)]);
+    if (g.held.length) kv.push(["지금", g.lab ? `${g.held.length}개 플랜이 들고 있어요` : "들고 있어요"]);
+    const trade = (t) => {
+      const name = g.units.length > 1 ? `${t.unit} · ${t.label}` : t.lab ? t.label : t.unit;
+      const st = t.out_ts ? `<b class="${tone(t.pct)}">${pct(t.pct, 2)}</b><small class="${tone(t.pnl)}">${M(t.pnl, true)}</small><small>${esc(t.reason || "")}</small>`
+        : t.open ? `<b>보유 중</b><small>목표 +${t.tp}% / 손절 −${t.sl}%</small>` : `<b>다른 날 팖</b>`;
+      const hold = t.hold != null ? ` · ${t.hold >= 90 ? Math.round(t.hold / 60) + "시간" : t.hold + "분"}` : "";
+      return `<li><span><b>${esc(name)}${t.real ? " · 실전" : ""}</b>
+        <small><i class="jx-in">삼</i>${t.prev ? md(t.in_ts) : ""}${hm(t.in_ts)} · ${M(t.in_px)} × ${t.qty}주</small>
+        ${t.out_ts ? `<small><i class="jx-out">팖</i>${hm(t.out_ts)} · ${M(t.out_px)}${hold}</small>` : ""}</span><em>${st}</em></li>`;
+    };
+    const why = g.why ? (g.why.reasons || []).slice(0, 3) : [], risks = g.why ? (g.why.risks || []).slice(0, 2) : [];
+    openSheet(g.name, `<div class="hx-list">
+      <div class="td-pop-h"><i class="mk-tag ${g.mkt}">${g.mkt === "kr" ? "국내" : "미국"}</i><span>${esc(g.units.map((u) => u.unit).join(" · "))}${g.real ? " · 실전" : " · 모의"}</span></div>
+      ${kv.length ? `<div class="hx-kv">${kv.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join("")}</div>` : ""}
+      ${why.length ? `<div class="hx-sub">AI가 고른 이유</div><ul class="td-why">${why.map((x) => `<li>${esc(x)}</li>`).join("")}${risks.map((x) => `<li class="risk">${esc(x)}</li>`).join("")}</ul>` : ""}
+      <div class="hx-sub">${g.lab ? "플랜별 거래" : "거래"} ${g.trades.length}건</div><ul class="td-parts jx-trades">${g.trades.map(trade).join("")}</ul>
+      ${g.units.map((u) => `<button type="button" class="btn wide" data-jgo2="${u.k}">${esc(u.unit)} 자세히 보기</button>`).join("")}</div>`, (el) => {
+      el.querySelectorAll("[data-jgo2]").forEach((b) => (b.onclick = () => { closeSheet(); const [k, gd] = b.dataset.jgo2.split(":"); this.jxGo(k, gd); }));
+    });
+  },
   jxMkHtml(m, mi) {
     const X = this.jx, S = m.stat, kr = m.mkt === "kr";
-    const buys = m.rows.map((e, i) => [e, i]).filter(([e]) => e.side === "buy").reverse(), sells = m.rows.map((e, i) => [e, i]).filter(([e]) => e.side === "sell").reverse();
-    const open = (X.more || {})[`${mi}`];
-    const list = (xs, side) => {
-      if (!xs.length) return "";
-      const cut = open ? xs : xs.slice(0, 6);
-      return `<div class="jx-sh"><b>${side === "buy" ? "산 것" : "판 것"}</b><span>${xs.length}종목${side === "sell" ? ` · 거래 ${S.closed}건 · ${S.wins}승 ${S.closed - S.wins}패` : ""}</span></div>
-        <div class="td-tape jx-tape">${cut.map(([e, i]) => this.atTapeRow(e, i).replace(`data-td="${i}"`, `data-jr="${mi}:${i}"`)).join("")}</div>`;
-    };
-    const more = !open && (buys.length > 6 || sells.length > 6) ? `<button type="button" class="td-more" data-jmore="${mi}">모두 보기 (${buys.length + sells.length}종목)</button>` : "";
+    const G = (X.st || (X.st = {}))[mi] = this.jxStocks(m);
+    const open = (X.more || {})[`${mi}`], held = G.filter((g) => g.held.length).length;
+    const cut = open ? G : G.slice(0, 8);
+    const list = G.length ? `<div class="jx-sh"><b>거래한 종목</b><span>${G.length}종목${S.closed ? ` · 끝난 거래 ${S.closed}건 · ${S.wins}승 ${S.closed - S.wins}패` : ""}${held ? ` · 보유 ${held}` : ""}</span></div>
+      <div class="jx-sts">${cut.map((g, i) => this.jxStockRow(g, `${mi}:${i}`)).join("")}</div>` : "";
+    const more = !open && G.length > 8 ? `<button type="button" class="td-more" data-jmore="${mi}">모두 보기 (${G.length}종목)</button>` : "";
     const ai = m.ai.length ? `<div class="jx-sh"><b>AI 추천</b><span>몇 번 받았고 왜 안 샀는지</span></div>${m.ai.map((u) => `<button type="button" class="jx-ai" data-jgo="${u.kind}:${u.gid}">
         <span class="jx-ai-h"><b>${esc(u.unit)}${u.mode === "real" ? `<em class="td-real">실전</em>` : ""}</b><small>추천 ${u.cycles}번${u.cycles > 1 ? ` (${esc(u.first)}~${esc(u.last)})` : u.first ? ` (${esc(u.first)})` : ""}${u.plans > 1 ? ` · 플랜 ${u.plans}개` : ""} · 산 건 ${u.buys}${u.fail ? ` · 못 받음 ${u.fail}` : ""}</small></span>
         ${u.why.length ? `<span class="jx-why">${u.why.map((w) => `<span><i style="width:${Math.max(4, w.pct)}%"></i><b>${esc(w.label)}</b><em>${w.pct}%</em></span>`).join("")}</span>` : ""}
@@ -3354,8 +3427,8 @@ atAttrHtml(st) {
       <div class="jx-mh"><i class="mk-tag ${m.mkt}">${kr ? "국내" : "미국"}</i><span><b>${kr ? "국내장" : "뉴욕장"}</b><small>${esc(m.when)}</small></span>
         <em class="${tone(S.avg_pct)}">${S.closed ? pct(S.avg_pct, 2) : ""}</em></div>
       ${S.real_n ? `<p class="jx-real">실전 손익 <b class="${tone(S.real_krw)}">${signed(S.real_krw)}원</b></p>` : ""}
-      ${list(buys, "buy")}${list(sells, "sell")}${more}
-      ${!buys.length && !sells.length ? `<p class="jx-none">이날 ${kr ? "국내" : "미국"}장에서는 사거나 판 것이 없어요.</p>` : ""}
+      ${list}${more}
+      ${!G.length ? `<p class="jx-none">이날 ${kr ? "국내" : "미국"}장에서는 사거나 판 것이 없어요.</p>` : ""}
       ${ai}</div>`;
   },
   jxGo(kind, gid) {      // 일지에서 실험·자동매매 자세히 보기로
@@ -3367,7 +3440,7 @@ atAttrHtml(st) {
     const X = this.jx, el = (s) => e.target.closest(s);
     let b;
     if (el("a")) return;
-    if ((b = el("[data-jr]"))) { const [mi, i] = b.dataset.jr.split(":").map(Number); return this.atTodaySheet(X.D.mk[mi].rows[i], box, (r) => this.jxGo(r.kind, r.gid)); }
+    if ((b = el("[data-jst]"))) { const [mi, i] = b.dataset.jst.split(":").map(Number); return this.jxStockSheet(X.st[mi][i], box); }
     if ((b = el("[data-jgo]"))) { const [k, g] = b.dataset.jgo.split(":"); return this.jxGo(k, g); }
     if ((b = el("[data-jmore]"))) { (X.more = X.more || {})[b.dataset.jmore] = 1; $("#jxDay", box).innerHTML = this.jxDayHtml(X.D); return; }
     if ((b = el("[data-jday]"))) {

@@ -51,6 +51,8 @@ class Runtime:
         from .evolution import Evolution
         self.evolution = Evolution(self)
         from .autotrade import AutoTrade
+        from .replay import Replay
+        self.replay = Replay(self)        # 다시 돌려 보기(지난 실제 추천을 바꾼 플랜 값으로)
         from .calmdays import CalmDays
         self.calm = CalmDays(self)        # 지수가 평범했던 날 비율(성적 분석의 참고 카드)
         from .webpush import WebPush

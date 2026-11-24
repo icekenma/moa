@@ -1387,6 +1387,10 @@ def evaluate(self, force=False):
         bars, src = [], ""
         try:
             cd = self.rt.invest.candles(r["mkt"], r["sym"], "m5").get("bars") or []
+            try:                                  # 다시 돌려 보기용으로 그날 5분봉을 남겨 둔다(다음 날이면 사라진다)
+                self.rt.replay.keep_m5(r["mkt"], r["sym"], cd, ts)
+            except Exception:
+                pass
             start = ts.replace(second=0, microsecond=0)
             for b in cd:
                 dt = _bar_dt(b["t"], ts)

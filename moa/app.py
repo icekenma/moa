@@ -1592,6 +1592,25 @@ def create_app(rt, updater=None):
     def auto_history():
         return jsonify(rt.autotrade.history(request.args.to_dict()))
 
+    @app.get("/api/replay")
+    def replay_sources():
+        return jsonify(sources=rt.replay.sources())
+
+    @app.post("/api/replay")
+    def replay_start():
+        d = body()
+        try:
+            return jsonify(rt.replay.start(d.get("run_id"), d.get("days") or 30, d.get("change") or {}))
+        except (ValueError, TypeError) as e:
+            return jsonify({"error": str(e)}), 400
+
+    @app.get("/api/replay/<jid>")
+    def replay_job(jid):
+        try:
+            return jsonify(rt.replay.job(jid))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 404
+
     @app.get("/api/market/calm")
     def market_calm():
         try:

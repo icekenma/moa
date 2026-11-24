@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.1638";
+const UI_VERSION = "261124.1656";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -1901,7 +1901,7 @@ pages.invest = {
     if (investState.tab === "trade") return this.trade(box);
     if (investState.tab === "dividend") return this.dividend(box);
     if (investState.tab === "auto") return this.auto(box);
-    if (investState.tab === "atlog") return (this.jx || {}).mode === "ana" ? this.atLog(box) : this.atJournal(box);
+    if (investState.tab === "atlog") return (this.jx || {}).mode === "ana" ? this.atLog(box) : (this.jx || {}).mode === "rp" ? this.rpView(box) : this.atJournal(box);
     if (investState.tab === "evo") return this.evo(box);
     if (investState.tab === "si") return this.si(box);
     if (investState.tab === "scalp") return this.scalp(box);
@@ -3185,9 +3185,126 @@ atAttrHtml(st) {
   },
   // ---------- 매매 기록: 지난 자동매매를 날짜별·전략별·여러 기준별로 ----------
   // ----- 매매 일지: 달력으로 날짜를 고르고, 그날 시장별로 무엇을 사고팔았는지 · AI가 왜 안 샀는지까지 한 화면에
-  jxModeSeg() { return `<div class="jx-mode">${seg("매매기록보기", [["day", "날짜별 일지"], ["ana", "성적 분석"]], (this.jx || {}).mode === "ana" ? "ana" : "day")}</div>`; },
+  jxModeSeg() { const m = (this.jx || {}).mode; return `<div class="jx-mode">${seg("매매기록보기", [["day", "날짜별 일지"], ["ana", "성적 분석"], ["rp", "다시 돌려보기"]], m === "ana" || m === "rp" ? m : "day")}</div>`; },
   jxBindMode(box) {
-    bindSeg(box, "매매기록보기", (v) => { (this.jx = this.jx || {}).mode = v; box.onclick = null; v === "ana" ? this.atLog(box) : this.atJournal(box); });
+    bindSeg(box, "매매기록보기", (v) => { (this.jx = this.jx || {}).mode = v; box.onclick = null; v === "ana" ? this.atLog(box) : v === "rp" ? this.rpView(box) : this.atJournal(box); });
+  },
+  // ---------- 다시 돌려 보기: 지난 실제 AI 추천을 바꾼 플랜 값으로 다시 사고팔아 본다(AI 비용 없음, 주문 없음) ----------
+  async rpView(box) {
+    const P = this.rp || (this.rp = { src: null, days: 30, ch: {}, more: false, res: null, job: null, show: "alt" });
+    if (!P.S || P.stale) box.innerHTML = `${this.jxModeSeg()}<div class="empty loading">다시 돌릴 기록을 찾는 중</div>`;
+    if (!P.S || P.stale || Date.now() - (P.at || 0) > 300000) try { P.S = (await GET("/api/replay")).sources; P.at = Date.now(); P.stale = false; }
+    catch (e) {
+      if (e instanceof Locked || e instanceof NeedConnect) throw e;
+      box.innerHTML = `${this.jxModeSeg()}<div id="rpOld"></div>`; this.jxBindMode(box);
+      if (e.code === "old_server") oldServerBox($("#rpOld", box), () => this.rpView(box)); else $("#rpOld", box).innerHTML = `<div class="notice warn">${esc(e.message)}</div>`;
+      return;
+    }
+    if (investState.tab !== "atlog" || (this.jx || {}).mode !== "rp" || !$("#iv")) return;
+    if (!P.S.length) {
+      box.innerHTML = `${this.jxModeSeg()}<section class="card"><div class="empty">아직 다시 돌릴 추천 기록이 없어요. 자동매매가 추천을 받기 시작하면 여기서 바로 돌려 볼 수 있어요.</div></section>`;
+      return this.jxBindMode(box);
+    }
+    if (!P.S.some((x) => x.id === P.src)) { P.src = P.S[0].id; P.ch = {}; P.res = null; }
+    const S = P.S.find((x) => x.id === P.src);
+    const MAIN = ["min_win_prob", "min_score", "min_rr", "tp_cap", "sl_cap", "exit_mult"];
+    const show = S.keys.filter((k) => P.more || MAIN.includes(k.key) || k.key in P.ch);
+    const cur = (k) => S.params[k.key];
+    const val = (k) => (k.key in P.ch ? P.ch[k.key] : cur(k));
+    const fmt = (v) => (v === true ? "켬" : v === false ? "끔" : v == null ? "-" : String(v));
+    const input = (k) => {
+      const v = val(k), on = k.key in P.ch;
+      if (k.type === "bool") return `<button type="button" class="switch" role="switch" data-rpb="${k.key}" aria-checked="${!!v}" aria-label="${esc(k.label)}"><span></span></button>`;
+      if (k.type === "hm") return `<input type="time" class="rp-in ${on ? "on" : ""}" data-rpk="${k.key}" value="${esc(v || "")}" aria-label="${esc(k.label)}">`;
+      const step = k.type === "int" ? 1 : ["min_rr", "exit_mult", "chase_pct", "watch_mult"].includes(k.key) ? 0.1 : ["tp_cap", "sl_cap", "daily_loss_pct"].includes(k.key) ? 0.5 : 1;
+      return `<span class="rp-step"><button type="button" data-rps="${k.key}:-${step}" aria-label="${esc(k.label)} 줄이기">−</button><input type="number" inputmode="decimal" class="rp-in ${on ? "on" : ""}" data-rpk="${k.key}" value="${esc(v ?? "")}" step="${step}" min="${k.lo ?? ""}" max="${k.hi ?? ""}" aria-label="${esc(k.label)}"><button type="button" data-rps="${k.key}:${step}" aria-label="${esc(k.label)} 늘리기">+</button></span>`;
+    };
+    const nCh = Object.keys(P.ch).length;
+    box.innerHTML = `${this.jxModeSeg()}
+      <section class="card rp-head">
+        <div class="hx-title"><b>다시 돌려 보기</b><span>그때 실제로 받은 AI 추천을 바꾼 값으로 다시 사고팔아 봐요. AI를 다시 부르지 않아 비용이 없고, 주문도 나가지 않아요.</span></div>
+        <label class="rp-src"><span>자동매매</span><select id="rpSrc">${P.S.map((x) => `<option value="${x.id}" ${x.id === P.src ? "selected" : ""}>${esc(x.label)}${x.mode === "real" ? " · 실전" : ""}${x.status === "ended" ? " · 끝남" : ""}</option>`).join("")}</select></label>
+        <div class="tiny">추천 기록 ${won(S.cycles)}번 · ${esc((S.from || "").slice(5).replace("-", "/"))}~${esc((S.to || "").slice(5).replace("-", "/"))}</div>
+        ${seg("다시돌릴기간", [["7", "7일"], ["14", "14일"], ["30", "30일"], ["60", "60일"]], String(P.days))}
+        <div class="rp-keys">${show.map((k) => `<div class="rp-k ${k.key in P.ch ? "on" : ""}"><span><b>${esc(k.label)}</b><small>지금 ${esc(fmt(cur(k)))}</small></span>${input(k)}</div>`).join("")}</div>
+        <div class="rp-act"><button type="button" class="btn sm" id="rpMore">${P.more ? "주요 값만" : "값 더 보기"}</button>${nCh ? `<button type="button" class="btn sm" id="rpReset">바꾼 값 되돌리기</button>` : ""}</div>
+        <button type="button" class="btn dark wide" id="rpGo">${nCh ? `바꾼 값 ${nCh}개로 다시 돌려 보기` : "지금 값으로 다시 돌려 보기"}</button>
+      </section>
+      <div id="rpOut">${P.job ? this.rpWait(P.job) : P.res ? this.rpResult(P.res) : ""}</div>`;
+    this.jxBindMode(box);
+    bindSeg(box, "다시돌릴기간", (v) => { P.days = Number(v); P.res = null; this.rpView(box); });
+    $("#rpSrc").onchange = (e) => { P.src = Number(e.target.value); P.ch = {}; P.res = null; this.rpView(box); };
+    $("#rpMore").onclick = () => { P.more = !P.more; this.rpView(box); };
+    const rs = $("#rpReset"); if (rs) rs.onclick = () => { P.ch = {}; P.res = null; this.rpView(box); };
+    const setv = (key, v) => {
+      const k = S.keys.find((x) => x.key === key);
+      if (k.type === "int" || k.type === "float") { v = Number(v); if (!Number.isFinite(v)) return; if (k.lo != null) v = Math.max(k.lo, v); if (k.hi != null) v = Math.min(k.hi, v); v = Math.round(v * 100) / 100; }
+      if (v === cur(k) || String(v) === String(cur(k))) delete P.ch[key]; else P.ch[key] = v;
+      P.res = null; this.rpView(box);
+    };
+    box.querySelectorAll("[data-rpk]").forEach((el) => (el.onchange = () => setv(el.dataset.rpk, el.value)));
+    box.querySelectorAll("[data-rps]").forEach((b) => (b.onclick = () => { const [k, st] = b.dataset.rps.split(":"); const kk = S.keys.find((x) => x.key === k); setv(k, Number(val(kk) || 0) + Number(st)); }));
+    box.querySelectorAll("[data-rpb]").forEach((b) => (b.onclick = () => setv(b.dataset.rpb, b.getAttribute("aria-checked") !== "true")));
+    $("#rpGo").onclick = async () => {
+      try { P.job = await api("POST", "/api/replay", { run_id: P.src, days: P.days, change: P.ch }); }
+      catch (e) { return toast(e.message, true); }
+      P.res = null; $("#rpOut").innerHTML = this.rpWait(P.job);
+      const poll = async () => {
+        if (!P.job) return;
+        let j;
+        try { j = await GET(`/api/replay/${P.job.id}`); } catch (e) { P.job = null; if ($("#rpOut")) $("#rpOut").innerHTML = `<div class="notice warn">${esc(e.message)}</div>`; return; }
+        if (j.state === "running") { P.job = j; if ($("#rpOut")) $("#rpOut").innerHTML = this.rpWait(j); return setTimeout(poll, 1200); }
+        P.job = null;
+        if (j.state === "error") { if ($("#rpOut")) $("#rpOut").innerHTML = `<section class="card"><div class="notice warn">${esc(j.error)}</div></section>`; return; }
+        P.res = j.res;
+        const o = $("#rpOut");
+        if (o) { o.innerHTML = this.rpResult(P.res); this.rpBind(o); o.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); }
+      };
+      setTimeout(poll, 600);
+    };
+    if (P.res) this.rpBind($("#rpOut"));
+  },
+  rpWait(j) { return `<section class="card"><div class="ai-status"><i class="ai-dot"></i><span>지난 추천을 다시 사고파는 중${j.sec ? ` · ${j.sec}초` : ""}. 처음 돌리면 시세를 받느라 조금 걸려요</span></div></section>`; },
+  rpResult(R) {
+    const M = (v) => this.atM(R.run.mkt, v, true), b = R.base, a = R.alt;
+    const better = (x, y, hi = true) => (x == null || y == null || x === y ? "" : (hi ? y > x : y < x) ? "good" : "bad");
+    const row = (l, f, k, hi = true) => `<tr><th>${l}</th><td>${f(b)}</td>${a ? `<td class="${better(b[k], a[k], hi)}">${f(a)}</td>` : ""}</tr>`;
+    const P2 = (v) => (v == null ? "-" : pct(v, 2));
+    const sp = R.split, sa = sp.alt;
+    let verdict = "";
+    if (a && sa && sp.cut) {
+      const e = sa[0].avg != null && sp.base[0].avg != null ? sa[0].avg - sp.base[0].avg : null, l = sa[1].avg != null && sp.base[1].avg != null ? sa[1].avg - sp.base[1].avg : null;
+      verdict = e == null || l == null ? "앞·뒤 기간을 나눠 보기에는 거래가 모자라요."
+        : e > 0 && l > 0 ? `앞(${esc(R.from.slice(5))}~) 기간과 뒤(${esc(sp.cut.slice(5))}~) 기간 모두 바꾼 값이 나았어요. 그래도 실험에서 한 번 더 확인하는 걸 권해요.`
+        : e > 0 ? "앞 기간에서만 나았고 뒤 기간에서는 아니었어요. 지난 기록에만 맞춘 값일 수 있어요."
+        : l > 0 ? "뒤 기간에서만 나았어요. 최근 흐름에는 맞지만 아직 판단은 일러요."
+        : "앞·뒤 기간 모두 지금 값이 더 나았어요.";
+    }
+    const srcs = Object.entries((a ? R.src.alt : R.src.base) || {}).map(([k, n]) => `${esc(k)} ${n}`).join(" · ");
+    const T = (R.trades[a && this.rp.show === "alt" ? "alt" : "base"] || []).slice(0, 60);
+    return `<section class="card rp-res">
+      <div class="rp-rh"><b>${esc(R.run.name)}</b><small>${esc(R.from.slice(5).replace("-", "/"))}~${esc(R.to.slice(5).replace("-", "/"))} · 추천 ${R.cycles}번 · 종목 ${R.picks}개${R.run.lab ? ` · 실험 ${R.run.plans}개 플랜이 같이 받은 추천` : ""}</small></div>
+      ${R.changes.length ? `<div class="rp-chg">${R.changes.map((c) => `<span>${esc(c.label)} <b>${esc(String(c.from))}→${esc(String(c.to))}</b></span>`).join("")}</div>` : ""}
+      <table class="rp-t"><thead><tr><th></th><th>지금 값</th>${a ? "<th>바꾼 값</th>" : ""}</tr></thead><tbody>
+        ${row("거래", (x) => `${x.n}건`, "n")}${row("승률", (x) => (x.win == null ? "-" : `${x.win}%`), "win")}
+        ${row("거래당 평균", (x) => P2(x.avg), "avg")}${row("손익", (x) => M(x.pnl), "pnl")}
+        ${row("굴리는 돈 대비", (x) => P2(x.ret), "ret")}${row("최대 낙폭", (x) => `${x.mdd}%`, "mdd", false)}${row("이익/손실 비", (x) => x.pf ?? "-", "pf")}</tbody></table>
+      ${verdict ? `<p class="rp-verdict">${verdict}</p>` : ""}
+      ${sp.cut ? `<div class="hx-sub">앞 70% · 뒤 30% 기간(거래당 평균)</div><div class="rp-split">
+        <div><span>앞 ~${esc(sp.cut.slice(5))}</span><b>${P2(sp.base[0].avg)}${sa ? ` → <i class="${better(sp.base[0].avg, sa[0].avg)}">${P2(sa[0].avg)}</i>` : ""}</b><small>${sp.base[0].n}${sa ? `→${sa[0].n}` : ""}건</small></div>
+        <div><span>뒤 ${esc(sp.cut.slice(5))}~</span><b>${P2(sp.base[1].avg)}${sa ? ` → <i class="${better(sp.base[1].avg, sa[1].avg)}">${P2(sa[1].avg)}</i>` : ""}</b><small>${sp.base[1].n}${sa ? `→${sa[1].n}` : ""}건</small></div></div>` : ""}
+      ${R.skips.length ? `<div class="hx-sub">사지 않은 이유</div><ul class="rp-sk">${R.skips.map((x) => `<li><span>${esc(x.label)}</span><b>${x.base}${a ? ` → ${x.alt}` : ""}</b></li>`).join("")}</ul>` : ""}
+      ${R.actual ? `<p class="tiny">같은 기간 실제 거래: ${R.actual.n}건 · 평균 ${P2(R.actual.avg)} · ${M(R.actual.pnl)}. 다시 돌린 '지금 값'과 다르면 그때 플랜 값이 지금과 달랐거나, 실제 체결 가격이 달랐기 때문이에요.</p>` : ""}
+      <details class="rp-tr"><summary>가상 거래 ${T.length}건 보기</summary>
+        ${a ? `<div class="rp-tg">${seg("다시돌린거래", [["alt", "바꾼 값"], ["base", "지금 값"]], this.rp.show === "alt" ? "alt" : "base")}</div>` : ""}
+        <ul>${T.map((t) => `<li><time>${esc(t.ts.slice(5, 10).replace("-", "/"))} ${esc(t.hm)}</time><span><b>${esc(t.name)}</b><small>${esc(t.result)} · 승률 ${t.wp ?? "-"} · 점수 ${t.score ?? "-"}${t.orig === "buy" ? "" : " · 그때는 안 산 종목"}${t.src !== "5분봉" && t.src !== "일봉" ? ` · ${esc(t.src)}` : ""}</small></span><em class="${tone(t.net)}">${pct(t.net, 2)}<small>${M(t.pnl)}</small></em></li>`).join("")}</ul></details>
+      <p class="tiny">시세: ${srcs || "-"}${R.fetched ? ` · 이번에 새로 받은 시세 ${R.fetched}개` : ""}. 수수료·세금(왕복 ${R.run.mkt === "kr" ? "0.2" : "0.25"}%) 뺌. 한 봉에서 익절·손절이 둘 다 닿으면 봉 모양으로 순서를 짐작해요.
+        ${R.not_replayed.length ? `다시 돌리지 않는 값: ${R.not_replayed.map(esc).join(", ")}.` : ""} 추천 횟수·간격은 그때 받은 그대로예요. 하루 손실 한도는 끝난 거래만 셌어요. 과거 결과가 앞으로도 같다는 뜻은 아니에요.</p>
+    </section>`;
+  },
+  rpBind(o) {
+    if (!o) return;
+    bindSeg(o, "다시돌린거래", (v) => { this.rp.show = v; const d = o.querySelector(".rp-tr"); const op = d && d.open; o.innerHTML = this.rpResult(this.rp.res); this.rpBind(o); const d2 = o.querySelector(".rp-tr"); if (d2 && op) d2.open = true; });
   },
   // ---------- 자동 개선: 자동매매가 스스로 고치는 과정을 한눈에 ----------
   async si(box) {

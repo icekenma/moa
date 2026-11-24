@@ -2995,3 +2995,51 @@ def test_calm_days(env, monkeypatch):
     from moa.app import create_app
     j = create_app(env.rt).test_client().get("/api/market/calm?years=9&band=7").get_json()
     assert j["years"] == 5 and j["band"] == 1.0
+
+
+def test_replay_recorded_picks(env):
+    """다시 돌려 보기: 지난 실제 추천(ai_picks + at_log)을 지금 값과 바꾼 값으로 다시 사고팔아 본다. 5분봉은 채점 때 남겨 둔 것(rp_bars)을 쓰고,
+    없으면 일봉으로 순서를 짐작한다. 승률 기준을 올리면 낮은 승률 추천은 빠진다. 주문은 없다."""
+    from datetime import date, datetime, timedelta
+    at, db, rp = env.at, env.rt.db, env.rt.replay
+    rid = env.run(budget=1_000_000)
+    db.x("UPDATE at_runs SET params=json_set(params,'$.min_win_prob',50,'$.min_score',40,'$.min_rr',1.0,'$.tp_cap',10,'$.sl_cap',5,'$.exit_mult',1,"
+         "'$.entry_start','09:00','$.entry_end','15:00','$.max_positions',3,'$.per_trade_pct',20,'$.chase_pct',1) WHERE id=?", (rid,))
+    d0 = date.today() - timedelta(days=6)
+    while d0.weekday() >= 5:
+        d0 += timedelta(days=1)
+    for k in range(3):
+        day = d0 + timedelta(days=k)
+        while day.weekday() >= 5:
+            day += timedelta(days=1)
+        ts = datetime(day.year, day.month, day.day, 9, 30)
+        picks = [{"sym": "A", "name": "에이", "price": 100, "entry_price": 100, "target_pct": 3, "stop_pct": 1.5, "win_prob": 62, "score": 70},
+                 {"sym": "B", "name": "비", "price": 200, "entry_price": 200, "target_pct": 3, "stop_pct": 1.5, "win_prob": 52, "score": 70}]
+        db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text,horizon) VALUES(?,?,?,?,?,?,?,?,?)",
+             (ts.isoformat(), "kr", "claude-sonnet-5-5", 0.1, "보통", "", json.dumps(picks, ensure_ascii=False), "", "day"))
+        pid = db.one("SELECT MAX(id) i FROM ai_picks")["i"]
+        db.x("INSERT INTO at_log(run_id,ts,day,kind,msg,data) VALUES(?,?,?,?,?,?)", (rid, ts.isoformat(), day.isoformat(), "cycle", "추천",
+             json.dumps({"pick_id": pid, "stance": "보통", "decisions": [{"sym": "A", "act": "buy"}, {"sym": "B", "act": "buy"}]})))
+        # A는 오르다 익절, B는 내리다 손절(5분봉을 채점 때 남겨 둔 것처럼)
+        mk = lambda p0, step: [{"t": (ts + timedelta(minutes=5 * i)).strftime("%m/%d %H:%M"), "o": p0 + step * i, "h": p0 + step * i + 0.5, "l": p0 + step * i - 0.5, "c": p0 + step * (i + 1)} for i in range(12)]
+        rp.keep_m5("kr", "A", mk(100, 0.4), ts)
+        rp.keep_m5("kr", "B", mk(200, -0.6), ts)
+    S = rp.sources()
+    assert S and S[0]["id"] == rid and S[0]["cycles"] == 3 and S[0]["params"]["min_win_prob"] == 50
+    R = rp.compare(rid, 30, {"min_win_prob": 60, "daily_loss_pct": 99})
+    assert R["cycles"] == 3 and R["picks"] == 6 and [c["key"] for c in R["changes"]] == ["min_win_prob", "daily_loss_pct"][:len(R["changes"])]
+    assert R["base"]["n"] == 6 and R["alt"]["n"] == 3                               # 승률 52% 추천(B)은 빠짐
+    assert {t["result"] for t in R["trades"]["base"]} == {"익절", "손절"} and {t["result"] for t in R["trades"]["alt"]} == {"익절"}
+    assert R["alt"]["avg"] > R["base"]["avg"] and R["src"]["base"] == {"5분봉": 6}
+    assert any(s["code"] == "winprob" and s["alt"] == 3 and s["base"] == 0 for s in R["skips"])
+    assert not db.q("SELECT 1 FROM at_trades WHERE run_id=?", (rid,))               # 주문·기록 없음
+    from moa.app import create_app
+    import time as _t
+    cl = create_app(env.rt).test_client()
+    j = cl.post("/api/replay", json={"run_id": rid, "days": 30, "change": {"min_score": 80}}).get_json()
+    for _ in range(50):
+        g = cl.get(f"/api/replay/{j['id']}").get_json()
+        if g["state"] != "running":
+            break
+        _t.sleep(0.1)
+    assert g["state"] == "done" and g["res"]["alt"]["n"] == 0 and g["res"]["base"]["n"] == 6

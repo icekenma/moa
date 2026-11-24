@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.1621";
+const UI_VERSION = "261124.1627";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -3535,7 +3535,8 @@ atAttrHtml(st) {
         if (e.code !== "old_server") return toast(e.message, true);
         return openSheet("AI 성적 분석", `<div id="hxOld"></div>`, () => oldServerBox($("#hxOld"), () => { closeSheet(); aiGo.click(); }));
       }
-      aiSheet("ana", { days: H.days, mkt: H.mkt, mode: H.mode, strat: H.strat });
+      const cond = [H.days ? `최근 ${H.days}일` : "전체 기간", { kr: "국내", us: "미국" }[H.mkt], { real: "실전", paper: "모의" }[H.mode]].filter(Boolean).join(" · ") + (H.strat ? " · 고른 전략" : "");
+      aiSheet("ana", { days: H.days, mkt: H.mkt, mode: H.mode, strat: H.strat, cond });
       sheet.addEventListener("close", () => this.hxAiPast(), { once: true });
     };
     this.hxAiPast();
@@ -6633,8 +6634,10 @@ function aiSheet(kind, payload = {}) {
     <div class="ai-box">
       <div id="aiMeterTop" class="cm-slot"></div>
       <div id="aiThread" class="ai-thread"></div>
-      ${chat ? `<div class="ai-chips">${chips.map((q) => `<button type="button" class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
-        <div class="ai-ask"><textarea id="aiQ" rows="2" placeholder="${kind === "ana" ? "예: 오후에 산 거래는 왜 나빠?" : "예: 엔비디아 실적 발표 전에 볼 점은?"}"></textarea><button class="btn dark" id="aiSend">묻기</button></div>` : ""}
+      ${AI_FOLLOW[kind] ? `<div class="ai-start" id="aiStartBox"><p>${esc(payload.cond || "지금 고른 조건")}의 기록을 AI에게 보내 분석해요. 시작을 눌러야 요청하고, 위의 예상 비용이 들어요.</p>
+        <button type="button" class="btn dark wide" id="aiStart">분석 시작</button></div>` : ""}
+      ${chat ? `<div class="ai-follow" ${AI_FOLLOW[kind] ? "hidden" : ""}><div class="ai-chips">${chips.map((q) => `<button type="button" class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
+        <div class="ai-ask"><textarea id="aiQ" rows="2" placeholder="${kind === "ana" ? "예: 오후에 산 거래는 왜 나빠?" : "예: 엔비디아 실적 발표 전에 볼 점은?"}"></textarea><button class="btn dark" id="aiSend">묻기</button></div></div>` : ""}
       <div class="tiny">AI 답변은 참고용이에요. 틀릴 수 있고 매수·매도 지시가 아니에요. AI는 주문하지 않아요.</div>
     </div>`, (box) => {
     const thread = $("#aiThread", box);
@@ -6671,7 +6674,11 @@ function aiSheet(kind, payload = {}) {
             aiMeter.clear(); top();
           }
         }, S.ctl.signal);
-        if (text) S.history.push({ role: "user", content: extra.question || AI_TITLES[kind] }, { role: "assistant", content: text });
+        if (text) {
+          S.history.push({ role: "user", content: extra.question || AI_TITLES[kind] }, { role: "assistant", content: text });
+          const f = $(".ai-follow", box);
+          if (f) f.hidden = false;                       // 첫 분석을 받은 뒤에 이어서 묻기를 연다
+        }
       } catch (e) {
         $(".ai-status", turn).hidden = true;
         if (e instanceof NeedConnect) { closeSheet(); location.hash = "#connect"; return; }
@@ -6687,7 +6694,7 @@ function aiSheet(kind, payload = {}) {
       $("#aiQ", box).onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); } };
       box.addEventListener("click", (e) => { const c = e.target.closest("[data-q]"); if (c) ask({ question: c.dataset.q }); });
       if (kind === "chat") setTimeout(() => $("#aiQ")?.focus(), 250);
-      else ask({});
+      else $("#aiStart", box).onclick = () => { $("#aiStartBox", box).remove(); ask({}); };   // 누르기 전에는 요청하지 않는다
     } else ask({});
   });
   sheet.addEventListener("close", () => S.ctl && S.ctl.abort(), { once: true });

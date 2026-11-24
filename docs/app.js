@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.1228";
+const UI_VERSION = "261124.1233";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -3227,16 +3227,23 @@ atAttrHtml(st) {
         <p class="si-lead">${V.on ? "성적을 보고 판단 기준을 스스로 고쳐요. 새 값은 실험에서 먼저 이겨야 반영되고, 반영 뒤 나빠지면 되돌려요." : "꺼져 있어요. 개선안은 예전처럼 승인 대기로 쌓여요."}</p>
         <dl class="si-n"><div><dt>반영</dt><dd>${C.adopt || 0}</dd></div><div><dt>되돌림</dt><dd>${C.rollback || 0}</dd></div><div><dt>시험</dt><dd>${C.test || 0}</dd></div><div><dt>규칙 새 판</dt><dd>${C.lesson || 0}</dd></div></dl>
         <div class="si-row"><span>실전 자동매매에도 반영</span><button type="button" class="switch" role="switch" id="siReal" aria-checked="${V.real}" aria-label="실전에도 반영" ${V.on ? "" : "disabled"}><span></span></button></div>
+        <div class="si-row"><span>투자 화면도 계속 다듬기<small class="si-sub">자주 보는 화면을 Claude가 주기적으로 살펴 고쳐요</small></span><button type="button" class="switch" role="switch" id="siUi" aria-checked="${V.ui}" aria-label="투자 화면도 계속 다듬기" ${V.on ? "" : "disabled"}><span></span></button></div>
         <div class="si-row"><span>개선에 쓰는 AI</span><b class="si-eng">${esc(V.engine.name)} 고정</b></div>
         <div class="si-row"><span>이번 달 복기 비용</span><b>${won(V.cost.krw)}원 <small>${V.cost.n}번</small></b></div>
       </section>
       ${V.groups.length ? V.groups.map(group).join("") : `<section class="card si-empty"><h3>돌고 있는 모의 실험이 없어요</h3><p>자동 개선은 모의 실험에서 여러 플랜을 같은 추천으로 견줘 이긴 값을 반영해요. 자동매매 화면에서 모의 실험을 시작하면 바로 돌기 시작해요.</p><button type="button" class="btn dark" data-go="auto">자동매매로 가기</button></section>`}
       ${V.lessons.length ? `<section class="card si-ls"><h3>AI 추천 규칙</h3><p class="si-fine">추천 성적이 쌓이면 AI가 규칙을 새로 써요. 새 판이 앞 판보다 나쁘면 앞 판으로 되돌려요. 막대는 최근 판들의 추천 평균 성적이에요.</p><ul>${V.lessons.map(lesson).join("")}</ul></section>` : ""}
       <section class="card si-tl"><h3>개선 기록</h3>${V.events.length ? `<ol>${V.events.map(ev).join("")}</ol>` : `<p class="si-fine">아직 기록이 없어요. 실험 거래가 쌓이면 여기에 시험·반영·되돌림이 차례로 남아요.</p>`}</section>
+      ${V.ui_log.length ? `<section class="card si-ui"><h3>화면 개선 기록</h3><ol>${V.ui_log.map((u) => `<li><button type="button" data-siu="${esc(u.ver)}"><time>${esc(u.day.slice(5).replace("-", "/"))}</time><b>${esc(u.title)}</b><small>${esc(u.ver)}</small></button></li>`).join("")}</ol></section>` : ""}
       <section class="card si-gd"><h3>스스로 바꾸지 않는 것</h3><ul>${V.guards.map((g) => `<li>${esc(g)}</li>`).join("")}</ul></section>`;
-    const sw = async (k, v) => { try { await api("POST", "/api/si", { [k]: v }); toast(k === "on" ? (v ? "자동 개선을 켰어요" : "자동 개선을 껐어요") : v ? "실전에도 반영해요" : "실전은 반영하지 않아요"); } catch (e) { toast(e.message, true); } this.si(box); };
+    const sw = async (k, v) => { try { await api("POST", "/api/si", { [k]: v }); toast(k === "on" ? (v ? "자동 개선을 켰어요" : "자동 개선을 껐어요") : k === "ui" ? (v ? "투자 화면을 계속 다듬어요" : "투자 화면은 그대로 둬요") : v ? "실전에도 반영해요" : "실전은 반영하지 않아요"); } catch (e) { toast(e.message, true); } this.si(box); };
     $("#siOn").onclick = (e) => { const v = e.currentTarget.getAttribute("aria-checked") !== "true"; if (!v && !confirm("자동 개선을 끌까요? 개선안은 승인 대기로 쌓여요")) return; sw("on", v); };
     $("#siReal").onclick = (e) => sw("real", e.currentTarget.getAttribute("aria-checked") !== "true");
+    $("#siUi").onclick = (e) => sw("ui", e.currentTarget.getAttribute("aria-checked") !== "true");
+    box.querySelectorAll("[data-siu]").forEach((b) => (b.onclick = () => {
+      const u = V.ui_log.find((x) => x.ver === b.dataset.siu);
+      openSheet(`${u.ver} · ${u.title}`, `<div class="si-sh"><p class="si-txt">${esc(u.what)}</p>${u.why ? `<p class="si-fine">왜: ${esc(u.why)}</p>` : ""}</div>`);
+    }));
     box.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => { location.hash = `#invest/${b.dataset.go}`; }));
     box.querySelectorAll("[data-sie]").forEach((b) => (b.onclick = () => {
       const e = V.events[+b.dataset.sie], d = e.data || {};

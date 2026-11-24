@@ -2859,4 +2859,6 @@ def test_self_improve_loop(env, monkeypatch):
     cl = create_app(env.rt).test_client()
     assert cl.get("/api/si").get_json()["on"] is True
     assert cl.post("/api/si", json={"real": False}).get_json()["real"] is False
+    assert V["ui_on"] is True and V["ui_log"] and V["ui_log"][0]["ver"].startswith("v")
+    assert cl.post("/api/si", json={"ui": False}).get_json()["ui_on"] is False
     assert cl.post("/api/si", json={"on": False}).get_json()["on"] is False and env.rt.ai.review_model() == "claude-opus-5-5"

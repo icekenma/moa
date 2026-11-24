@@ -63,7 +63,7 @@ class SelfImprove:
     # ------------------------------------------------------------------ 설정
     def conf(self):
         s = self.rt.db.get_setting("self_improve") or {}
-        return {"on": bool(s.get("on", True)), "real": bool(s.get("real", True))}
+        return {"on": bool(s.get("on", True)), "real": bool(s.get("real", True)), "ui": bool(s.get("ui", True))}
 
     def on(self):
         return self.conf()["on"]
@@ -71,10 +71,11 @@ class SelfImprove:
     def set(self, d):
         c = self.conf()
         ch = []
-        for k in ("on", "real"):
+        name = {"on": "자동 개선", "real": "실전에도 반영", "ui": "투자 화면 다듬기"}
+        for k in name:
             if k in (d or {}) and bool(d[k]) != c[k]:
                 c[k] = bool(d[k])
-                ch.append(f"{'자동 개선' if k == 'on' else '실전에도 반영'} {'켬' if c[k] else '끔'}")
+                ch.append(f"{name[k]} {'켬' if c[k] else '끔'}")
         if ch:
             self.rt.db.set_setting("self_improve", c)
             self.note("setting", None, None, " · ".join(ch))
@@ -474,7 +475,9 @@ class SelfImprove:
         m0 = datetime.now().strftime("%Y-%m-01")
         u = self.rt.db.one("SELECT COALESCE(SUM(usd),0) s, COUNT(*) n FROM ai_usage WHERE kind IN ('auto','learn') AND ts>=?", (m0,)) or {}
         cnt = {k: self.rt.db.one("SELECT COUNT(*) n FROM si_log WHERE kind=?", (k,))["n"] for k in ("adopt", "rollback", "keep", "test", "lesson")}
-        return {"on": c["on"], "real": c["real"], "engine": {"model": FABLE, "name": MODELS[FABLE][0].split(" · ")[0]},
+        from .evolution import DEV
+        ui_log = [{"ver": v, "day": d, "title": t, "what": w, "why": y} for v, d, a, t, w, y in DEV if a == "ui"][:8]
+        return {"on": c["on"], "real": c["real"], "ui": c["ui"], "ui_on": c["on"] and c["ui"], "ui_log": ui_log, "engine": {"model": FABLE, "name": MODELS[FABLE][0].split(" · ")[0]},
                 "cost": {"usd": round(float(u.get("s") or 0), 3), "n": int(u.get("n") or 0), "krw": round(float(u.get("s") or 0) * self.rt.ai.fx())},
                 "counts": cnt, "groups": groups, "lessons": lessons, "events": ev,
                 "rules": {"min_n": MIN_N, "edge": EDGE, "watch_n": WATCH_N, "cool_h": COOL_H, "block_d": BLOCK_D, "review_every": REVIEW_EVERY},
@@ -484,4 +487,5 @@ class SelfImprove:
                            f"새 값은 먼저 실험에서 같은 추천으로 시험하고, 거래가 충분히(단타 {MIN_N['day']}건·스윙 {MIN_N['swing']}건) 쌓여 기본보다 거래당 +{EDGE:g}%p 넘게 나을 때만 반영해요",
                            f"반영한 뒤 단타 {WATCH_N['day']}건·스윙 {WATCH_N['swing']}건을 반영 전과 견줘, 나빠졌으면 되돌리고 그 값은 {BLOCK_D}일 동안 다시 안 써요",
                            f"한 번 반영하면 그 묶음은 {COOL_H // 24}일 동안 새로 반영하지 않아요(한꺼번에 여러 번 바뀌지 않게)",
-                           "이 순환에서 AI를 부를 때는 언제나 Fable(가장 좋은 엔진)을 써요"]}
+                           "이 순환에서 AI를 부를 때는 언제나 Fable(가장 좋은 엔진)을 써요",
+                           "투자 화면 다듬기는 보이는 방식만 바꿔요. 사고파는 판단·주문·금액 계산은 건드리지 않아요"]}

@@ -52,6 +52,8 @@ class Runtime:
         self.evolution = Evolution(self)
         from .autotrade import AutoTrade
         self.autotrade = AutoTrade(self)
+        from .selfimprove import SelfImprove
+        self.selfimp = SelfImprove(self)   # 자동 개선(복기 → 개선안 → 실험 → 승격 → 지켜보기·되돌리기)
         from .payoff import Payoff
         self.payoff = Payoff(self)
         from .trading.sweep import SweepJob

@@ -202,6 +202,7 @@ VARIANTS = {
     "counter": ("반대 의견 확인", "추천을 받은 뒤 가장 싼 엔진이 반대편에 서서 약점·악재를 뉴스로 찾고, '반대'로 판정한 종목은 사지 않음", {"counter_check": True}),
     "guard": ("위험 미리 막기", "사기 전에 보유 종목과 함께 '나쁜 날' 손실을 몬테카를로로 재서, 하루 손실 한도를 넘으면 수량을 줄이고 못 맞추면 사지 않음", {"var_guard": True}),
     "hold": ("재료 감시", "하루 한 번 AI가 보유 종목의 재료가 아직 유효한지 뉴스로 확인하고, 무효가 된 종목은 손절·기한을 기다리지 않고 정리", {"hold_watch": True}),
+    "si": ("AI 개선안", "자동 개선이 찾은 새 값을 실전에 넣기 전에 같은 추천으로 시험하는 자리. 새 개선안이 나오면 값이 바뀌고, 기본보다 나으면 반영돼요", {}),
     "pull": ("눌림 기다리기", "AI가 고른 종목이 추천가보다 이미 올라 있으면 버리지 않고, 추천가 근처로 내려올 때까지 기다렸다가 삼(단타 45분·스윙 4시간까지)", {"pull_wait": True}),
     "trigger": ("조건 걸어 두고 사기", "AI가 지금 값보다 낮은 지정가를 내면 그 값까지 내려올 때, 돌파가를 내면 그 값을 넘을 때 삼(유효 시간 안에서)", {"trigger_buy": True}),
     "early": ("급변 때 일찍 묻기", "지수가 직전 추천 때보다 크게 움직이면(단타 0.8%p·스윙 1.2%p) 간격을 기다리지 않고 바로 빠른 재추천을 받아 이 플랜만 씀(하루 4번까지)", {"early_call": True}),
@@ -887,6 +888,9 @@ class AutoTrade:
             self._autopilot()
             self._digest()
             self._heads_up()
+            si = getattr(self.rt, "selfimp", None)
+            if si is not None:
+                si.tick()                                # 자동 개선 순환(5분에 한 번)
         except Exception as e:
             self.rt.db.log("system", "error", f"모의 자동 테스트 오류: {type(e).__name__}: {e}", self._now())
         quotes = {}           # 이번 차례에 받은 시세(같은 종목을 여러 플랜이 기다려도 한 번만 묻는다)
@@ -1123,6 +1127,9 @@ class AutoTrade:
                 self._tell(run, f"개선안이 나왔어요({len(pr['changes'])}건). 앱에서 확인하고 승인해 주세요", "개선안 승인 대기", force_real=True)
         except Exception as e:
             self.rt.db.log("system", "error", f"자동매매 분석 오류: {e}", self._now())
+        si = getattr(self.rt, "selfimp", None)
+        if si is not None and si.on() and run.get("lab_id"):
+            return                                       # 실험은 자동 개선이 기본 플랜만 골라 복기한다(selfimprove._reviews)
         if p.get("ai_review") and self.rt.ai.configured():
             threading.Thread(target=self._ai_review_bg, args=(run["id"],), daemon=True).start()
 
@@ -2667,7 +2674,11 @@ class AutoTrade:
         return self._save_proposal(run, "rule", summary, ch, {"all": a, "small": small, "opp": {k: v for k, v in O.items() if k != "items"}, "notes": notes})
 
     def _auto_apply(self, run, pr, why):
-        """모의이고 사용자가 켜 둔 경우에만, 승인 대기 개선안을 스스로 반영한다. 실전은 언제나 사람이 승인한다."""
+        """자동 개선이 켜져 있으면 개선안을 실험에서 먼저 시험하게 넘긴다(selfimprove.take — 이기면 실전까지 반영).
+        꺼져 있으면 예전대로: 모의이고 사용자가 켜 둔 경우에만 스스로 반영하고, 실전은 사람이 승인한다."""
+        si = getattr(self.rt, "selfimp", None)
+        if si is not None and pr and pr.get("changes") and si.take(run, pr):
+            return True
         if not pr or pr.get("status") != "pending" or run["mode"] != "paper" or not run["params"].get("auto_apply"):
             return False
         try:
@@ -3026,6 +3037,8 @@ class AutoTrade:
             self.rt.db.x("UPDATE at_runs SET params=?, model=? WHERE id=?", (json.dumps(dict(r["params"], **patch), ensure_ascii=False), model, r["id"]))
         if why:
             self.log(b["id"], "control", f"추천 엔진 점검 · {why}", {"engine": {"from": cur, "to": model, "ceil": ceil, "stats": st, "lock": lock}})
+            if getattr(self.rt, "selfimp", None) is not None and model != cur:
+                self.rt.selfimp.note("engine", b["mkt"], b["style"], f"추천 엔진 {self._short(cur)} → {self._short(model)}", why)
             self._tell(b, why, "추천 엔진 점검")
 
     def _cap_upgrade(self):

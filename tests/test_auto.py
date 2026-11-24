@@ -1755,8 +1755,11 @@ def test_flow_route(rt):
 
 
 def test_review_uses_its_own_engine(env):
-    """복기(자동매매 복기·추천 성적 복기)는 따로 정한 엔진(기본 Opus)으로. 추천 엔진 설정과는 별개."""
+    """복기(자동매매 복기·추천 성적 복기)는 따로 정한 엔진(기본 Opus)으로. 추천 엔진 설정과는 별개.
+    자동 개선이 켜져 있으면(기본) 언제나 Fable — 이 테스트는 꺼 두고 예전 동작을 본다."""
     ai = env.rt.ai
+    assert ai.meter("auto")["model"] == ai.meter("learn")["model"] == "claude-fable-5-2"           # 자동 개선 켜짐(기본) → Fable 고정
+    env.rt.selfimp.set({"on": False})
     assert ai.meter("auto")["model"] == "claude-opus-5-5" and ai.meter("learn")["model"] == "claude-opus-5-5"
     assert ai.meter("chat")["model"] == "claude-sonnet-5-5"
     env.rt.settings.update({"ai": {"review_model": "claude-fable-5-2"}})
@@ -2787,3 +2790,73 @@ def test_early_call_on_sharp_index_move(env, monkeypatch):
     assert asked == [(True, [runs["early"]["id"]])]
     lg = env.rt.db.q("SELECT run_id, data FROM at_log WHERE kind='cycle' AND data LIKE '%급반등%'")
     assert [r["run_id"] for r in lg] == [runs["early"]["id"]] and '"early"' in lg[0]["data"] and at._open(runs["early"]["id"])
+
+
+def test_self_improve_loop(env, monkeypatch):
+    """자동 개선: 개선안은 실험 'AI 개선안' 플랜에서 먼저 시험 → 실험 플랜이 기본보다 충분히 나으면 기본·같은 방식 자동매매에 반영
+    → 반영 뒤 나빠지면 되돌림. 손실 한도는 바꾸지 않고, 복기 엔진은 Fable."""
+    from datetime import datetime, timedelta
+    at, si, db = env.at, env.rt.selfimp, env.rt.db
+    assert si.on() and env.rt.ai.review_model() == "claude-fable-5-2"
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (0.1, {"fx": 1400.0}))
+    mine = env.run()
+    L = at.lab_create({"budget": 3_000_000, "mkt": "kr", "style": "day", "days": 20, "model": "claude-sonnet-5-5"})["labs"][0]
+    ids = {x["variant"]: x["id"] for x in L["runs"]}
+    assert "si" in ids and at._run(ids["si"])["params"]["min_win_prob"] == at._run(ids["base"])["params"]["min_win_prob"]
+    k = [0]
+
+    def trades(rid, n, pct):
+        for _ in range(n):
+            k[0] += 1
+            t = (datetime.now() + timedelta(minutes=k[0])).isoformat(timespec="seconds")
+            db.x("INSERT INTO at_trades(run_id,ver,mkt,sym,name,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,exit_ts,exit_price,reason,pnl,pnl_pct,exit_day) "
+                 "VALUES(?,1,'kr','005930','삼성전자',1,'closed',?,?, '09:10',100,3,1.5,?,100,'익절',?,?,?)", (rid, t, t[:10], t, pct * 1000, pct, t[:10]))
+    # ② 개선안 → ③ 시험: 기본 플랜의 개선안은 바로 반영하지 않고 'AI 개선안' 플랜에 넣는다. 손실 한도 변경은 버린다
+    b = at._run(ids["base"])
+    pr = at._save_proposal(b, "ai", "더 깐깐하게", [{"key": "min_score", "label": "점수", "from": b["params"]["min_score"], "to": 66, "why": "x"},
+                                                  {"key": "daily_loss_pct", "label": "하루 손실", "from": 3, "to": 9, "why": "x"}])
+    assert at._auto_apply(b, pr, "AI 복기") is True and at._proposal(pr["id"])["status"] == "testing"
+    S = at._run(ids["si"])["params"]
+    assert S["min_score"] == 66 and S["daily_loss_pct"] == b["params"]["daily_loss_pct"] and S["si_from"]["proposal"] == pr["id"]
+    assert at._run(ids["base"])["params"]["min_score"] == b["params"]["min_score"]          # 기본 플랜은 그대로
+    pr2 = at._save_proposal(at._run(ids["loose"]), "rule", "x", [{"key": "min_score", "label": "점수", "from": 0, "to": 50}])
+    assert at._auto_apply(at._run(ids["loose"]), pr2, "x") is True and at._proposal(pr2["id"])["status"] == "skipped"   # 실험 플랜의 개선안은 쓰지 않음
+    # ④ 승격: 거래가 모자라면 기다리고, 충분히 나으면 반영
+    trades(ids["base"], 20, 0.2)
+    trades(ids["loose"], 10, 1.0)
+    si.tick(force=True)
+    c = next(x for x in si.candidates(at._run(ids["base"]), at._runs("WHERE lab_id=?", (L["id"],))) if x["variant"] == "loose")
+    assert not c["ok"] and any("거래 10/20" in w for w in c["why"]) and not db.q("SELECT * FROM si_changes")
+    trades(ids["loose"], 10, 1.0)
+    si.tick(force=True)
+    lp = at._run(ids["loose"])["params"]
+    B, M = at._run(ids["base"])["params"], at._run(mine)["params"]
+    assert (B["min_win_prob"], B["min_rr"]) == (48, 1.2) and (M["min_win_prob"], M["min_rr"]) == (48, 1.2)   # 기본 + 같은 방식 내 자동매매
+    assert B["daily_loss_pct"] == b["params"]["daily_loss_pct"]
+    assert at._run(ids["si"])["params"].get("si_from") is None and at._run(ids["si"])["params"]["min_score"] == B["min_score"]   # 시험 자리는 새 기본값으로
+    assert lp["min_win_prob"] == 41                                                        # "넓게"는 새 기본에서 같은 차이만큼 다시 갈라짐(그 방향을 한 발 더 시험)
+    ch = db.q("SELECT * FROM si_changes ORDER BY id")
+    assert {r["run_id"] for r in ch} == {ids["base"], mine} and all(r["status"] == "active" for r in ch)
+    assert db.one("SELECT source FROM at_changes WHERE run_id=? ORDER BY id DESC LIMIT 1", (mine,))["source"] == "si"
+    si.tick(force=True)
+    assert len(db.q("SELECT * FROM si_changes")) == 2                                       # 3일 동안 다시 승격하지 않음
+    # ⑤ 지켜보기: 반영 뒤 내 자동매매 15건이 반영 전보다 나쁘면 되돌림
+    trades(mine, 15, -1.0)
+    old = db.one("SELECT ts FROM si_changes WHERE run_id=?", (mine,))["ts"]
+    before = (datetime.fromisoformat(old) - timedelta(days=1)).isoformat(timespec="seconds")
+    for i in range(10):
+        db.x("INSERT INTO at_trades(run_id,ver,mkt,sym,name,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,exit_ts,exit_price,reason,pnl,pnl_pct,exit_day) "
+             "VALUES(?,1,'kr','000660','하이닉스',1,'closed',?,?,'09:10',100,3,1.5,?,100,'익절',300,0.3,?)", (mine, before, before[:10], before, before[:10]))
+    si.tick(force=True)
+    M = at._run(mine)["params"]
+    st = {r["run_id"]: r["status"] for r in db.q("SELECT * FROM si_changes")}
+    assert st[mine] == "rolled" and (M["min_win_prob"], M["min_rr"]) == (b["params"]["min_win_prob"], b["params"]["min_rr"])
+    assert si._blocked("kr", "day", "min_win_prob", 48)                                     # 되돌린 값은 2주간 다시 안 씀
+    V = si.view()
+    kinds = {e["kind"] for e in V["events"]}
+    assert {"test", "adopt", "rollback"} <= kinds and V["engine"]["model"] == "claude-fable-5-2" and V["groups"][0]["label"] == "국내 단타"
+    from moa.app import create_app
+    cl = create_app(env.rt).test_client()
+    assert cl.get("/api/si").get_json()["on"] is True
+    assert cl.post("/api/si", json={"real": False}).get_json()["real"] is False
+    assert cl.post("/api/si", json={"on": False}).get_json()["on"] is False and env.rt.ai.review_model() == "claude-opus-5-5"

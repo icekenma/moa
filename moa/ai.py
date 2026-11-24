@@ -193,6 +193,11 @@ class AI:
             return FX_DEFAULT
 
     def review_model(self):
+        """복기 엔진. 자동 개선이 켜져 있으면 언제나 가장 좋은 엔진(Fable)을 쓴다(사용자 요청 2026-11-24)."""
+        si = getattr(self.rt, "selfimp", None)
+        if si is not None and si.on():
+            from .selfimprove import FABLE
+            return FABLE
         m = self.conf().get("review_model")
         return m if m in MODELS else REVIEW_MODEL
 

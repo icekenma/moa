@@ -2050,7 +2050,8 @@ def save_lessons(self, text, model, usd, h="day"):
 def auto_learn(self):
     """새 채점이 충분히 쌓였으면 뒤에서 AI 복기를 돌린다(추천 종류마다 하루 한 번까지, 설정에서 끌 수 있음)."""
     auto = self.rt.db.get_setting("ai_learn_auto")
-    if auto is not None and not auto:
+    si = getattr(self.rt, "selfimp", None)
+    if auto is not None and not auto and not (si is not None and si.on()):     # 자동 개선이 켜져 있으면 복기는 늘 돈다
         return
     if not self.rt.ai.configured() or getattr(self, "_learning", False):
         return

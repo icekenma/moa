@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.0931";
+const UI_VERSION = "261124.1202";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -751,7 +751,7 @@ const MENU = {
   assets: { title: "자산", subs: [["overview", "한눈에"], ["accounts", "계좌"], ["goal", "목표"]] },
   // 투자는 성격이 같은 화면을 묶는다(AI 추천·자동매매 / 관심·발견·주문 / 적립·배당). 묶음 안은 화면 위 탭으로 오간다
   invest: { title: "투자", subs: [["home", "홈"], ["ai", "AI"], ["market", "종목"], ["dca", "적립·배당"], ["evo", "엔진 노트"]],
-    groups: { ai: [["auto", "자동매매"], ["ai", "AI 추천"], ["atlog", "매매 기록"]], market: [["market", "관심"], ["discover", "발견"], ["trade", "주문"]], dca: [["dca", "적립"], ["dividend", "배당"]] }, extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
+    groups: { ai: [["auto", "자동매매"], ["ai", "AI 추천"], ["atlog", "매매 기록"], ["si", "자동 개선"]], market: [["market", "관심"], ["discover", "발견"], ["trade", "주문"]], dca: [["dca", "적립"], ["dividend", "배당"]] }, extra: { scalp: "ai", aistat: "ai", backtest: "ai", rules: "ai", sweep: "ai", stock: "home", account: "home" } },
   // 설정: 자주 바꾸는 것부터. 한 번만 맞추면 되는 서버 연결은 뒤로.
   settings: { title: "설정", subs: [["all", "전체"], ["theme", "화면"], ["ai", "AI"], ["accounts", "계좌"], ["trading", "주문·알림"], ["security", "보안"], ["backup", "백업"], ["connect", "서버"], ["app", "앱 정보"]] },
 };
@@ -1866,7 +1866,7 @@ pages.invest = {
     if (sub === "sweep") return this.sweep();
     if (sub === "stock") return mkt.detail(h);
     if (sub === "aistat") return this.aiStat();
-    investState.tab = ["home", "ai", "market", "discover", "account", "trade", "dca", "dividend", "auto", "atlog", "evo"].includes(sub) ? sub : sub === "scalp" ? "ai" : "home";
+    investState.tab = ["home", "ai", "market", "discover", "account", "trade", "dca", "dividend", "auto", "atlog", "si", "evo"].includes(sub) ? sub : sub === "scalp" ? "ai" : "home";
     const tabs = groupTabs("invest", investState.tab);
     setTop("투자", { menu: "invest", sub: investState.tab });
     view.innerHTML = `${tabs}<div id="iv" style="display:flex;flex-direction:column;gap:8.5px"></div>`;
@@ -1878,7 +1878,7 @@ pages.invest = {
     if (h.sub === "aistat") return;
     if (h.sub === "sweep") return this.sweepPoll();
     if (investState.tab === "ai") { this.apSess(); if (!this._apT || Date.now() - this._apT > 5000) { this._apT = Date.now(); this.apGuards(); } return; }
-    if (["dividend", "atlog", "evo"].includes(investState.tab)) return;  // 입력·읽는 화면이라 주기적으로 다시 그리지 않는다
+    if (["dividend", "atlog", "si", "evo"].includes(investState.tab)) return;  // 입력·읽는 화면이라 주기적으로 다시 그리지 않는다
     if (investState.tab === "auto") {  // 자세히 보는 화면만 6초마다 새로(입력 화면·펼쳐 읽는 중에는 그대로)
       // 자동매매 창에서 종목을 눌러 시세 창이 떠 있으면 그 창이 같은 자리를 쓰고 있다: 다시 그리면 시세 창을 덮어 버리니 기다린다
       if (stockSheet.stack.length || (pgSheet.open && !String(pgSheet.key).startsWith("auto:"))) return;
@@ -1903,6 +1903,7 @@ pages.invest = {
     if (investState.tab === "auto") return this.auto(box);
     if (investState.tab === "atlog") return (this.jx || {}).mode === "ana" ? this.atLog(box) : this.atJournal(box);
     if (investState.tab === "evo") return this.evo(box);
+    if (investState.tab === "si") return this.si(box);
     if (investState.tab === "scalp") return this.scalp(box);
     return this.dca(box);
   },
@@ -3176,6 +3177,77 @@ atAttrHtml(st) {
   jxModeSeg() { return `<div class="jx-mode">${seg("매매기록보기", [["day", "날짜별 일지"], ["ana", "성적 분석"]], (this.jx || {}).mode === "ana" ? "ana" : "day")}</div>`; },
   jxBindMode(box) {
     bindSeg(box, "매매기록보기", (v) => { (this.jx = this.jx || {}).mode = v; box.onclick = null; v === "ana" ? this.atLog(box) : this.atJournal(box); });
+  },
+  // ---------- 자동 개선: 자동매매가 스스로 고치는 과정을 한눈에 ----------
+  async si(box) {
+    if (!this.siV) box.innerHTML = `<div class="empty loading">자동 개선 상황을 여는 중</div>`;
+    let V;
+    try { V = await GET("/api/si"); }
+    catch (e) { if (e instanceof Locked || e instanceof NeedConnect) throw e; box.innerHTML = `<div class="notice warn">${esc(e.message)}</div>`; return; }
+    if (investState.tab !== "si" || !$("#iv")) return;
+    this.siV = V;
+    const ST = ["모으기", "비교", "시험", "반영", "지켜보기"];
+    const siF = (v) => (v === true ? "켬" : v === false ? "끔" : v == null ? "-" : typeof v === "number" ? String(+v.toFixed(2)) : String(v));
+    const pct = (v) => (v == null ? "-" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v).toFixed(2)}%`);
+    const pp = (v) => (v == null ? "-" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v).toFixed(2)}%p`);
+    const when = (t) => (t ? `${t.slice(5, 10).replace("-", "/")} ${t.slice(11, 16)}` : "");
+    const C = V.counts || {};
+    const track = (g) => `<ol class="si-track" aria-label="진행 단계: ${ST[g.stage - 1]}">${ST.map((l, i) =>
+      `<li class="${i + 1 < g.stage ? "past" : i + 1 === g.stage ? "now" : ""}"${i + 1 === g.stage ? ' aria-current="step"' : ""}><i></i><span>${l}</span></li>`).join("")}</ol>`;
+    const cand = (c) => `<li class="${c.ok ? "ok" : ""}"><b>${esc(c.label)}</b><span>${c.me.n}건 · ${pct(c.me.avg)}</span>
+      <em class="${c.diff > 0 ? "up" : c.diff < 0 ? "down" : ""}">${c.diff == null ? "비교 전" : pp(c.diff)}</em></li>`;
+    const group = (g) => {
+      const w = g.watch[0], t = g.si && g.si.from;
+      const now = w ? `<p class="si-now">${esc(w.run)}${w.mode === "real" ? " <small class=\"si-real\">실전</small>" : ""}: ${w.changes.map((x) => `${esc(x.label)} ${esc(siF(x.from))}→${esc(siF(x.to))}`).join(", ")}
+          <span class="si-bar"><i style="width:${Math.min(100, Math.round(w.n / w.need * 100))}%"></i></span><small>반영 뒤 ${w.n}/${w.need}건 · 다 차면 반영 전과 견줘 남기거나 되돌려요</small></p>`
+        : t ? `<p class="si-now">시험 중인 개선안: ${t.changes.map((x) => `${esc(x.label)} ${esc(siF(x.from))}→${esc(siF(x.to))}`).join(", ")}<small>${esc(t.run)}의 ${t.source === "ai" ? "AI" : "규칙"} 분석 · ${when(g.si.since)}부터</small></p>` : "";
+      const rv = g.review || {};
+      return `<section class="card si-g">
+        <header class="si-gh"><h3>${esc(g.label)}</h3><span>${g.plans}개 플랜이 같은 추천으로 겨루는 중</span></header>
+        ${track(g)}
+        <p class="si-line">${esc(g.line)}</p>${now}
+        ${g.cands.length ? `<details class="si-c"><summary>기본 플랜과 견준 성적 <small>같은 기간 · 거래당 평균</small></summary><ul>${g.cands.map(cand).join("")}</ul>
+          <p class="si-fine">반영 조건: 거래 ${V.rules.min_n[g.style] || 10}건 이상, 기본보다 거래당 +${V.rules.edge}%p, 총손익도 더 크고, 승률이 5%p 넘게 낮지 않을 것</p></details>` : ""}
+        <dl class="si-kv"><div><dt>다음 AI 복기</dt><dd>${rv.got >= rv.need ? "곧" : `거래 ${rv.got}/${rv.need}건`}</dd></div>
+          <div><dt>함께 바뀌는 자동매매</dt><dd>${g.runs.length ? g.runs.map((r) => `${r.mode === "real" ? "실전 " : ""}${esc(r.name)}`).join(", ") : "없음(실험만)"}</dd></div></dl>
+      </section>`;
+    };
+    const lesson = (l) => {
+      const mx = Math.max(0.5, ...l.by_ver.map((v) => Math.abs(v.avg)));
+      return `<li><button type="button" class="si-l" data-sil="${esc(l.h)}"><b>${esc(l.label)}</b><span>${l.ver || 0}판${l.restored_from ? ` · ${l.restored_from}판으로 되돌림` : ""}</span>
+        <span class="si-vb">${l.by_ver.map((v) => `<i class="${v.avg >= 0 ? "up" : "down"}" style="height:${Math.max(8, Math.round(Math.abs(v.avg) / mx * 100))}%" title="${v.ver}판 ${pct(v.avg)} · ${v.n}건"></i>`).join("")}</span></button></li>`;
+    };
+    const ev = (e, i) => `<li class="si-e k-${esc(e.kind)}"><button type="button" data-sie="${i}"><time>${when(e.ts)}</time><span class="si-k">${esc(e.kind_label)}</span>
+      <b>${e.mkt && !/^(국내|미국)/.test(e.title) ? `${e.mkt === "kr" ? "국내" : "미국"} ${({ day: "단타", swing: "스윙", month: "장기" })[e.style] || ""} · ` : ""}${esc(e.title)}</b></button></li>`;
+    box.innerHTML = `
+      <section class="card si-hero">
+        <div class="si-hd"><h2>자동 개선</h2><button type="button" class="switch" role="switch" id="siOn" aria-checked="${V.on}" aria-label="자동 개선"><span></span></button></div>
+        <p class="si-lead">${V.on ? "성적을 보고 판단 기준을 스스로 고쳐요. 새 값은 실험에서 먼저 이겨야 반영되고, 반영 뒤 나빠지면 되돌려요." : "꺼져 있어요. 개선안은 예전처럼 승인 대기로 쌓여요."}</p>
+        <dl class="si-n"><div><dt>반영</dt><dd>${C.adopt || 0}</dd></div><div><dt>되돌림</dt><dd>${C.rollback || 0}</dd></div><div><dt>시험</dt><dd>${C.test || 0}</dd></div><div><dt>규칙 새 판</dt><dd>${C.lesson || 0}</dd></div></dl>
+        <div class="si-row"><span>실전 자동매매에도 반영</span><button type="button" class="switch" role="switch" id="siReal" aria-checked="${V.real}" aria-label="실전에도 반영" ${V.on ? "" : "disabled"}><span></span></button></div>
+        <div class="si-row"><span>개선에 쓰는 AI</span><b class="si-eng">${esc(V.engine.name)} 고정</b></div>
+        <div class="si-row"><span>이번 달 복기 비용</span><b>${won(V.cost.krw)}원 <small>${V.cost.n}번</small></b></div>
+      </section>
+      ${V.groups.length ? V.groups.map(group).join("") : `<section class="card si-empty"><h3>돌고 있는 모의 실험이 없어요</h3><p>자동 개선은 모의 실험에서 여러 플랜을 같은 추천으로 견줘 이긴 값을 반영해요. 자동매매 화면에서 모의 실험을 시작하면 바로 돌기 시작해요.</p><button type="button" class="btn dark" data-go="auto">자동매매로 가기</button></section>`}
+      ${V.lessons.length ? `<section class="card si-ls"><h3>AI 추천 규칙</h3><p class="si-fine">추천 성적이 쌓이면 AI가 규칙을 새로 써요. 새 판이 앞 판보다 나쁘면 앞 판으로 되돌려요. 막대는 최근 판들의 추천 평균 성적이에요.</p><ul>${V.lessons.map(lesson).join("")}</ul></section>` : ""}
+      <section class="card si-tl"><h3>개선 기록</h3>${V.events.length ? `<ol>${V.events.map(ev).join("")}</ol>` : `<p class="si-fine">아직 기록이 없어요. 실험 거래가 쌓이면 여기에 시험·반영·되돌림이 차례로 남아요.</p>`}</section>
+      <section class="card si-gd"><h3>스스로 바꾸지 않는 것</h3><ul>${V.guards.map((g) => `<li>${esc(g)}</li>`).join("")}</ul></section>`;
+    const sw = async (k, v) => { try { await api("POST", "/api/si", { [k]: v }); toast(k === "on" ? (v ? "자동 개선을 켰어요" : "자동 개선을 껐어요") : v ? "실전에도 반영해요" : "실전은 반영하지 않아요"); } catch (e) { toast(e.message, true); } this.si(box); };
+    $("#siOn").onclick = (e) => { const v = e.currentTarget.getAttribute("aria-checked") !== "true"; if (!v && !confirm("자동 개선을 끌까요? 개선안은 승인 대기로 쌓여요")) return; sw("on", v); };
+    $("#siReal").onclick = (e) => sw("real", e.currentTarget.getAttribute("aria-checked") !== "true");
+    box.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => { location.hash = `#invest/${b.dataset.go}`; }));
+    box.querySelectorAll("[data-sie]").forEach((b) => (b.onclick = () => {
+      const e = V.events[+b.dataset.sie], d = e.data || {};
+      const rowsCh = (d.changes || []).map((x) => `<li><span>${esc(x.label)}</span><b>${esc(siF(x.from))} → ${esc(siF(x.to))}</b></li>`).join("");
+      const cmp = d.me && d.base ? `<dl class="si-kv"><div><dt>${esc(d.plan || "실험 플랜")}</dt><dd>${d.me.n}건 · ${pct(d.me.avg)} · 승률 ${d.me.win}%</dd></div><div><dt>기본 플랜</dt><dd>${d.base.n}건 · ${pct(d.base.avg)} · 승률 ${d.base.win}%</dd></div></dl>`
+        : d.after && d.before ? `<dl class="si-kv"><div><dt>반영 뒤</dt><dd>${d.after.n}건 · ${pct(d.after.avg)}</dd></div><div><dt>반영 전</dt><dd>${d.before.n}건 · ${pct(d.before.avg)}</dd></div></dl>` : "";
+      openSheet(`${e.kind_label} · ${when(e.ts)}`, `<div class="si-sh"><h4>${esc(e.title)}</h4>${rowsCh ? `<ul class="si-ch">${rowsCh}</ul>` : ""}${cmp}${e.detail ? `<p class="si-txt">${esc(e.detail)}</p>` : ""}</div>`);
+    }));
+    box.querySelectorAll("[data-sil]").forEach((b) => (b.onclick = () => {
+      const l = V.lessons.find((x) => x.h === b.dataset.sil);
+      openSheet(`${l.label} 추천 규칙 ${l.ver || 0}판`, `<div class="si-sh"><p class="si-fine">${esc(l.at || "")}${l.model ? ` · ${esc(l.model)}` : ""}</p>
+        ${l.by_ver.length ? `<ul class="si-ch">${l.by_ver.map((v) => `<li><span>${v.ver}판</span><b>${v.n}건 · ${pct(v.avg)} · 승률 ${v.win}%</b></li>`).join("")}</ul>` : ""}<p class="si-txt">${esc(l.text)}</p></div>`);
+    }));
   },
   async atJournal(box) {
     const X = this.jx || (this.jx = { mode: "day" });

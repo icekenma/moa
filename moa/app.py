@@ -1580,6 +1580,14 @@ def create_app(rt, updater=None):
     def auto_history():
         return jsonify(rt.autotrade.history(request.args.to_dict()))
 
+    @app.get("/api/si")
+    def si_view():
+        return jsonify(rt.selfimp.view())
+
+    @app.post("/api/si")
+    def si_set():
+        return jsonify(rt.selfimp.set(body()))
+
     @app.get("/api/auto/journal")
     def auto_journal():
         q = request.args

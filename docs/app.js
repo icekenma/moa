@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.1616";
+const UI_VERSION = "261124.1621";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -3529,7 +3529,15 @@ atAttrHtml(st) {
     $("#hxMode").onchange = (e) => { H.mode = e.target.value; H.strat = ""; this.atLog(box); };
     $("#hxStrat").onchange = (e) => { H.strat = e.target.value; this.atLog(box); };
     const aiGo = $("#hxAiGo", box);
-    if (aiGo) aiGo.onclick = () => { aiSheet("ana", { days: H.days, mkt: H.mkt, mode: H.mode, strat: H.strat }); sheet.addEventListener("close", () => this.hxAiPast(), { once: true }); };
+    if (aiGo) aiGo.onclick = async () => {
+      try { await GET("/api/auto/ana"); }                // 노트북 서버가 이 기능을 아는지 먼저 본다(화면만 새 버전이면 '알 수 없는 요청'이 난다)
+      catch (e) {
+        if (e.code !== "old_server") return toast(e.message, true);
+        return openSheet("AI 성적 분석", `<div id="hxOld"></div>`, () => oldServerBox($("#hxOld"), () => { closeSheet(); aiGo.click(); }));
+      }
+      aiSheet("ana", { days: H.days, mkt: H.mkt, mode: H.mode, strat: H.strat });
+      sheet.addEventListener("close", () => this.hxAiPast(), { once: true });
+    };
     this.hxAiPast();
     box.onkeydown = (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-hxcell],[data-hxsd]")) { e.preventDefault(); e.target.click(); } };
     box.onclick = async (e) => {
@@ -6655,6 +6663,7 @@ function aiSheet(kind, payload = {}) {
             src.innerHTML = `<div class="tiny">찾아본 자료 ${sources.length}건</div>` + sources.map((x) => `<a href="${safeUrl(x.url)}" target="_blank" rel="noopener">${esc(x.title)}${x.age ? ` <span>${esc(x.age)}</span>` : ""}</a>`).join("");
           } else if (ev.t === "error") {
             $(".ai-status", turn).hidden = true;
+            if (ev.msg === "알 수 없는 요청이에요") ev.msg = "노트북 서버가 아직 이 기능이 있는 새 버전을 받지 못했어요. 몇 분 뒤 다시 눌러 주세요(설정 › 업데이트에서 바로 받을 수도 있어요)";
             ans.innerHTML += `<div class="notice warn">${esc(ev.msg)}${/키를 넣어/.test(ev.msg) ? ` <a href="#settings/ai">AI 설정 열기</a>` : ""}</div>`;
           } else if (ev.t === "done") {
             paint();

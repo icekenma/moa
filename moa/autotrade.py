@@ -3345,6 +3345,67 @@ class AutoTrade:
             return None
         return "30분 미만" if m < 30 else "30분~2시간" if m < 120 else "2시간~하루" if m < 60 * 24 else "1~3일" if m < 60 * 24 * 3 else "3일 넘게"
 
+    # ------------------------------------------------------------------ 성적 분석을 AI에게(매매 기록 › 성적 분석)
+    ANA_ASK = ("아래는 내 자동매매의 지난 성적이야(고른 기간·시장·구분·전략만). 숫자를 근거로 한국어로 짧고 쉽게 분석해 줘. 형식:\n"
+               "## 한 줄 결론\n지금 이 자동매매가 돈을 버는지, 무엇이 가장 크게 갈랐는지 한두 문장.\n"
+               "## 잘된 것\n- 근거 숫자(건수·승률·평균 수익률·손익)와 함께 2~3개\n"
+               "## 돈이 새는 곳\n- 손실이 몰린 곳(파는 사유·시각·요일·보유 시간·지수 흐름·AI 승률·점수·엔진·종목·전략), AI 비용 대비 손익. 2~4개\n"
+               "## 바꿔 볼 것\n- 어느 값을 어느 방향으로(예: 최소 승률 55→60), 왜, 기대 효과. 표본이 적으면(10건 미만) '아직 판단 이르다'고 말해. "
+               "자동 개선이 켜져 있으면 실험에서 먼저 시험한다는 걸 전제로 '시험해 볼 값'으로 말해. 2~4개\n"
+               "## 다음에 볼 것\n- 다음 분석 때 확인할 것 1~2개\n"
+               "규칙: 앱 자료에 없는 숫자는 지어내지 마. 투자 권유가 아니라 이 기록의 분석이야. 전문 용어는 쉬운 말로. 전체 900자 안팎.")
+
+    def ana_context(self, d):
+        """매매 기록의 성적 분석(지금 고른 조건 그대로)을 AI가 읽을 자료로 줄인다."""
+        q = {k: d.get(k) for k in ("days", "mkt", "mode", "strat")}
+        H = self.history(q)
+        T = H.get("total") or {}
+        if not T.get("n"):
+            raise ValueError("이 조건에는 끝난 거래가 없어 분석할 게 없어요. 기간을 늘리거나 조건을 바꿔 보세요")
+        days = int(q.get("days") or 30)
+        cond = " · ".join(x for x in [f"최근 {days}일" if days else "전체 기간", {"kr": "국내", "us": "미국"}.get(q.get("mkt") or "", ""),
+                                       {"real": "실전", "paper": "모의"}.get(q.get("mode") or "", ""),
+                                       next((x["label"] for x in H.get("strat_list") or [] if x["key"] == q.get("strat")), "")] if x)
+        st = lambda a: {k: a.get(k) for k in ("n", "win_rate", "avg_pct", "pnl_krw", "pf", "hold_med", "mfe_med", "mae_med", "best", "worst") if a.get(k) is not None}
+        closed = [t for t in H.get("trades") or [] if t["status"] == "closed"][:150]
+        running = []
+        for r in self._runs("WHERE status IN ('running','paused')"):
+            if (q.get("mkt") and r["mkt"] != q["mkt"]) or (q.get("mode") and r["mode"] != q["mode"]):
+                continue
+            p = r["params"]
+            running.append({"이름": r["name"], "실험플랜": VARIANTS.get(r.get("variant") or "", ("",))[0] if r.get("lab_id") else "", "구분": r["mode"], "시장": r["mkt"], "방식": r["style"],
+                            "값": {k: p.get(k) for k in ("min_win_prob", "min_score", "min_rr", "per_trade_pct", "max_positions", "chase_pct", "exit_mult", "daily_loss_pct")}})
+        si = getattr(self.rt, "selfimp", None)
+        data = {"조건": cond, "합계": st(T) | {"AI비용_원": T.get("ai_cost"), "비용뺀손익_원": T.get("net"), "보유중": T.get("open"), "거래한날": T.get("days")},
+                "전략별": [{"전략": x["label"], "묶음": x["group"], "성적": st(x["stats"]), "AI비용_원": x["ai_cost"], "비용뺀손익_원": x["net"], "예산대비_%": x["net_pct"],
+                         "파는사유": x["reasons"][:5]} for x in (H.get("strategies") or [])[:14]],
+                "날짜별": [{"날": x["day"], "끝난": x["stats"].get("n", 0), "승률": x["stats"].get("win_rate"), "손익_원": x["stats"].get("pnl_krw"), "비용_원": x["ai_cost"],
+                         "지수": [f"{i['name']} {i['pct']:+.2f}%" for i in x.get("idx") or []][:2]} for x in (H.get("days") or [])[:30]],
+                "기준별": [{"기준": g["label"], "칸": [{"값": r["key"], **st(r)} for r in g["rows"]]} for g in H.get("groups") or []],
+                "종목별": [{"종목": x["name"], "시장": x["mkt"], **st(x)} for x in (H.get("symbols") or [])[:12]],
+                "최근거래": [{"종목": t["name"], "전략": t["strat_label"], "산시각": t["entry_hm"], "보유분": t["hold_min"], "수익률": t["pnl_pct"], "사유": t["reason"],
+                           "AI승률": t["win_prob"], "점수": t["score"], "분위기": t["stance"], "최고": t["mfe_pct"], "최저": t["mae_pct"], "지수": t["idx_pct"],
+                           "빠른재추천": t["lite"], "엔진": t["engine"]} for t in closed],
+                "지금도는자동매매": running[:20],
+                "자동개선": {"켜짐": si.on(), "최근": [f"{e['ts'][:10]} {e['title']}" for e in (si.view().get("events") or [])[:8]]} if si is not None else None}
+        qq = str(d.get("question") or "").strip()[:500]
+        ask = f"{qq}\n(앞의 분석에 이어서, 앱 자료의 숫자를 근거로 짧고 쉽게. 투자 권유가 아니라 기록 분석으로.)" if qq else self.ANA_ASK
+        return f"AI 성적 분석 · {cond}", ask, data
+
+    def save_ana(self, text, d, model, usd):
+        """마지막 분석 다섯 개를 남겨 다시 볼 때 돈이 들지 않게."""
+        xs = self.rt.db.get_setting("at_ana") or []
+        days = int(d.get("days") or 30)
+        cond = " · ".join(x for x in [f"최근 {days}일" if days else "전체 기간", {"kr": "국내", "us": "미국"}.get(d.get("mkt") or "", ""),
+                                       {"real": "실전", "paper": "모의"}.get(d.get("mode") or "", "")] if x)
+        xs.insert(0, {"ts": self._now(), "cond": cond + (" · 전략 1개" if d.get("strat") else ""), "f": {k: d.get(k) for k in ("days", "mkt", "mode", "strat")},
+                      "text": text[:8000], "model": model, "usd": round(float(usd or 0), 4), "q": str(d.get("question") or "")[:200]})
+        self.rt.db.set_setting("at_ana", xs[:5])
+        return xs[0]
+
+    def anas(self):
+        return self.rt.db.get_setting("at_ana") or []
+
     def _strat(self, r):
         """전략(비교 단위): 실험은 시장·방식·플랜이 같으면 하나로 묶고(실험 묶음이 바뀌어도 이어 본다), 직접 만든 것은 자동매매마다."""
         mk = "국내" if r["mkt"] == "kr" else "미국"

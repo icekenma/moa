@@ -1592,6 +1592,10 @@ def create_app(rt, updater=None):
     def auto_history():
         return jsonify(rt.autotrade.history(request.args.to_dict()))
 
+    @app.get("/api/auto/ana")
+    def auto_ana():
+        return jsonify(items=rt.autotrade.anas())
+
     @app.get("/api/si")
     def si_view():
         return jsonify(rt.selfimp.view())

@@ -2944,3 +2944,29 @@ def test_real_early_warnings_and_error_alert(env, monkeypatch):
     for _ in range(3):
         at._err_alert(run, RuntimeError("키움 응답 없음"))
     assert got and got[-1][1] == "실전 · 오류 반복" and got[-1][0] == "urgent"
+
+
+def test_ai_performance_analysis_context(env):
+    """매매 기록 › AI 성적 분석: 고른 조건의 성적을 AI 자료로 줄이고(웹 검색 없이, 자동 개선이 켜져 있으면 Fable), 받은 분석은 다섯 개까지 남긴다."""
+    from datetime import datetime, timedelta
+    at, ai, db = env.at, env.rt.ai, env.rt.db
+    import pytest as _pt
+    from moa.ai import AIError
+    with _pt.raises(AIError):
+        ai.context("ana", {"days": 30})
+    rid = env.run()
+    for i in range(12):
+        t = (datetime.now() - timedelta(days=i % 5, minutes=i)).isoformat(timespec="seconds")
+        db.x("INSERT INTO at_trades(run_id,ver,mkt,sym,name,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,exit_ts,exit_price,reason,pnl,pnl_pct,exit_day,hold_min) "
+             "VALUES(?,1,'kr','005930','삼성전자',1,'closed',?,?,'10:05',100,3,1.5,?,100,?,?,?,?,40)", (rid, t, t[:10], t, "익절" if i % 3 else "손절", 1000 if i % 3 else -800, 1.0 if i % 3 else -0.8, t[:10]))
+    title, ask, data = ai.context("ana", {"days": 30, "mkt": "kr"})
+    assert "최근 30일 · 국내" in title and "## 바꿔 볼 것" in ask and data["합계"]["n"] == 12 and data["최근거래"] and data["기준별"]
+    _, ask2, _ = ai.context("ana", {"days": 30, "question": "손절이 왜 많아?"})
+    assert ask2.startswith("손절이 왜 많아?")
+    m = ai.meter("ana")
+    assert m["model"] == "claude-fable-5-2"
+    for i in range(7):
+        at.save_ana(f"분석 {i}", {"days": 30, "mkt": "kr"}, "claude-fable-5-2", 0.12)
+    from moa.app import create_app
+    xs = create_app(env.rt).test_client().get("/api/auto/ana").get_json()["items"]
+    assert len(xs) == 5 and xs[0]["text"] == "분석 6" and xs[0]["cond"] == "최근 30일 · 국내"

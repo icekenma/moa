@@ -4102,3 +4102,19 @@ html.gm-on dialog.sheet .sheet-in{border-radius:24px}
 .td-why li.risk{color:var(--ink3)}
 .td-why li.risk::marker{content:"⚠ "}
 .hx-kv b small{font-size:11px;font-weight:600;color:var(--ink3)}
+
+/* ---------- 매매 기록 › AI 성적 분석 ---------- */
+.hx-ai{display:flex;flex-direction:column;gap:10px}
+.hx-ai-h{display:flex;align-items:flex-start;gap:10px}
+.hx-ai-h>div{display:flex;flex-direction:column;gap:3px;min-width:0}
+.hx-ai-h b{font-size:15px}
+.hx-ai-h small{font-size:12px;line-height:1.5;color:var(--ink3)}
+.hx-ai-mark{flex:0 0 auto;width:34px;height:34px;border-radius:11px;display:grid;place-items:center;background:color-mix(in srgb,var(--violet,#7A5AF8) 16%,transparent);color:var(--violet-i,#5A32B8)}
+.dark-theme .hx-ai-mark{color:#C9B8FF}
+.hx-ai-warn{margin:0;font-size:12px;line-height:1.5;padding:8px 10px;border-radius:10px;background:color-mix(in srgb,var(--amber,#E9A00F) 13%,transparent);color:var(--ink2)}
+.hx-ai-past{display:flex;flex-direction:column}
+.hx-ai-past>span{font-size:11.5px;font-weight:700;color:var(--ink3);padding:2px 0 4px}
+.hx-ai-past button{all:unset;box-sizing:border-box;display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid var(--line);cursor:pointer}
+.hx-ai-past button:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:6px}
+.hx-ai-past b{font-size:13px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.hx-ai-past small{font-size:11.5px;color:var(--ink3);flex:0 0 auto;font-variant-numeric:tabular-nums}

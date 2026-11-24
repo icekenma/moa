@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.1451";
+const UI_VERSION = "261124.1616";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -3459,6 +3459,35 @@ atAttrHtml(st) {
     if ((b = el("[data-jmo]"))) { if (!b.dataset.jmo) return; X.month = b.dataset.jmo === "now" ? "" : b.dataset.jmo; X.day = ""; X.more = {}; return this.atJournal(box); }
     if ((b = el("[data-jf]"))) { const [k, v] = b.dataset.jf.split(":"); X[k] = v; X.dd = {}; X.day = ""; X.more = {}; return this.atJournal(box); }
   },
+  // 매매 기록 › 성적 분석: 지금 고른 조건 그대로 AI에게 분석을 맡긴다(복기 엔진 · 자동 개선이 켜져 있으면 Fable). 지난 분석은 다시 볼 때 돈이 안 든다
+  hxAiCard(d) {
+    const H = this.hx, T = d.total;
+    const cond = [H.days ? `최근 ${H.days}일` : "전체 기간", { kr: "국내", us: "미국" }[H.mkt], { real: "실전", paper: "모의" }[H.mode],
+      H.strat ? ((d.strat_list || []).find((x) => x.key === H.strat) || {}).label : ""].filter(Boolean).join(" · ");
+    const thin = T.n < 10;
+    return `<section class="card hx-ai">
+      <div class="hx-ai-h"><span class="hx-ai-mark" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"/><path d="M19 15l.8 1.9 1.9.8-1.9.8L19 20.4l-.8-1.9-1.9-.8 1.9-.8z"/></svg></span>
+        <div><b>AI 성적 분석</b><small>${esc(cond)} · 끝난 거래 ${won(T.n)}건을 읽고 잘된 것, 돈이 새는 곳, 바꿔 볼 값을 정리해요</small></div></div>
+      ${thin ? `<p class="hx-ai-warn">거래가 ${T.n}건뿐이라 결론은 참고만 하세요. 기간을 늘리면 더 믿을 만해요.</p>` : ""}
+      <button type="button" class="btn dark wide" id="hxAiGo">AI로 분석하기</button>
+      <div id="hxAiPast"></div></section>`;
+  },
+  async hxAiPast() {
+    const el = $("#hxAiPast");
+    if (!el) return;
+    let xs = [];
+    try { xs = (await GET("/api/auto/ana")).items || []; } catch (e) { return; }
+    if (!el.isConnected || !xs.length) return;
+    const when = (t) => `${Number(t.slice(5, 7))}/${Number(t.slice(8, 10))} ${t.slice(11, 16)}`;
+    el.innerHTML = `<div class="hx-ai-past"><span>지난 분석</span>${xs.slice(0, 3).map((x, i) => `<button type="button" data-hxa="${i}"><b>${esc(x.q || x.cond)}</b><small>${when(x.ts)}</small></button>`).join("")}</div>`;
+    el.onclick = (e) => {
+      const b = e.target.closest("[data-hxa]");
+      if (!b) return;
+      const x = xs[+b.dataset.hxa];
+      openSheet(`AI 성적 분석 · ${x.cond}`, `<div class="ai-box"><div class="tiny">${when(x.ts)}에 받은 분석이에요${x.q ? ` · 물은 것: ${esc(x.q)}` : ""}. 다시 볼 때는 비용이 들지 않아요.</div>
+        <div class="ai-ans">${mdLite(x.text)}</div><div class="tiny">AI 답변은 참고용이에요. 틀릴 수 있고 매수·매도 지시가 아니에요.</div></div>`);
+    };
+  },
   async atLog(box) {
     const H = this.hx || (this.hx = { days: 30, mkt: "", mode: "", strat: "", view: "day", openDay: "", openSt: "", dd: {} });
     (this.jx = this.jx || {}).mode = "ana";
@@ -3490,6 +3519,7 @@ atAttrHtml(st) {
           ${dayVals.length > 1 ? `<div class="hx-chart">${pnlBars(dayVals.map((x) => x.net), dayVals.map((x) => x.day), 64)}<div class="axis"><span>${esc(dayVals[0].day.slice(5))}</span><span>날마다 비용 뺀 손익</span><span>${esc(dayVals[dayVals.length - 1].day.slice(5))}</span></div></div>` : ""}
           <div class="tiny">기간 안에 산 것 ${won(T.buys)}건 · 지금 들고 있는 것 ${won(T.open)}건 · 거래한 날 ${T.days}일${T.n ? ` · 이익/손실 비 ${T.pf ?? "-"}` : ""}</div>` : ""}
       </section>
+      ${has && T.n ? this.hxAiCard(d) : ""}
       ${has ? `<div class="hx-tabs">${seg("기록보기", [["day", "날짜별"], ["strat", "전략별"], ["angle", "기준별"], ["trade", `거래 ${d.trades_n > 400 ? "400+" : d.trades_n}`]], H.view)}</div>
       <div id="hxBody">${this.hxBody()}</div>` : `<section class="card"><div class="empty">이 조건의 자동매매 기록이 아직 없어요. 모의 자동 테스트가 돌면 여기 쌓여요.</div></section>`}`;
     this.jxBindMode(box);
@@ -3498,6 +3528,9 @@ atAttrHtml(st) {
     $("#hxMkt").onchange = (e) => { H.mkt = e.target.value; H.strat = ""; this.atLog(box); };
     $("#hxMode").onchange = (e) => { H.mode = e.target.value; H.strat = ""; this.atLog(box); };
     $("#hxStrat").onchange = (e) => { H.strat = e.target.value; this.atLog(box); };
+    const aiGo = $("#hxAiGo", box);
+    if (aiGo) aiGo.onclick = () => { aiSheet("ana", { days: H.days, mkt: H.mkt, mode: H.mode, strat: H.strat }); sheet.addEventListener("close", () => this.hxAiPast(), { once: true }); };
+    this.hxAiPast();
     box.onkeydown = (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-hxcell],[data-hxsd]")) { e.preventDefault(); e.target.click(); } };
     box.onclick = async (e) => {
       const cell = e.target.closest("[data-hxcell]");
@@ -6582,16 +6615,18 @@ function bindCredit(box, after) {
   const b = $("#crSave", box);
   if (b) b.onclick = async () => { const v = $("#crUsd", box).value; await run(() => api("POST", "/api/ai/credit", { usd: v }), "잔액을 맞췄어요"); after && after(); };
 }
-const AI_TITLES = { auto: "AI 자동매매 복기 · 개선안", learn: "AI 추천 복기 · 규칙 갱신", stock: "AI 종목 정리", portfolio: "AI 포트폴리오 점검", dca: "AI 적립 점검", review: "AI 단타 복기", sweep: "AI 훑기 해석", chat: "AI에게 묻기" };
+const AI_TITLES = { ana: "AI 성적 분석", auto: "AI 자동매매 복기 · 개선안", learn: "AI 추천 복기 · 규칙 갱신", stock: "AI 종목 정리", portfolio: "AI 포트폴리오 점검", dca: "AI 적립 점검", review: "AI 단타 복기", sweep: "AI 훑기 해석", chat: "AI에게 묻기" };
+const AI_FOLLOW = { ana: ["손실이 가장 큰 원인 하나만 짚어 줘", "실험에서 먼저 시험해 볼 값은?", "실전으로 옮겨도 될 만한 전략이 있어?"] };
 function aiSheet(kind, payload = {}) {
-  const chat = kind === "chat";
+  const chat = kind === "chat" || !!AI_FOLLOW[kind];      // 이어서 물을 수 있는 요청
+  const chips = kind === "chat" ? ["내 포트폴리오에서 가장 위험한 부분은?", "관심종목 중 이번 주 뉴스가 큰 종목은?", "오늘 미국장 주요 이슈 정리해 줘"] : AI_FOLLOW[kind] || [];
   const S = { history: [], ctl: null, busy: false };
   openSheet(AI_TITLES[kind] || "AI", `
     <div class="ai-box">
       <div id="aiMeterTop" class="cm-slot"></div>
       <div id="aiThread" class="ai-thread"></div>
-      ${chat ? `<div class="ai-chips">${["내 포트폴리오에서 가장 위험한 부분은?", "관심종목 중 이번 주 뉴스가 큰 종목은?", "오늘 미국장 주요 이슈 정리해 줘"].map((q) => `<button type="button" class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
-        <div class="ai-ask"><textarea id="aiQ" rows="2" placeholder="예: 엔비디아 실적 발표 전에 볼 점은?"></textarea><button class="btn dark" id="aiSend">묻기</button></div>` : ""}
+      ${chat ? `<div class="ai-chips">${chips.map((q) => `<button type="button" class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
+        <div class="ai-ask"><textarea id="aiQ" rows="2" placeholder="${kind === "ana" ? "예: 오후에 산 거래는 왜 나빠?" : "예: 엔비디아 실적 발표 전에 볼 점은?"}"></textarea><button class="btn dark" id="aiSend">묻기</button></div>` : ""}
       <div class="tiny">AI 답변은 참고용이에요. 틀릴 수 있고 매수·매도 지시가 아니에요. AI는 주문하지 않아요.</div>
     </div>`, (box) => {
     const thread = $("#aiThread", box);
@@ -6642,7 +6677,8 @@ function aiSheet(kind, payload = {}) {
       $("#aiSend", box).onclick = go;
       $("#aiQ", box).onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); } };
       box.addEventListener("click", (e) => { const c = e.target.closest("[data-q]"); if (c) ask({ question: c.dataset.q }); });
-      setTimeout(() => $("#aiQ")?.focus(), 250);
+      if (kind === "chat") setTimeout(() => $("#aiQ")?.focus(), 250);
+      else ask({});
     } else ask({});
   });
   sheet.addEventListener("close", () => S.ctl && S.ctl.abort(), { once: true });

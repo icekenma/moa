@@ -51,6 +51,8 @@ class Runtime:
         from .evolution import Evolution
         self.evolution = Evolution(self)
         from .autotrade import AutoTrade
+        from .webpush import WebPush
+        self.push = WebPush(self)          # 앱 알림(웹 푸시): 홈 화면 앱으로 바로
         self.autotrade = AutoTrade(self)
         from .selfimprove import SelfImprove
         self.selfimp = SelfImprove(self)   # 자동 개선(복기 → 개선안 → 실험 → 승격 → 지켜보기·되돌리기)
@@ -157,8 +159,11 @@ class Runtime:
         conf = self.settings.get("notify") or {}
         return bool(conf.get(cat, cat not in self.NOTIFY_OFF)) or cat == "urgent"
 
-    def notify(self, msg, cat="info", title=None, key=None, quiet_min=0, force=False):
-        """휴대폰으로 알린다. key를 주면 같은 key는 quiet_min분(0이면 하루) 안에 한 번만 보낸다. 보낸 것·걸러진 것 모두 알림 기록에 남는다."""
+    NOTIFY_LINK = {"urgent": "#invest/auto", "real": "#invest/auto", "daily": "#invest/atlog", "paper": "#invest/auto", "ledger": "#ledger/list"}
+
+    def notify(self, msg, cat="info", title=None, key=None, quiet_min=0, force=False, link=None):
+        """휴대폰으로 알린다(앱 알림 + ntfy, 켜 둔 쪽 모두). key를 주면 같은 key는 quiet_min분(0이면 하루) 안에 한 번만 보낸다.
+        보낸 것·걸러진 것 모두 알림 기록에 남는다. link: 알림을 누르면 열 화면(#구역/화면)."""
         topic = self.settings.get("ntfy_topic")
         now = time.time()
         if key:
@@ -171,7 +176,9 @@ class Runtime:
                 for k in sorted(seen, key=seen.get)[:200]:
                     seen.pop(k, None)
         label, prio, tag = self.NOTIFY_CATS.get(cat, self.NOTIFY_CATS["info"])
-        on = bool(topic) and (force or self.notify_on(cat))
+        push = getattr(self, "push", None)
+        devs = push.count() if push is not None else 0
+        on = bool(topic or devs) and (force or self.notify_on(cat))
         try:
             self.db.x("INSERT INTO notify_log(ts,cat,title,msg,sent) VALUES(?,?,?,?,?)",
                       (datetime.now().isoformat(timespec="seconds"), cat, title or label, msg, 1 if on else 0))
@@ -180,6 +187,13 @@ class Runtime:
             pass
         if not on:
             return False
+        if devs:
+            try:
+                push.send(title or f"우석World · {label}", msg, link or self.NOTIFY_LINK.get(cat, "./"), tag=key or cat, urgent=cat == "urgent")
+            except Exception:
+                pass
+        if not topic:
+            return True
         body = {"topic": topic, "message": msg, "title": title or f"우석World · {label}", "priority": prio, "tags": [tag]}
         url = (self.settings.get("public_url") or "").strip()
         if url:

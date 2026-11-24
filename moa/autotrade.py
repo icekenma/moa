@@ -804,7 +804,39 @@ class AutoTrade:
         real = run["mode"] == "real"
         cat = "urgent" if urgent and real else "real" if real or force_real else "paper"
         name = ("실험 " if run.get("lab_id") else "") + run["name"]
-        return self.rt.notify(f"{name}: {msg}", cat, f"{'실전' if real else '모의'} · {title}" if title else None, key=key)
+        return self.rt.notify(f"{name}: {msg}", cat, f"{'실전' if real else '모의'} · {title}" if title else None, key=key, link="#invest/auto")
+
+    def _err_alert(self, run, e):
+        """같은 자동매매에서 오류가 10분 안에 세 번 넘게 나면 알린다(한 시간에 한 번). 실전은 '꼭 알아야 할 것'."""
+        errs = self.__dict__.setdefault("_errs", {})
+        now = time.time()
+        xs = [x for x in errs.get(run["id"], []) if now - x < 600] + [now]
+        errs[run["id"]] = xs
+        if len(xs) >= 3:
+            self._tell(run, f"처리 중 오류가 되풀이돼요({type(e).__name__}: {str(e)[:80]}). 노트북 서버와 키움 연결을 확인해 주세요",
+                       "오류 반복", urgent=True, key=f"err:{run['id']}")
+
+    NEAR_STOP = 0.7      # 실전 보유 종목이 손절선의 70%까지 내려오면 미리 알림
+    NEAR_DAYLOSS = 0.7   # 실전 하루 손실이 한도의 70%에 닿으면 미리 알림
+
+    def _warn(self, run, opens):
+        """실전 미리 알림(주문은 내지 않는다): 손절선 가까운 종목, 하루 손실 한도에 다가감. 종목·하루마다 한 번."""
+        unit = "원" if run["mkt"] == "kr" else "달러"
+        day = AP.mkt_date(run["mkt"])
+        for t in opens:
+            px, sl = float(t["last"] or 0), float(t["stop_pct"] or 0)
+            if not px or not sl:
+                continue
+            chg = (px / t["entry_price"] - 1) * 100
+            if chg <= -sl * self.NEAR_STOP:
+                self._tell(run, f"{t['name']} {chg:+.2f}% · 손절선(-{sl:g}%)에 가까워요. 닿으면 자동으로 팔아요", "손절선 가까움",
+                           key=f"nearstop:{t['id']}")
+        closed = self._today_closed(run)
+        pnl = sum(c["pnl"] or 0 for c in closed) + sum(t["qty"] * ((t["last"] or t["entry_price"]) - t["entry_price"]) for t in opens)
+        lim = run["budget"] * float(run["params"]["daily_loss_pct"]) / 100
+        if lim and -lim < pnl <= -lim * self.NEAR_DAYLOSS:
+            self._tell(run, f"오늘 손익 {pnl:+,.{0 if run['mkt'] == 'kr' else 2}f}{unit} · 하루 손실 한도(-{lim:,.{0 if run['mkt'] == 'kr' else 2}f}{unit})의 "
+                            f"{-pnl / lim * 100:.0f}%예요. 한도에 닿으면 오늘은 새로 사지 않아요", "하루 손실 한도 가까움", urgent=True, key=f"neardl:{run['id']}:{day}")
 
     def _digest(self):
         """장 마감 요약(시장마다 하루 한 번): 실전 손익, 모의 실험 1등·꼴찌와 기본 플랜, AI 비용, 사람이 볼 것. 그날 추천·매매가 있었을 때만."""
@@ -902,6 +934,7 @@ class AutoTrade:
                     self._maybe_cycle(run)
             except Exception as e:
                 self.rt.db.log("system", "error", f"자동매매({run['id']}) 처리 오류: {type(e).__name__}: {e}", self._now())
+                self._err_alert(run, e)
 
     # ----- 보유 종목 지켜보기·팔기
     def _manage(self, run):
@@ -955,6 +988,8 @@ class AutoTrade:
                 elif t["add_qty"]:
                     self._scale_in(run, t, price, chg)
         opens = self._open(run["id"])
+        if run["mode"] == "real" and run["status"] in ("running", "paused") and ss["open"]:
+            self._warn(run, opens)
         if run["status"] == "closing" and not opens:
             msg = run["status_msg"] or ""
             self._finish(run, "기간이 끝났어요" if msg.startswith("기간") else "손실 한도에 닿았어요" if "손실" in msg else "사용자가 종료했어요")

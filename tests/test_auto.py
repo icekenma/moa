@@ -2862,3 +2862,85 @@ def test_self_improve_loop(env, monkeypatch):
     assert V["ui_on"] is True and V["ui_log"] and V["ui_log"][0]["ver"].startswith("v")
     assert cl.post("/api/si", json={"ui": False}).get_json()["ui_on"] is False
     assert cl.post("/api/si", json={"on": False}).get_json()["on"] is False and env.rt.ai.review_model() == "claude-opus-5-5"
+
+
+def test_web_push_encrypt_send_and_notify(env, monkeypatch):
+    """앱 알림: RFC 8291 암호화가 기기 쪽에서 풀리고, VAPID 머리글이 붙고, 사라진 기기(410)는 지운다. ntfy가 없어도 앱 알림으로 보낸다."""
+    import base64
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    from moa import webpush as W
+    rt, db = env.rt, env.rt.db
+    ua = ec.generate_private_key(ec.SECP256R1())
+    pub = W.b64u(ua.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint))
+    auth = b"0123456789abcdef"
+    body = W.encrypt("안녕 알림".encode(), pub, W.b64u(auth))
+    assert W.decrypt(body, ua, auth).decode() == "안녕 알림"
+    P = rt.push
+    import pytest as _pt
+    with _pt.raises(ValueError):
+        P.add({"endpoint": "http://x", "keys": {}})
+    from moa.app import create_app
+    cl = create_app(rt).test_client()
+    sub = {"endpoint": "https://web.push.apple.com/abc", "keys": {"p256dh": pub, "auth": W.b64u(auth)}}
+    r = cl.post("/api/push/sub", json={"sub": sub}, headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0)"}).get_json()
+    assert r["n"] == 1 and r["devices"][0]["name"] == "아이폰" and r["devices"][0]["me"] and len(base64.urlsafe_b64decode(r["key"] + "==")) == 65
+    sent = []
+
+    class Res:
+        def __init__(self, c):
+            self.status_code = c
+    code = [201]
+    P.post = lambda url, data=None, timeout=None, headers=None: (sent.append((url, data, headers)), Res(code[0]))[1]
+    assert P.send("제목", "본문", "#invest/auto", tag="t1", urgent=True, wait=True) == 1
+    url, data, h = sent[-1]
+    assert url == sub["endpoint"] and h["Content-Encoding"] == "aes128gcm" and h["Urgency"] == "high" and h["Authorization"].startswith("vapid t=")
+    jwt = h["Authorization"].split("t=")[1].split(",")[0]
+    claim = json.loads(base64.urlsafe_b64decode(jwt.split(".")[1] + "=="))
+    assert claim["aud"] == "https://web.push.apple.com" and claim["sub"].startswith("mailto:")
+    assert json.loads(W.decrypt(data, ua, auth))["url"] == "#invest/auto"
+    assert db.one("SELECT last_ok FROM push_subs")["last_ok"]
+    # ntfy 토픽이 없어도 앱 알림으로 간다(동기 확인을 위해 send를 바꿔 끼움)
+    got = []
+    monkeypatch.setattr(P, "send", lambda title, msg, link="", tag="", urgent=False: got.append((title, msg, link, urgent)))
+    rt.settings.update({"ntfy_topic": ""})
+    assert type(rt).notify(rt, "손절선 가까워요", "urgent", "실전 · 손절선") is True and got[-1] == ("실전 · 손절선", "손절선 가까워요", "#invest/auto", True)
+    assert cl.post("/api/notify/test").status_code == 200
+    assert cl.get("/api/notify").get_json()["push"]["n"] == 1
+    monkeypatch.undo()
+    code[0] = 410
+    P.send("x", "y", wait=True)
+    assert P.count() == 0                                                     # 사라진 기기는 지움
+    assert cl.post("/api/notify/test").status_code == 400                     # 받을 곳이 없으면 안내
+
+
+def test_real_early_warnings_and_error_alert(env, monkeypatch):
+    """실전 미리 알림: 손절선 70%까지 내려온 종목(종목마다 한 번), 하루 손실 한도 70%(하루 한 번), 같은 오류 세 번이면 알림. 모의는 미리 알림 안 함."""
+    at, db = env.at, env.rt.db
+    got = []
+    monkeypatch.setattr(env.rt, "notify", lambda msg, cat="info", title=None, key=None, quiet_min=0, force=False, link=None: got.append((cat, title, msg, key)) or True)
+    rid = env.run(budget=1_000_000)
+    db.x("UPDATE at_runs SET mode='real', params=json_set(params,'$.daily_loss_pct',2.0) WHERE id=?", (rid,))
+    run = at._run(rid)
+    got.clear()
+
+    def hold(sym, entry, last, qty, sl=2.0):
+        db.x("INSERT INTO at_trades(run_id,ver,mkt,sym,name,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,last) "
+             "VALUES(?,1,'kr',?,?,?,'open','2026-11-18T09:10:00','2026-11-18','09:10',?,4,?,?)", (rid, sym, sym, qty, entry, sl, last))
+    hold("A", 10000, 9840, 10)           # -1.6% · 손절 -2%의 80% → 알림
+    hold("B", 10000, 9950, 10)           # -0.5% → 없음
+    at._warn(run, at._open(rid))
+    assert [g[1] for g in got] == ["실전 · 손절선 가까움"] and "A -1.60%" in got[0][2]
+    hold("C", 100000, 98500, 100)        # 평가손 -150,000 + A -1,600 + B -500 → 한도 20,000의 70% 넘음(한도 넘으면 '쉼' 알림이 따로 감)
+    db.x("UPDATE at_trades SET last=99880 WHERE sym='C'")       # -12,000 → 합계 -14,100 = 한도의 70.5%
+    got.clear()
+    at._warn(run, at._open(rid))
+    kinds = [g[1] for g in got]
+    assert "실전 · 하루 손실 한도 가까움" in kinds and got[kinds.index("실전 · 하루 손실 한도 가까움")][0] == "urgent"
+    paper = env.run()
+    got.clear()
+    at._manage(at._run(paper))
+    assert not got
+    for _ in range(3):
+        at._err_alert(run, RuntimeError("키움 응답 없음"))
+    assert got and got[-1][1] == "실전 · 오류 반복" and got[-1][0] == "urgent"

@@ -1250,14 +1250,26 @@ def create_app(rt, updater=None):
     @app.get("/api/notify")
     def notify_info():
         return jsonify(cats=[{"key": k, "label": v[0], "on": rt.notify_on(k), "fixed": k == "urgent"} for k, v in rt.NOTIFY_CATS.items()],
-                       topic=bool(rt.settings.get("ntfy_topic")), log=rt.notify_log())
+                       topic=bool(rt.settings.get("ntfy_topic")), log=rt.notify_log(), push=rt.push.info(request.args.get("ep")))
 
     @app.post("/api/notify/test")
     def notify_test():
-        if not rt.settings.get("ntfy_topic"):
-            return jsonify({"error": "ntfy 토픽을 먼저 넣고 저장해 주세요"}), 400
-        rt.notify("시험 알림이에요. 이 글이 보이면 알림이 잘 가고 있어요.", "info", "우석World · 시험 알림", force=True)
+        if not rt.settings.get("ntfy_topic") and not rt.push.count():
+            return jsonify({"error": "알림 받을 곳이 없어요. '이 휴대폰에서 알림 받기'를 켜거나 ntfy 토픽을 넣어 주세요"}), 400
+        rt.notify("시험 알림이에요. 이 글이 보이면 알림이 잘 가고 있어요.", "info", "우석World · 시험 알림", force=True, link="#settings/trading")
         return jsonify(ok=True)
+
+    @app.post("/api/push/sub")
+    def push_sub():
+        d = body()
+        try:
+            return jsonify(rt.push.add(d.get("sub"), request.headers.get("User-Agent", "")))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+    @app.post("/api/push/unsub")
+    def push_unsub():
+        return jsonify(rt.push.remove(body().get("endpoint")))
 
     @app.get("/api/evo")
     def evo_all():

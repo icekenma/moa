@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.1244";
+const UI_VERSION = "261124.1255";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2075,7 +2075,7 @@ pages.invest = {
         <span class="g-hp" role="img" aria-label="쓸 돈 대비 ${pct(m.ret_pct, 2)}"><i style="width:${hp.toFixed(1)}%" class="${m.ret_pct >= 0 ? "pos" : "neg"}"></i><s></s></span>
         <span class="g-unit-f"><b>${this.atM(r.mkt, m.equity)}</b><b class="${tone(m.ret_pct)}">${pct(m.ret_pct, 2)}</b>
           <small>${lbl}${n ? ` · ${n.busy ? "AI 추천 받는 중" : esc(n.next.kind === "at" ? `다음 ${n.next.text}` : n.next.label).slice(0, 22)}` : ""} · 거래 ${r.closed} · 보유 ${r.open}</small></span></button>`; };
-    return `<div class="g-lobby-top"><b>AI 자동매매</b><button type="button" class="btn dark sm" id="atNewBtn">+ 직접 만들기</button></div>
+    return `<div class="g-lobby-top"><b>AI 자동매매</b><span class="at-tb"><button type="button" class="at-bell" id="atBell" aria-label="자동매매 알림 설정"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span>알림</span></button><button type="button" class="btn dark sm" id="atNewBtn">+ 직접 만들기</button></span></div>
       ${this.atReadyHtml(O.ready)}
       ${this.atTodayHtml(O.today, O.runs, (LB || {}).labs, this.atState())}
       ${S ? `<section class="g-test ${S.on ? "on" : ""}">
@@ -2266,7 +2266,7 @@ pages.invest = {
     const live = O.runs.filter((r) => r.status !== "ended"), done = O.runs.filter((r) => r.status === "ended");
     const oldLabs = ((LB || {}).labs || []).filter((L) => L.status === "ended");
     box.innerHTML = gameOn() ? this.gLobby(O, LB, live, done, oldLabs) : `<div class="at-top"><div><b>AI 자동매매</b><span>AI가 고르고, 플랜대로 사고팔고, 기록으로 고쳐 가요</span></div>
-        <button type="button" class="btn dark sm" id="atNewBtn">+ 직접 만들기</button></div>
+        <span class="at-tb"><button type="button" class="at-bell" id="atBell" aria-label="자동매매 알림 설정"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span>알림</span></button><button type="button" class="btn dark sm" id="atNewBtn">+ 직접 만들기</button></span></div>
       ${this.atReadyHtml(O.ready)}
       ${this.atTodayHtml(O.today, O.runs, (LB || {}).labs, A)}
       ${this.atAutoHtml(LB, O.today)}
@@ -2277,6 +2277,7 @@ pages.invest = {
           <span class="at-row-v"><small>끝남</small></span></button>`).join("")}</section></details>` : ""}
       <div class="tiny" style="padding:0 3px">수익을 보장하지 않아요. 손실 한도에 닿으면 스스로 멈추지만, 급변할 때는 한도보다 더 잃을 수 있어요.</div>`;
     $("#atNewBtn").onclick = () => { A.view = "new"; A.pv = null; this.auto(box); };
+    $("#atBell").onclick = () => openSheet("자동매매 알림", `<div id="nfSheet" class="nf-sheet"><div class="empty small loading">알림 설정을 여는 중</div></div>`, () => pages.settings.notifyBox($("#nfSheet"), { sheet: true }));
     box.onclick = async (e) => {
       const b = e.target.closest("[data-run]"), lb = e.target.closest("[data-lab]");
       const sw = e.target.closest("#atAutoSw"), rv = e.target.closest("[data-real]");
@@ -7241,20 +7242,68 @@ async function bkAfterRestore(r) {
 }
 
 pages.settings = {
-  // 휴대폰 알림: 갈래별 켬/끔 · 시험 알림 · 최근 보낸 알림
-  async notifyBox(el) {
+  // 휴대폰 알림: 이 휴대폰에서 바로 받기(앱 알림) · 무엇을 알리나(갈래별 켬/끔, 바로 저장) · 시험 알림 · 최근 알림
+  async notifyBox(el, opt = {}) {
+    const reg = await navigator.serviceWorker?.getRegistration().catch(() => null);
+    const mine = reg && reg.pushManager ? await reg.pushManager.getSubscription().catch(() => null) : null;
     let N;
-    try { N = await GET("/api/notify"); } catch (e) { el.innerHTML = ""; return; }
+    try { N = await GET(`/api/notify${mine ? `?ep=${encodeURIComponent(mine.endpoint)}` : ""}`); } catch (e) { el.innerHTML = opt.sheet ? `<div class="notice warn">${esc(e.message)}</div>` : ""; return; }
     if (!el.isConnected) return;
+    const P = N.push || { ok: false, n: 0, devices: [] };
+    const here = !!(mine && P.devices.some((d) => d.me));
+    const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+    const ios = /iPhone|iPad/.test(navigator.userAgent);
+    const can = "PushManager" in window && "Notification" in window && !!reg;
     const hm = (ts) => `${ts.slice(5, 10).replace("-", "/")} ${ts.slice(11, 16)}`;
-    el.innerHTML = `<div class="nf-cats">${N.cats.map((c) => `<div class="nf-cat"><span><b>${esc(c.label)}</b>${c.fixed ? `<small>손실 한도·주문 실패·보안·엔진 오류 · 끌 수 없어요</small>` : ""}</span>
+    // 이 휴대폰의 상태 한 줄
+    const state = !P.ok ? ["wait", "노트북에 알림 꾸러미를 넣는 중이에요", "서버가 업데이트를 받으면(5분쯤) 자동으로 켜져요. 그동안은 ntfy로 보내요"]
+      : here ? ["on", "이 휴대폰으로 바로 알려요", Notification.permission === "denied" ? "아이폰 설정에서 우석World 알림이 꺼져 있어요" : `받는 기기 ${P.n}대`]
+      : ios && !standalone ? ["off", "홈 화면에 추가한 앱에서 켤 수 있어요", "Safari 공유 버튼 → 홈 화면에 추가 → 그 아이콘으로 열고 여기서 켜 주세요"]
+      : !can ? ["off", "이 브라우저는 앱 알림을 받지 못해요", "ntfy 토픽을 넣으면 ntfy 앱으로 받을 수 있어요"]
+      : Notification.permission === "denied" ? ["off", "알림이 막혀 있어요", "휴대폰 설정 → 알림 → 우석World에서 허용해 주세요"]
+      : ["off", "이 휴대폰은 아직 알림을 안 받아요", P.n ? `다른 기기 ${P.n}대는 받는 중` : "켜면 중요한 일이 생길 때 바로 알려요"];
+    const WHAT = {
+      urgent: "손실 한도에 닿음·다가감, 주문·체결 확인 실패, 오류 반복, 키움 연결 끊김, 보안",
+      real: "실전 매수·매도, 손절선 가까움, 실전 후보, 개선안 승인 대기, 자동 개선 반영·되돌림(실전)",
+      daily: "장 마감 뒤 실전 손익·모의 실험 1등·AI 비용 한 번에",
+      paper: "모의 매수·매도 하나하나(많아서 기본 끔)",
+      ledger: "카드 문자로 가계부에 자동 기록됐을 때", info: "추천 규칙 갱신, 자동 개선(모의), 고정비 예정 등",
+    };
+    el.innerHTML = `<div class="nf-push ${state[0]}"><span class="nf-dot" aria-hidden="true"></span><div><b>${state[1]}</b><small>${esc(state[2])}</small></div>
+        ${P.ok && can && (!ios || standalone) && Notification.permission !== "denied" ? `<button type="button" class="btn sm ${here ? "" : "dark"}" id="nfPush">${here ? "끄기" : "켜기"}</button>` : ""}</div>
+      <div class="nf-cats">${N.cats.map((c) => `<div class="nf-cat"><span><b>${esc(c.label)}</b><small>${esc(WHAT[c.key] || "")}${c.fixed ? " · 끌 수 없어요" : ""}</small></span>
         <button type="button" class="switch" role="switch" data-nf="${c.key}" aria-checked="${!!c.on}" ${c.fixed ? "disabled" : ""} aria-label="${esc(c.label)} 알림"><span></span></button></div>`).join("")}</div>
-      <div class="tiny">모의 매매는 하나하나 보내지 않고 장 마감 요약에 모아 보내요. 켜고 끈 것은 "설정 저장"을 눌러야 반영돼요.</div>
+      <div class="tiny">켜고 끄면 바로 저장돼요. 같은 일은 한 번만 알려요(손절선 가까움은 종목마다, 손실 한도 다가감은 하루 한 번).${N.topic ? " ntfy로도 함께 보내요." : ""}</div>
       <button type="button" class="btn sm" id="nfTest">시험 알림 보내기</button>
-      <details class="nf-log"><summary>최근 알림 ${N.log.length}건</summary><ul>${N.log.map((x) => `<li class="${x.sent ? "" : "off"}"><time>${esc(hm(x.ts))}</time><div><b>${esc(x.title || "알림")}</b><p>${esc(x.msg)}</p>${x.sent ? "" : `<small>보내지 않음(꺼 둔 갈래이거나 토픽 없음)</small>`}</div></li>`).join("") || `<li class="off"><div><p>아직 없어요</p></div></li>`}</ul></details>`;
+      <details class="nf-log" ${opt.sheet ? "open" : ""}><summary>최근 알림 ${N.log.length}건</summary><ul>${N.log.slice(0, opt.sheet ? 15 : 40).map((x) => `<li class="${x.sent ? "" : "off"}"><time>${esc(hm(x.ts))}</time><div><b>${esc(x.title || "알림")}</b><p>${esc(x.msg)}</p>${x.sent ? "" : `<small>보내지 않음(꺼 둔 갈래이거나 받을 곳 없음)</small>`}</div></li>`).join("")}</ul></details>`;
+    const b64 = (s) => { const p = "=".repeat((4 - (s.length % 4)) % 4), r = atob((s + p).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(r, (c) => c.charCodeAt(0)); };
     el.onclick = async (e) => {
       const sw = e.target.closest("[data-nf]");
-      if (sw && !sw.disabled) return sw.setAttribute("aria-checked", sw.getAttribute("aria-checked") !== "true");
+      if (sw && !sw.disabled) {
+        sw.setAttribute("aria-checked", sw.getAttribute("aria-checked") !== "true");
+        const nf = {};
+        el.querySelectorAll("[data-nf]").forEach((x) => { nf[x.dataset.nf] = x.getAttribute("aria-checked") === "true"; });
+        try { await api("PUT", "/api/settings", { notify: nf }); toast(`${sw.getAttribute("aria-label")}을 ${sw.getAttribute("aria-checked") === "true" ? "켰어요" : "껐어요"}`); }
+        catch (err) { toast(err.message, true); sw.setAttribute("aria-checked", sw.getAttribute("aria-checked") !== "true"); }
+        return;
+      }
+      if (e.target.closest("#nfPush")) {
+        const btn = e.target.closest("#nfPush");
+        btn.disabled = true;
+        try {
+          if (here) {
+            await api("POST", "/api/push/unsub", { endpoint: mine.endpoint });
+            await mine.unsubscribe().catch(() => {});
+            toast("이 휴대폰은 알림을 받지 않아요");
+          } else {
+            if ((await Notification.requestPermission()) !== "granted") throw new Error("알림을 허용해야 받을 수 있어요");
+            const sub = mine || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(P.key) });
+            await api("POST", "/api/push/sub", { sub: sub.toJSON() });
+            toast("이 휴대폰으로 알려요. 시험 알림을 보내 확인해 보세요");
+          }
+        } catch (err) { toast(err.message, true); }
+        return this.notifyBox(el, opt);
+      }
       if (e.target.closest("#nfTest")) { try { await run(() => api("POST", "/api/notify/test"), "시험 알림을 보냈어요. 휴대폰을 확인해 주세요"); } catch (err) { /* 안내는 run이 띄운다 */ } }
     };
   },

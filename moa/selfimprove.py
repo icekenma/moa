@@ -215,7 +215,7 @@ class SelfImprove:
     def adopt(self, b, rs, c):
         """승격: 이긴 플랜의 값을 기본 플랜과 같은 시장·방식의 자동매매에 반영하고, 다른 실험 플랜은 새 기본값에서 다시 가른다."""
         at = self.rt.autotrade
-        from .autotrade import PLAN_KEYS
+        from .autotrade import PLAN_KEYS, STYLES
         ch = [{"key": x["key"], "label": PLAN_KEYS[x["key"]][3], "from": x["from"], "to": x["to"]} for x in c["keys"]]
         ev = {"plan": c["label"], "me": c["me"], "base": c["base"], "diff": c["diff"], "since": c["since"], "si_from": c.get("si_from")}
         why = f"실험 '{c['label']}'이 같은 기간 기본 플랜보다 거래당 {c['diff']:+.2f}%p({c['me']['n']}건 · 승률 {c['me']['win']}%)"
@@ -244,7 +244,10 @@ class SelfImprove:
         self.note("adopt", b["mkt"], b["style"], f"'{c['label']}' 값을 반영: {line}",
                   why + (f". 함께 바꾼 자동매매: {', '.join(names)}" if names else ""), dict(ev, changes=ch, runs=names))
         try:
-            self.rt.notify(f"자동 개선: {line} ({why})", "info", "자동 개선 반영", key=f"si-adopt-{b['lab_id']}", quiet_min=1)
+            real = any(n.startswith("실전 ") for n in names)
+            self.rt.notify(f"{line}\n{why}" + (f"\n함께 바뀜: {', '.join(names)}" if names else ""), "real" if real else "info",
+                           f"자동 개선 반영 · {'국내' if b['mkt'] == 'kr' else '미국'} {STYLES[b['style']]['label']}",
+                           key=f"si-adopt-{b['lab_id']}", quiet_min=1, link="#invest/si")
         except Exception:
             pass
         at.log(b["id"], "review", f"자동 개선 · {line}", {"si": ev})
@@ -316,6 +319,11 @@ class SelfImprove:
                 if run.get("lab_id") and run.get("variant") == "base":
                     self._rederive(run["lab_id"])
             self.rt.db.x("UPDATE si_changes SET status='rolled', result=?, done_ts=? WHERE id=?", (json.dumps(res), self._now(), c["id"]))
+            try:
+                self.rt.notify(f"{run['name']}: {_line(ch, back=True)}\n반영 뒤 {len(rows)}건 평균 {a_avg:+.2f}% < 반영 전 {before['avg']:+.2f}%",
+                               "real" if run["mode"] == "real" else "info", "자동 개선 되돌림", key=f"si-roll-{c['id']}", link="#invest/si")
+            except Exception:
+                pass
             self.note("rollback", run["mkt"], run["style"], f"{run['name']}: " + _line(ch, back=True) + " 되돌림",
                       f"반영 뒤 {len(rows)}건 평균 {a_avg:+.2f}% < 반영 전 {before['avg']:+.2f}%. 이 값은 {BLOCK_D}일 동안 다시 쓰지 않아요", res)
             return "rolled"

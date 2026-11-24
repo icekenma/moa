@@ -3971,3 +3971,12 @@ html.gm-on dialog.sheet .sheet-in{border-radius:24px}
 .jx-why em{font-style:normal;font-weight:800;font-variant-numeric:tabular-nums;color:var(--ink2)}
 .jx-view{display:block;font-size:12px;line-height:1.5;color:var(--ink2);padding:7px 9px;border-radius:9px;background:color-mix(in srgb,var(--ink) 5%,transparent);quotes:none}
 .jx-view time{font-weight:800;color:var(--ink3);margin-right:6px;font-variant-numeric:tabular-nums}
+
+/* 실험: 기다리는 매수(눌림·지정가·돌파) */
+.lab-wait{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-radius:12px;background:color-mix(in srgb,var(--hl) 10%,transparent);margin-bottom:8px}
+.lab-wait>b{font-size:13px;font-weight:800}
+.lab-wait>small{font-size:11.5px;color:var(--ink3);margin-top:-4px}
+.lab-wait>div{display:flex;justify-content:space-between;align-items:center;gap:10px;padding-top:6px;border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
+.lab-wait>div span{display:flex;flex-direction:column;gap:1px;min-width:0}
+.lab-wait>div span:last-child{align-items:flex-end;font-variant-numeric:tabular-nums}
+.lab-wait small{font-size:11px;color:var(--ink3)}

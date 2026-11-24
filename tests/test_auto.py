@@ -2708,3 +2708,82 @@ def test_trade_journal_month_and_day(env, monkeypatch):
         at.journal("2026-13")
     c = create_app(env.rt).test_client()
     assert c.get(f"/api/auto/journal?day={d}").status_code == 200 and c.get("/api/auto/journal?month=x").status_code == 400
+
+
+def test_waiting_buys_pullback_limit_breakout(env):
+    """v5.37 실험: 눌림 기다리기 · 조건 걸어 두고 사기. 바로 사지 않고 기다렸다가, 조건에 닿으면 같은 거르기를 다시 거쳐 산다.
+    기다리다 산 것은 추천 횟수(cycle)에 넣지 않는다. 켜지 않은 플랜은 예전 그대로."""
+    at, db = env.at, env.rt.db
+    rid = env.run()
+    flag = lambda k, on: db.x(f"UPDATE at_runs SET params=json_set(params,'$.{k}',json('{'true' if on else 'false'}')) WHERE id=?", (rid,))
+    dec = lambda: json.loads(db.q("SELECT data FROM at_log WHERE run_id=? AND kind='cycle' ORDER BY id DESC", (rid,))[0]["data"])["decisions"]
+    env.px["005930"] = 71000.0                                       # 추천가 70,000보다 1.4% 올라 있음(쫓기 기준 0.5%)
+    assert env.enter(rid, [env.pick("005930", entry_price=70000)]) == 0 and dec()[0]["code"] == "chase" and not at.waits(rid)   # 켜지 않으면 예전 그대로
+    flag("pull_wait", True)
+    assert env.enter(rid, [env.pick("005930", entry_price=70000)]) == 0 and dec()[0]["code"] == "wait"
+    w = at.waits(rid)
+    assert len(w) == 1 and w[0]["kind"] == "pull" and w[0]["trig"] == 70350 and w[0]["status"] == "wait"
+    at._waits(at._run(rid))
+    assert not at._open(rid)                                         # 아직 안 내려옴
+    env.px["005930"] = 70300.0
+    at._waits(at._run(rid))
+    o = at._open(rid)
+    assert len(o) == 1 and o[0]["sym"] == "005930" and at.waits(rid)[0]["status"] == "bought"
+    assert db.one("SELECT COUNT(*) n FROM at_log WHERE run_id=? AND kind='cycle'", (rid,))["n"] == 2 and db.one("SELECT COUNT(*) n FROM at_log WHERE run_id=? AND kind='wait'", (rid,))["n"] == 1
+    # 조건 걸어 두고 사기: 지정가(지금보다 낮음) → 내려오면, 돌파가 → 넘어서면
+    flag("pull_wait", False); flag("trigger_buy", True)
+    env.px["000660"], env.px["035420"] = 150000.0, 200000.0
+    assert env.enter(rid, [env.pick("000660", entry_type="limit", entry_price=149000), env.pick("035420", breakout_price=203000)]) == 0
+    assert sorted(x["kind"] for x in at.waits(rid) if x["status"] == "wait") == ["break", "limit"]
+    env.px["035420"] = 202000.0
+    at._waits(at._run(rid))
+    assert {t["sym"] for t in at._open(rid)} == {"005930"}
+    env.px["000660"], env.px["035420"] = 148900.0, 203500.0
+    at._waits(at._run(rid))
+    assert {t["sym"] for t in at._open(rid)} == {"005930", "000660", "035420"}
+    # 유효 시간이 지나면 접는다 · 매수 시간대 밖이면 기다리기만 한다
+    for t in at._open(rid):
+        at._sell(at._run(rid), t, t["entry_price"], "익절")
+    db.x("DELETE FROM at_trades WHERE run_id=?", (rid,))
+    flag("trigger_buy", False); flag("pull_wait", True)
+    env.px["005930"] = 72000.0
+    env.enter(rid, [env.pick("005930", entry_price=70000)])
+    env.hm = "15:10"
+    env.px["005930"] = 70000.0
+    at._waits(at._run(rid))
+    ww = [x for x in at.waits(rid) if x["status"] == "wait"]
+    assert not at._open(rid) and len(ww) == 1
+    db.x("UPDATE at_wait SET until='2000-01-01T00:00:00' WHERE status='wait'")
+    at._waits(at._run(rid))
+    assert not [x for x in at.waits(rid) if x["status"] == "wait"] and any(x["status"] == "expired" for x in at.waits(rid))
+
+
+def test_early_call_on_sharp_index_move(env, monkeypatch):
+    """v5.37 실험: 급변 때 일찍 묻기. 지수가 직전 추천 때보다 크게 움직이면 간격 전이라도 빠른 재추천을 받아 켠 플랜에만 준다."""
+    at = env.at
+    monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (0.1, {"fx": 1400.0}))
+    L = at.lab_create({"budget": 3_000_000, "mkt": "kr", "style": "day", "days": 20, "model": "claude-sonnet-5-5"})["labs"][0]
+    runs = {r["variant"]: at._run(r["id"]) for r in [at._run(x["id"]) for x in L["runs"]]}
+    assert "early" in runs and runs["early"]["params"]["early_call"] and not runs["base"]["params"].get("early_call")
+    head = at._run(at._sibs(runs["base"])[0]["id"])
+    env.idx = 0.2
+    at.log(head["id"], "cycle", "추천", {"idx": 0.2, "decisions": []})
+    env.rt.db.x("UPDATE at_runs SET last_cycle=?, params=json_set(params,'$.quick_gap_min',30) WHERE lab_id=?", (__import__("time").time() - 600, L["id"]))
+    head = at._run(head["id"])
+    sibs = at._sibs(head)
+    assert at._early(head, sibs) is None                              # 지수가 그대로면 묻지 않는다
+    env.idx = 1.3
+    e = at._early(head, sibs)
+    assert e and e["ids"] == [runs["early"]["id"]] and "+0.20% → +1.30%" in e["why"]
+    assert at._early(head, sibs) is None                              # 방금 일찍 물었으면 5분은 쉰다
+    ok, code, _ = at.gate_code(head)
+    assert not ok and code == "gap" and at.gate_code(head, early=True)[0]
+    # 실제로 돌려 보기: 맨 앞 플랜의 차례는 그대로 두고, 켠 플랜만 빠른 재추천을 받는다
+    at._early_at.clear()
+    asked = []
+    monkeypatch.setattr(at, "_ask_ai", lambda run, lite, ids: (asked.append((lite, list(ids))) or {"id": 7, "stance": "보통", "view": "급반등", "picks": [env.pick("005930")]}, None, {"usd": 0.01}))
+    at._maybe_cycle(head)
+    at._busy[head["id"]].join(5)
+    assert asked == [(True, [runs["early"]["id"]])]
+    lg = env.rt.db.q("SELECT run_id, data FROM at_log WHERE kind='cycle' AND data LIKE '%급반등%'")
+    assert [r["run_id"] for r in lg] == [runs["early"]["id"]] and '"early"' in lg[0]["data"] and at._open(runs["early"]["id"])

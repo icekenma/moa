@@ -31,7 +31,7 @@ PICK_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 당
 2) 그 다음 마지막에 아래 JSON 하나를 ```json 코드 블록으로. 다른 코드 블록은 쓰지 마.
 {"stance":"공격|보통|관망","market_view":"한 줄","picks":[
  {"sym":"종목코드 또는 기호","name":"이름","score":0~100,"win_prob":0~100,
-  "entry_type":"limit|market","entry_price":숫자(지정가 추천가, 현재가 근처),
+  "entry_type":"limit|market","entry_price":숫자(지정가 추천가, 현재가 근처),"breakout_price":숫자 또는 0(이 값을 넘어설 때 사는 게 낫다면 그 값, 아니면 0),
   "target_pct":숫자,"stop_pct":숫자(양수),"trail_pct":숫자 또는 0,
   "exit_by":"HH:MM(한국 시간, 이때까지 안 닿으면 정리)","weight_pct":주문가능금액 중 권장 비중(5~40),
   "news_score":-2~2 정수(검색으로 확인한 뉴스·공시가 이 종목 주가에 주는 영향. -2 큰 악재, -1 악재, 0 없음·중립, 1 호재, 2 큰 호재. 확인 못 했으면 0),"news":"그 뉴스·공시 한 줄(없으면 빈 문자열)",
@@ -86,7 +86,7 @@ SWING_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 �
 2) 그 다음 마지막에 아래 JSON 하나를 ```json 코드 블록으로. 다른 코드 블록은 쓰지 마.
 {"stance":"공격|보통|관망","market_view":"한 줄","picks":[
  {"sym":"종목코드 또는 기호","name":"이름","score":0~100,"win_prob":0~100,
-  "entry_type":"limit|market","entry_price":숫자(지정가 추천가),
+  "entry_type":"limit|market","entry_price":숫자(지정가 추천가),"breakout_price":숫자 또는 0(이 값을 넘어설 때 사는 게 낫다면 그 값, 아니면 0),
   "target_pct":숫자,"stop_pct":숫자(양수),"trail_pct":숫자 또는 0,
   "hold_days":예상 보유 거래일(1~<DAYS>),"weight_pct":주문가능금액 중 권장 비중(5~30),
   "theme":"테마 이름(짧게)","catalyst":"재료 한 줄","catalyst_type":"정책|실적|수급|이벤트|업황|기술적",
@@ -106,7 +106,7 @@ LITE_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 당
 - 살 만한 종목이 없으면 stance를 '관망'으로 두고 가장 나은 1종목만 weight_pct 5로 넣어. picks는 비우지 마.
 출력: 설명 글 없이 아래 JSON 하나만 ```json 코드 블록으로.
 {"stance":"공격|보통|관망","market_view":"한 줄","picks":[
- {"sym":"종목코드 또는 기호","name":"이름","score":0~100,"win_prob":0~100,"entry_type":"limit|market","entry_price":숫자(현재가 근처),
+ {"sym":"종목코드 또는 기호","name":"이름","score":0~100,"win_prob":0~100,"entry_type":"limit|market","entry_price":숫자(현재가 근처),"breakout_price":숫자 또는 0(이 값을 넘어설 때 사는 게 낫다면 그 값, 아니면 0),
   "target_pct":숫자,"stop_pct":숫자(양수),"trail_pct":숫자 또는 0,"exit_by":"HH:MM(한국 시간)","weight_pct":5~40,
   "reasons":["근거(짧게)","근거(짧게)"],"risks":["위험(짧게)"]}]}
 picks는 1~3개, 기대수익(승률×목표 − (1−승률)×손절)이 큰 순서로."""
@@ -119,7 +119,7 @@ LITE_SWING = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 중�
 - 살 만한 종목이 없으면 stance를 '관망'으로 두고 가장 나은 1종목만 weight_pct 5로 넣어. picks는 비우지 마.
 출력: 설명 글 없이 아래 JSON 하나만 ```json 코드 블록으로.
 {"stance":"공격|보통|관망","market_view":"한 줄","picks":[
- {"sym":"종목코드 또는 기호","name":"이름","score":0~100,"win_prob":0~100,"entry_type":"limit|market","entry_price":숫자,
+ {"sym":"종목코드 또는 기호","name":"이름","score":0~100,"win_prob":0~100,"entry_type":"limit|market","entry_price":숫자,"breakout_price":숫자 또는 0(이 값을 넘어설 때 사는 게 낫다면 그 값, 아니면 0),
   "target_pct":숫자,"stop_pct":숫자(양수),"trail_pct":숫자 또는 0,"hold_days":1~<DAYS>,"weight_pct":5~30,
   "theme":"테마(짧게)","catalyst":"재료 한 줄(모르면 빈 문자열)","catalyst_type":"정책|실적|수급|이벤트|업황|기술적","catalyst_date":"",
   "reasons":["근거(짧게)","근거(짧게)"],"risks":["위험(짧게)"]}]}
@@ -321,6 +321,15 @@ def swing_end(mkt, ts, days):
 
 def mkt_date(mkt):
     return (et_now() if mkt == "us" else kst_now()).strftime("%Y-%m-%d")
+
+
+def _bo(v, price):
+    """돌파 매수가: 지금 값보다 높고 8% 안쪽일 때만 쓴다(그 밖은 0)."""
+    try:
+        v = float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return round(v, 4) if price and price < v <= price * 1.08 else 0.0
 
 
 def _ck(mkt, h):
@@ -828,6 +837,7 @@ class AIPick:
                      "score": int(float(p.get("score") or 0)), "win_prob": wp,
                      "entry_type": "market" if p.get("entry_type") == "market" else "limit",
                      "entry_price": float(p.get("entry_price") or q.get("price") or 0),
+                     "breakout_price": _bo(p.get("breakout_price"), q.get("price")),
                      "target_pct": round(min(t, H["tp_max"]), 2), "stop_pct": round(min(s_, H["sl_max"]), 2),
                      "trail_pct": round(abs(float(p.get("trail_pct") or 0)), 2),
                      "weight_pct": float(p.get("weight_pct") or 10),

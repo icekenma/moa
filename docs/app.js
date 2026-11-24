@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.0854";
+const UI_VERSION = "261124.0931";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2459,7 +2459,10 @@ pages.invest = {
   atLabParts(L) {
     const M = (v, sgn) => this.atM(L.mkt, v, sgn), hm = (ts) => (ts ? `${ts.slice(5, 10)} ${ts.slice(11, 16)}` : "");
     const pos = L.positions || [], sold = L.trades || [], last = L.last;
-    const hold = pos.length ? `<div class="lab-sell"><b>파는 방법</b> 플랜마다 정한 익절가에 닿으면 이익을 챙기고, 손절가에 닿으면 바로 팔아요. 둘 다 안 닿으면 ${esc(pos[0].hold)}.</div>
+    const WK = { pull: "눌림", limit: "지정가", break: "돌파" }, ws = L.waits || [];
+    const waitH = ws.length ? `<div class="lab-wait"><b>기다리는 매수 ${ws.length}</b><small>가격 조건에 닿으면 사요(실험 플랜만)</small>${ws.map((w) => `<div><span>${stockA(L.mkt, w.sym, w.name)}<small>${esc(w.label)} · ${WK[w.kind] || ""}</small></span>
+      <span><b>${w.kind === "break" ? "↑" : "↓"} ${M(w.trig)}</b><small>${esc((w.until || "").slice(11, 16))}까지</small></span></div>`).join("")}</div>` : "";
+    const hold = waitH + (pos.length ? `<div class="lab-sell"><b>파는 방법</b> 플랜마다 정한 익절가에 닿으면 이익을 챙기고, 손절가에 닿으면 바로 팔아요. 둘 다 안 닿으면 ${esc(pos[0].hold)}.</div>
       <div class="lab-pos">${pos.map((g, i) => `<details ${pos.length === 1 && i === 0 ? "open" : ""}>
         <summary><span class="lab-pn"><b>${stockA(L.mkt, g.sym, g.name)}</b><small>${g.plans.length}개 플랜 · 모두 ${g.qty}주 · ${hm(g.first_ts)}</small></span>
           <span class="lab-pp"><b class="${tone(g.pct)}">${pct(g.pct, 2)}</b><small>${M(g.avg)} → ${M(g.last)}</small></span></summary>
@@ -2470,7 +2473,7 @@ pages.invest = {
             <span class="${tone(p.pct)}">${pct(p.pct, 2)}</span></button>`).join("")}
           ${g.why && g.why.reasons.length ? `<div class="lab-why"><b>AI가 고른 이유</b><ul>${g.why.reasons.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
           ${g.why && g.why.risks.length ? `<div class="lab-why risk"><b>AI가 본 위험</b><ul>${g.why.risks.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
-        </div></details>`).join("")}</div>` : `<div class="empty sm">지금 들고 있는 종목이 없어요.<br>${esc(L.last_line || "추천을 받으면 여기에 보여요")}</div>`;
+        </div></details>`).join("")}</div>` : `<div class="empty sm">지금 들고 있는 종목이 없어요.<br>${esc(L.last_line || "추천을 받으면 여기에 보여요")}</div>`);
     const lastH = last ? `<div class="card-head"><h2>${hm(last.ts)} ${last.lite ? "빠른 재추천" : "정밀 추천"}${last.stance ? ` · ${esc(last.stance)}` : ""}</h2></div>${L.plan && L.plan.quick_gap_min ? `<div class="tiny lab-freq">정밀 추천 하루 ${L.plan.cycles_per_day}번 + ${L.plan.quick_gap_min}분마다 빠른 재추천 · 지금까지 ${L.cycles}번(빠른 ${L.quick || 0})</div>` : ""}
         ${last.view ? `<div class="small muted">${esc(last.view)}</div>` : ""}
         <div class="lab-last">${last.picks.map((x) => `<div><span><b>${stockA(L.mkt, x.sym, x.name)}</b><small>점수 ${x.score ?? "-"} · 승률 ${x.win_prob ?? "-"}%</small></span>

@@ -77,12 +77,19 @@ class Replay:
             self.rt.db.x("INSERT OR REPLACE INTO rp_bars(mkt,sym,day,tf,bars,src,at) VALUES(?,?,?,?,?,?,?)",
                          (mkt, sym.upper(), d, "m5", json.dumps(m, separators=(",", ":")), "5분봉", now))
 
-    def _m5(self, mkt, sym, ts, budget):
-        """그날(한국 시간 날짜, 미국은 정규장이 걸친 두 날) 5분봉 [(dt, o,h,l,c)]."""
+    def _m5(self, mkt, sym, ts, ctx):
+        """그날(한국 시간 날짜, 미국은 정규장이 걸친 두 날) 5분봉 [(dt, o,h,l,c)]. ctx: 한 번 돌리는 동안의 받기 한도·기억."""
+        mk = ("m5", mkt, sym.upper(), ts.strftime("%Y-%m-%d"))
+        if mk in ctx["memo"]:
+            return ctx["memo"][mk]
+        ctx["memo"][mk] = out = self._m5_load(mkt, sym, ts, ctx)
+        return out
+
+    def _m5_load(self, mkt, sym, ts, ctx):
         days = {ts.strftime("%Y-%m-%d"), (ts + timedelta(days=1)).strftime("%Y-%m-%d")}
         rows = self.rt.db.q(f"SELECT bars FROM rp_bars WHERE mkt=? AND sym=? AND tf='m5' AND day IN ({','.join('?' * len(days))})", (mkt, sym.upper(), *days))
-        if not rows and budget[0] > 0:
-            budget[0] -= 1
+        if not rows and ctx["left"] > 0:
+            ctx["left"] -= 1
             try:
                 self.keep_m5(mkt, sym, self.rt.invest.candles(mkt, sym, "m5").get("bars") or [], ts)
                 rows = self.rt.db.q(f"SELECT bars FROM rp_bars WHERE mkt=? AND sym=? AND tf='m5' AND day IN ({','.join('?' * len(days))})", (mkt, sym.upper(), *days))
@@ -93,13 +100,20 @@ class Replay:
             out.update(json.loads(r["bars"]))
         return sorted((datetime.fromisoformat(k), *v) for k, v in out.items())
 
-    def _daily(self, mkt, sym, need_to, budget):
+    def _daily(self, mkt, sym, need_to, ctx):
         """일봉 {날짜: (o,h,l,c)} — 12시간 안에 받은 것이 있고 필요한 날까지 있으면 그대로."""
+        mk = ("d", mkt, sym.upper())
+        if mk in ctx["memo"] and max(ctx["memo"][mk] or {"": 0}) >= need_to:
+            return ctx["memo"][mk]
+        ctx["memo"][mk] = out = self._daily_load(mkt, sym, need_to, ctx)
+        return out
+
+    def _daily_load(self, mkt, sym, need_to, ctx):
         r = self.rt.db.one("SELECT bars, at FROM rp_bars WHERE mkt=? AND sym=? AND day='*' AND tf='d'", (mkt, sym.upper()))
         fresh = r and (datetime.now() - datetime.fromisoformat(r["at"])) < timedelta(hours=12)
         have = json.loads(r["bars"]) if r else {}
-        if (not r or (not fresh and max(have or {"": 0}) < need_to)) and budget[0] > 0:
-            budget[0] -= 1
+        if (not r or (not fresh and max(have or {"": 0}) < need_to)) and ctx["left"] > 0:
+            ctx["left"] -= 1
             try:
                 bs = self.rt.invest.candles(mkt, sym, "d", 600).get("bars") or []
                 new = {b["t"][:10]: [b["o"], b["h"], b["l"], b["c"]] for b in bs if b.get("c") and b.get("t")}
@@ -158,6 +172,10 @@ class Replay:
         return [(r, d, picks[d["pick_id"]]) for r, d in out if d["pick_id"] in picks]
 
     # ------------------------------------------------------------------ 가상 매매
+    @staticmethod
+    def ctx(left=FETCH_MAX):
+        return {"left": left, "memo": {}}
+
     def simulate(self, run, P, cyc, budget, fetch):
         """cyc: _cycles 결과. P: 플랜 값. 반환: (거래, 거른 이유별 수, 자료 상태별 수)."""
         mkt, style = run["mkt"], run["style"]
@@ -302,7 +320,7 @@ class Replay:
         cyc = self._cycles(run, days)
         if not cyc:
             raise ValueError("이 기간에 다시 돌릴 추천 기록이 없어요. 기간을 늘려 보세요")
-        fetch = [FETCH_MAX]
+        fetch = self.ctx()
         budget = float(run["budget"])
         A, ska, sra = self.simulate(run, base, cyc, budget, fetch)
         B, skb, srb = self.simulate(run, alt, cyc, budget, fetch) if ch else (A, ska, sra)
@@ -325,8 +343,60 @@ class Replay:
                           "pnl": round(sum(r["pnl"] or 0 for r in real), 2)} if not run.get("lab_id") else None,
                "trades": {"base": sorted(A, key=lambda t: t["ts"], reverse=True)[:150], "alt": sorted(B, key=lambda t: t["ts"], reverse=True)[:150] if ch else None},
                "not_replayed": [PLAN_KEYS[k][3] for k in NOT_REPLAYED if k in PLAN_KEYS and run["params"].get(k)],
-               "fetched": FETCH_MAX - fetch[0]}
+               "fetched": FETCH_MAX - fetch["left"]}
         return out
+
+    # ------------------------------------------------------------------ AI 성적 분석에 붙이는 '이렇게 바꿨다면'
+    def _variants(self, base):
+        from .autotrade import _clamp_key
+        out = []
+
+        def add(label, k, v):
+            try:
+                v = _clamp_key(k, v)
+            except Exception:
+                return
+            if v != base.get(k) and not any(o[1] == k and o[2] == v for o in out):
+                out.append((label, k, v))
+        b = base
+        add("최소 승률 +5", "min_win_prob", float(b["min_win_prob"]) + 5)
+        add("최소 승률 −5", "min_win_prob", float(b["min_win_prob"]) - 5)
+        add("최소 점수 +10", "min_score", float(b["min_score"]) + 10)
+        add("최소 손익비 +0.3", "min_rr", round(float(b["min_rr"]) + 0.3, 2))
+        add("익절·손절 폭 ×0.8", "exit_mult", round(float(b.get("exit_mult") or 1) * 0.8, 2))
+        add("익절·손절 폭 ×1.2", "exit_mult", round(float(b.get("exit_mult") or 1) * 1.2, 2))
+        add("익절 상한 ×0.7", "tp_cap", round(float(b["tp_cap"]) * 0.7, 1))
+        add("손절 상한 ×0.7", "sl_cap", round(float(b["sl_cap"]) * 0.7, 1))
+        add("동시 보유 +1", "max_positions", int(b["max_positions"]) + 1)
+        add("동시 보유 −1", "max_positions", int(b["max_positions"]) - 1)
+        add("관망이면 쉬기 " + ("끔" if b.get("skip_watch") else "켬"), "skip_watch", not b.get("skip_watch"))
+        return out
+
+    def explore(self, run, days=30, ctx=None):
+        """지금 값과, 값 하나씩 바꾼 여러 경우를 같은 지난 추천으로 다시 돌린 요약(AI 성적 분석 자료). 받기 한도는 작게."""
+        ctx = ctx or self.ctx(25)
+        cyc = self._cycles(run, days)
+        if not cyc:
+            return None
+        budget = float(run["budget"])
+        base = {k: run["params"].get(k) for k in KEYS}
+        dlist = sorted({r["day"] for r, _, _ in cyc})
+        cut = dlist[int(len(dlist) * 0.7)] if len(dlist) >= 4 else None
+
+        def row(T, label):
+            a = stats(T, budget)
+            e = stats([t for t in T if cut and t["day"] < cut], budget) if cut else None
+            lt = stats([t for t in T if cut and t["day"] >= cut], budget) if cut else None
+            return {"바꾼것": label, "거래": a["n"], "승률": a["win"], "평균": a["avg"], "손익": a["pnl"], "굴리는돈대비": a["ret"], "최대낙폭": a["mdd"],
+                    "앞기간평균": e["avg"] if e else None, "뒤기간평균": lt["avg"] if lt else None}
+        A, ska, src = self.simulate(run, base, cyc, budget, ctx)
+        rows = [row(A, "지금 값")]
+        for label, k, v in self._variants(base):
+            T, _, _ = self.simulate(run, dict(base, **{k: v}), cyc, budget, ctx)
+            rows.append(row(T, label))
+        return {"자동매매": run["name"], "실험": bool(run.get("lab_id")), "기간": f"{dlist[0]}~{dlist[-1]}", "추천횟수": len(cyc), "앞뒤나눈날": cut,
+                "지금값": {k: base[k] for k in KEYS}, "결과": rows, "시세": src,
+                "안돌린값": [k for k in NOT_REPLAYED if run["params"].get(k)]}
 
     # ------------------------------------------------------------------ 따로 도는 일(시세를 받느라 오래 걸릴 수 있어)
     def start(self, rid, days=30, change=None):

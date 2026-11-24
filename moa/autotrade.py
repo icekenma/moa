@@ -3350,10 +3350,13 @@ class AutoTrade:
                "## 한 줄 결론\n지금 이 자동매매가 돈을 버는지, 무엇이 가장 크게 갈랐는지 한두 문장.\n"
                "## 잘된 것\n- 근거 숫자(건수·승률·평균 수익률·손익)와 함께 2~3개\n"
                "## 돈이 새는 곳\n- 손실이 몰린 곳(파는 사유·시각·요일·보유 시간·지수 흐름·AI 승률·점수·엔진·종목·전략), AI 비용 대비 손익. 2~4개\n"
-               "## 바꿔 볼 것\n- 어느 값을 어느 방향으로(예: 최소 승률 55→60), 왜, 기대 효과. 표본이 적으면(10건 미만) '아직 판단 이르다'고 말해. "
+               "## 다시 돌려 보니\n- 앱 자료의 '다시돌려보기'(그때 실제 받은 추천을 값 하나씩 바꿔 다시 사고판 결과)에서 지금 값보다 거래당 평균·손익이 나은 경우, "
+               "특히 앞 기간과 뒤 기간 모두 나은 경우를 숫자와 함께 1~3개. 앞 기간에서만 나은 것은 '지난 기록에만 맞춘 값일 수 있다'고 말해. 거래가 크게 줄어 나아 보이는 것도 짚어. "
+               "자료가 없으면 이 절은 '다시 돌릴 기록이 없음' 한 줄\n"
+               "## 바꿔 볼 것\n- 어느 값을 어느 방향으로(예: 최소 승률 55→60), 왜, 기대 효과. 성적 분석과 다시 돌려 보기 결과가 같은 쪽을 가리키는 것을 먼저. 표본이 적으면(10건 미만) '아직 판단 이르다'고 말해. "
                "자동 개선이 켜져 있으면 실험에서 먼저 시험한다는 걸 전제로 '시험해 볼 값'으로 말해. 2~4개\n"
                "## 다음에 볼 것\n- 다음 분석 때 확인할 것 1~2개\n"
-               "규칙: 앱 자료에 없는 숫자는 지어내지 마. 투자 권유가 아니라 이 기록의 분석이야. 전문 용어는 쉬운 말로. 전체 900자 안팎.")
+               "규칙: 앱 자료에 없는 숫자는 지어내지 마. 다시 돌려 보기는 그때 받은 추천만 쓴 가상 계산이라 실제와 다를 수 있다는 걸 기억해. 투자 권유가 아니라 이 기록의 분석이야. 전문 용어는 쉬운 말로. 전체 1100자 안팎.")
 
     def ana_context(self, d):
         """매매 기록의 성적 분석(지금 고른 조건 그대로)을 AI가 읽을 자료로 줄인다."""
@@ -3376,6 +3379,21 @@ class AutoTrade:
             running.append({"이름": r["name"], "실험플랜": VARIANTS.get(r.get("variant") or "", ("",))[0] if r.get("lab_id") else "", "구분": r["mode"], "시장": r["mkt"], "방식": r["style"],
                             "값": {k: p.get(k) for k in ("min_win_prob", "min_score", "min_rr", "per_trade_pct", "max_positions", "chase_pct", "exit_mult", "daily_loss_pct")}})
         si = getattr(self.rt, "selfimp", None)
+        rp = []
+        try:                                             # 다시 돌려 보기: 같은 조건의 자동매매를 값 하나씩 바꿔 지난 추천으로 다시 사고판 결과(AI 비용 없음)
+            R = self.rt.replay
+            ctx = R.ctx(25)
+            if q.get("strat"):
+                cands = [r for r in self._runs() if self._strat(r)[0] == q["strat"]]
+            else:
+                ids = [x["id"] for x in R.sources() if (not q.get("mkt") or x["mkt"] == q["mkt"]) and (not q.get("mode") or x["mode"] == q["mode"])]
+                cands = [self._run(i) for i in ids]
+            for r in cands[:2]:
+                e = R.explore(r, min(days or 60, 60), ctx)
+                if e:
+                    rp.append(e)
+        except Exception as e:
+            rp = [{"오류": f"다시 돌려 보기 계산 실패({type(e).__name__})"}]
         data = {"조건": cond, "합계": st(T) | {"AI비용_원": T.get("ai_cost"), "비용뺀손익_원": T.get("net"), "보유중": T.get("open"), "거래한날": T.get("days")},
                 "전략별": [{"전략": x["label"], "묶음": x["group"], "성적": st(x["stats"]), "AI비용_원": x["ai_cost"], "비용뺀손익_원": x["net"], "예산대비_%": x["net_pct"],
                          "파는사유": x["reasons"][:5]} for x in (H.get("strategies") or [])[:14]],
@@ -3387,6 +3405,7 @@ class AutoTrade:
                            "AI승률": t["win_prob"], "점수": t["score"], "분위기": t["stance"], "최고": t["mfe_pct"], "최저": t["mae_pct"], "지수": t["idx_pct"],
                            "빠른재추천": t["lite"], "엔진": t["engine"]} for t in closed],
                 "지금도는자동매매": running[:20],
+                "다시돌려보기": rp or "이 조건에 다시 돌릴 추천 기록이 없음",
                 "자동개선": {"켜짐": si.on(), "최근": [f"{e['ts'][:10]} {e['title']}" for e in (si.view().get("events") or [])[:8]]} if si is not None else None}
         qq = str(d.get("question") or "").strip()[:500]
         ask = f"{qq}\n(앞의 분석에 이어서, 앱 자료의 숫자를 근거로 짧고 쉽게. 투자 권유가 아니라 기록 분석으로.)" if qq else self.ANA_ASK

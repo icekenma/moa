@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.1656";
+const UI_VERSION = "261124.1709";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -3584,7 +3584,7 @@ atAttrHtml(st) {
     const thin = T.n < 10;
     return `<section class="card hx-ai">
       <div class="hx-ai-h"><span class="hx-ai-mark" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"/><path d="M19 15l.8 1.9 1.9.8-1.9.8L19 20.4l-.8-1.9-1.9-.8 1.9-.8z"/></svg></span>
-        <div><b>AI 성적 분석</b><small>${esc(cond)} · 끝난 거래 ${won(T.n)}건을 읽고 잘된 것, 돈이 새는 곳, 바꿔 볼 값을 정리해요</small></div></div>
+        <div><b>AI 성적 분석</b><small>${esc(cond)} · 끝난 거래 ${won(T.n)}건과, 지난 추천을 값을 바꿔 다시 돌려 본 결과까지 읽고 잘된 것·돈이 새는 곳·바꿔 볼 값을 정리해요</small></div></div>
       ${thin ? `<p class="hx-ai-warn">거래가 ${T.n}건뿐이라 결론은 참고만 하세요. 기간을 늘리면 더 믿을 만해요.</p>` : ""}
       <button type="button" class="btn dark wide" id="hxAiGo">AI로 분석하기</button>
       <div id="hxAiPast"></div></section>`;
@@ -6805,7 +6805,7 @@ function aiSheet(kind, payload = {}) {
     <div class="ai-box">
       <div id="aiMeterTop" class="cm-slot"></div>
       <div id="aiThread" class="ai-thread"></div>
-      ${AI_FOLLOW[kind] ? `<div class="ai-start" id="aiStartBox"><p>${esc(payload.cond || "지금 고른 조건")}의 기록을 AI에게 보내 분석해요. 시작을 눌러야 요청하고, 위의 예상 비용이 들어요.</p>
+      ${AI_FOLLOW[kind] ? `<div class="ai-start" id="aiStartBox"><p>${esc(payload.cond || "지금 고른 조건")}의 기록과, 지난 추천을 값 하나씩 바꿔 다시 돌려 본 결과(앱이 먼저 계산, 비용 없음)를 AI에게 보내 분석해요. 시작을 눌러야 요청하고, 위의 예상 비용이 들어요.</p>
         <button type="button" class="btn dark wide" id="aiStart">분석 시작</button></div>` : ""}
       ${chat ? `<div class="ai-follow" ${AI_FOLLOW[kind] ? "hidden" : ""}><div class="ai-chips">${chips.map((q) => `<button type="button" class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
         <div class="ai-ask"><textarea id="aiQ" rows="2" placeholder="${kind === "ana" ? "예: 오후에 산 거래는 왜 나빠?" : "예: 엔비디아 실적 발표 전에 볼 점은?"}"></textarea><button class="btn dark" id="aiSend">묻기</button></div></div>` : ""}

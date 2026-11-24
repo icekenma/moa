@@ -371,6 +371,8 @@ class AI:
         if c.get("budget_usd") and used >= float(c["budget_usd"]):
             yield {"t": "error", "msg": f"이번 달 AI 예산(${c['budget_usd']})을 다 썼어요. 설정 → AI에서 늘릴 수 있어요"}
             return
+        if kind == "ana" and not d.get("question"):
+            yield {"t": "status", "msg": "성적을 모으고, 지난 추천을 값을 바꿔 다시 돌려 보는 중(비용 없음)"}
         try:
             title, ask, data = self.context(kind, d)
         except AIError as e:

@@ -3043,3 +3043,12 @@ def test_replay_recorded_picks(env):
             break
         _t.sleep(0.1)
     assert g["state"] == "done" and g["res"]["alt"]["n"] == 0 and g["res"]["base"]["n"] == 6
+    # AI 성적 분석 자료에 '다시 돌려 보기'(값 하나씩 바꿔 본 결과)가 함께 들어간다
+    t = datetime.now().isoformat(timespec="seconds")
+    db.x("INSERT INTO at_trades(run_id,ver,mkt,sym,name,qty,status,entry_ts,entry_day,entry_hm,entry_price,target_pct,stop_pct,exit_ts,exit_price,reason,pnl,pnl_pct,exit_day) "
+         "VALUES(?,1,'kr','A','에이',1,'closed',?,?,'09:30',100,3,1.5,?,103,'익절',3,3,?)", (rid, t, t[:10], t, t[:10]))
+    _, ask, data = env.rt.ai.context("ana", {"days": 30, "mkt": "kr"})
+    E = data["다시돌려보기"][0]
+    labels = [r["바꾼것"] for r in E["결과"]]
+    assert "## 다시 돌려 보니" in ask and labels[0] == "지금 값" and "최소 승률 +5" in labels and E["추천횟수"] == 3
+    assert next(r for r in E["결과"] if r["바꾼것"] == "최소 승률 +5")["거래"] == 3 and E["결과"][0]["거래"] == 6

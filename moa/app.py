@@ -1592,6 +1592,13 @@ def create_app(rt, updater=None):
     def auto_history():
         return jsonify(rt.autotrade.history(request.args.to_dict()))
 
+    @app.get("/api/market/calm")
+    def market_calm():
+        try:
+            return jsonify(rt.calm.view(request.args.get("years", 3), request.args.get("band", 1)))
+        except ValueError:
+            return jsonify({"error": "기간·폭을 숫자로 주세요"}), 400
+
     @app.get("/api/auto/ana")
     def auto_ana():
         return jsonify(items=rt.autotrade.anas())

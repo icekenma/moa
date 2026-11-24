@@ -4120,3 +4120,43 @@ html.gm-on dialog.sheet .sheet-in{border-radius:24px}
 .hx-ai-past small{font-size:11.5px;color:var(--ink3);flex:0 0 auto;font-variant-numeric:tabular-nums}
 .ai-start{display:flex;flex-direction:column;gap:10px;padding:4px 0 6px}
 .ai-start p{margin:0;font-size:13px;line-height:1.55;color:var(--ink2)}
+
+/* ---------- 성적 분석 › 지수가 평범했던 날(hc-) ---------- */
+.hx-calm{display:flex;flex-direction:column;gap:10px}
+.hc-h{display:flex;flex-direction:column;gap:3px}
+.hc-h b{font-size:15px}.hc-h small{font-size:12px;color:var(--ink3);line-height:1.45}
+.hc-f{display:grid;grid-template-columns:1fr 1.25fr;gap:6px}
+.hc-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.hc-row{all:unset;box-sizing:border-box;width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n p" "bar bar" "leg leg";gap:6px 10px;padding:11px 0;border-top:1px solid var(--line);cursor:pointer}
+.hc-list li:first-child .hc-row{border-top:0}
+.hc-row:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:8px}
+.hc-row.err{display:flex;justify-content:space-between;font-size:12.5px;color:var(--ink3)}
+.hc-n{grid-area:n;display:flex;align-items:center;gap:7px;min-width:0}
+.hc-n b{font-size:14px}
+.hc-p{grid-area:p;display:flex;align-items:baseline;gap:6px;font-variant-numeric:tabular-nums}
+.hc-p b{font-size:20px;font-weight:800;letter-spacing:-.4px}.hc-p b small{font-size:12px;margin-left:1px}
+.hc-p>small{font-size:11.5px;color:var(--ink3)}
+.hc-bar{grid-area:bar;display:flex;height:9px;border-radius:5px;overflow:hidden;background:color-mix(in srgb,var(--ink) 8%,transparent)}
+.hc-bar i{display:block;height:100%}
+.hc-bar .dn{background:var(--down)}.hc-bar .up{background:var(--up)}
+.hc-bar .ok{background:color-mix(in srgb,var(--ink) 22%,transparent)}
+.hc-leg{grid-area:leg;display:flex;justify-content:space-between;font-size:11.5px;color:var(--ink3);font-variant-numeric:tabular-nums}
+.hc-leg em{font-style:normal}.hc-leg .dn{color:var(--down)}.hc-leg .up{color:var(--up)}
+.hc-sh{display:flex;flex-direction:column;gap:10px}
+.hc-sh .hx-sub small{font-weight:500;color:var(--ink3)}
+.hc-y{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+.hc-y th,.hc-y td{padding:7px 4px;text-align:right;border-top:1px solid var(--line)}
+.hc-y thead th{font-size:11.5px;font-weight:700;color:var(--ink3);border-top:0}
+.hc-y th:first-child{text-align:left}
+.hc-y tbody th small{margin-left:5px;font-size:10.5px;font-weight:500;color:var(--ink3)}
+.hc-y td,.hc-y tbody th{font-size:13px;font-weight:600}
+.hc-y td:nth-child(2){font-weight:800}
+.hc-y td.hi{color:var(--hc-calm)}.hc-y td.lo{color:var(--hc-wild)}
+.hc-m{display:flex;align-items:flex-end;gap:2px;height:72px;padding-top:4px;border-bottom:1px solid var(--line)}
+.hc-m i{flex:1;border-radius:2px 2px 0 0;background:color-mix(in srgb,var(--ink) 25%,transparent)}
+.hc-m i.hi{background:var(--hc-calm)}.hc-m i.lo{background:var(--hc-wild)}
+.hx-calm,.hc-sh{--hc-calm:#1FA595;--hc-wild:#D98A0B}
+.dark-theme .hx-calm,.dark-theme .hc-sh{--hc-calm:#3FD3BF;--hc-wild:#F2B64A}
+.hc-sh .hc-key{display:flex;gap:12px;font-size:11.5px;color:var(--ink3)}
+.hc-sh .hc-key i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:0}
+.hc-ax{display:flex;justify-content:space-between;font-size:11px;color:var(--ink3);font-variant-numeric:tabular-nums}

@@ -51,6 +51,8 @@ class Runtime:
         from .evolution import Evolution
         self.evolution = Evolution(self)
         from .autotrade import AutoTrade
+        from .calmdays import CalmDays
+        self.calm = CalmDays(self)        # 지수가 평범했던 날 비율(성적 분석의 참고 카드)
         from .webpush import WebPush
         self.push = WebPush(self)          # 앱 알림(웹 푸시): 홈 화면 앱으로 바로
         self.autotrade = AutoTrade(self)

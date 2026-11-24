@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.1627";
+const UI_VERSION = "261124.1638";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -3472,6 +3472,58 @@ atAttrHtml(st) {
       <button type="button" class="btn dark wide" id="hxAiGo">AI로 분석하기</button>
       <div id="hxAiPast"></div></section>`;
   },
+  // 지수가 평범했던 날(±폭 안) 비율: 최근 몇 년 코스피·S&P 500(+코스닥·나스닥). 서버의 지수 일봉(5년)을 날마다 센다
+  async hxCalm() {
+    const el = $("#hxCalm");
+    if (!el) return;
+    const C = this.calmS || (this.calmS = { years: 3, band: 1, more: false });
+    let V;
+    try { V = await GET(`/api/market/calm?years=${C.years}&band=${C.band}`); }
+    catch (e) {
+      if (!el.isConnected) return;
+      el.innerHTML = e.code === "old_server" ? `<div class="tiny">지수 평범한 날 통계는 노트북 서버가 새 버전을 받으면 보여요.</div>` : `<div class="tiny">${esc(e.message)}</div>`;
+      return;
+    }
+    if (!el.isConnected) return;
+    this.calmV = V;
+    const b = V.band, bl = `±${b}%`;
+    const row = (x, i) => {
+      if (x.error) return `<li class="hc-row err"><b>${esc(x.name)}</b><small>${esc(x.error)}</small></li>`;
+      const w = (n) => `${(n / x.n * 100).toFixed(1)}%`;
+      return `<li><button type="button" class="hc-row" data-hc="${i}">
+        <span class="hc-n"><i class="mk-tag ${x.mkt}">${x.mkt === "kr" ? "국내" : "미국"}</i><b>${esc(x.name)}</b></span>
+        <span class="hc-p"><b>${x.calm_pct}<small>%</small></b><small>${x.calm}/${x.n}일</small></span>
+        <span class="hc-bar" role="img" aria-label="${esc(x.name)}: ${bl} 넘게 내린 날 ${x.down}일, 평범한 날 ${x.calm}일, ${bl} 넘게 오른 날 ${x.up}일"><i class="dn" style="width:${w(x.down)}"></i><i class="ok" style="width:${w(x.calm)}"></i><i class="up" style="width:${w(x.up)}"></i></span>
+        <span class="hc-leg"><em class="dn">내림 ${x.down}</em><em>평범 ${x.calm}</em><em class="up">오름 ${x.up}</em></span></button></li>`;
+    };
+    const main = V.indices.slice(0, 2), rest = V.indices.slice(2);
+    el.innerHTML = `<div class="hc-h"><b>지수가 평범했던 날</b><small>하루 등락(종가 기준)이 ${bl} 안이었던 거래일 비율 · ${esc(V.since.slice(0, 7).replace("-", "."))}부터</small></div>
+      <div class="hc-f">${seg("평범한날기간", [["1", "1년"], ["3", "3년"], ["5", "5년"]], String(V.years))}${seg("평범한날폭", [["0.5", "±0.5%"], ["1", "±1%"], ["2", "±2%"]], String(b))}</div>
+      <ul class="hc-list">${main.map(row).join("")}${C.more ? rest.map((x, i) => row(x, i + 2)).join("") : ""}</ul>
+      ${rest.length && !C.more ? `<button type="button" class="td-more" id="hcMore">코스닥·나스닥도 보기</button>` : ""}
+      <p class="tiny">누르면 해마다·달마다 비율을 볼 수 있어요. 매매 기록의 '기준별 › 그날 지수'에서 내 거래가 이런 날 어땠는지 볼 수 있어요.</p>`;
+    bindSeg(el, "평범한날기간", (v) => { C.years = Number(v); this.hxCalm(); });
+    bindSeg(el, "평범한날폭", (v) => { C.band = Number(v); this.hxCalm(); });
+    const mo = $("#hcMore", el);
+    if (mo) mo.onclick = () => { C.more = true; this.hxCalm(); };
+    el.querySelectorAll("[data-hc]").forEach((btn) => (btn.onclick = () => this.hxCalmSheet(V.indices[+btn.dataset.hc], V)));
+  },
+  hxCalmSheet(x, V) {
+    const bl = `±${V.band}%`, ms = x.months.slice(-36);
+    const tone2 = (p) => (p == null ? "" : p >= 75 ? "hi" : p >= 50 ? "mid" : "lo");
+    openSheet(`${x.name} · ${bl} 안의 날`, `<div class="hc-sh">
+      <div class="hx-kv"><div><span>평범한 날</span><b>${x.calm_pct}% <small>${x.calm}/${x.n}일</small></b></div><div><span>하루 평균 움직임</span><b>±${x.avg_abs}%</b></div>
+        <div><span>2% 넘게 움직인 날</span><b>${x.big2}일</b></div><div><span>3% 넘게 움직인 날</span><b>${x.big3}일</b></div></div>
+      <div class="hx-sub">해마다</div>
+      <table class="hc-y"><thead><tr><th>해</th><th>평범</th><th>오름</th><th>내림</th><th>±2%↑</th></tr></thead>
+        <tbody>${x.years.map((y) => `<tr><th>${esc(y.y)}${y.n < 200 ? `<small>${y.n}일</small>` : ""}</th><td class="${tone2(y.calm_pct)}">${y.calm_pct}%</td><td>${y.up}</td><td>${y.down}</td><td>${y.big2}</td></tr>`).join("")}</tbody></table>
+      <div class="hx-sub">달마다 평범한 날 비율 <small>(최근 ${ms.length}달)</small></div>
+      <div class="hc-m" role="img" aria-label="달마다 평범한 날 비율">${ms.map((m) => `<i class="${tone2(m.calm_pct)}" style="height:${Math.max(4, m.calm_pct || 0)}%" title="${m.m} ${m.calm_pct}%"></i>`).join("")}</div>
+      <div class="hc-ax"><span>${esc((ms[0] || {}).m || "")}</span><span>${esc((ms[ms.length - 1] || {}).m || "")}</span></div>
+      <div class="hc-key"><span><i style="background:var(--hc-calm)"></i>75% 넘게 평범</span><span><i style="background:color-mix(in srgb,var(--ink) 25%,transparent)"></i>50~75%</span><span><i style="background:var(--hc-wild)"></i>절반도 안 됨(요동친 달)</span></div>
+      ${x.last_big ? `<p class="tiny">마지막으로 ${bl} 밖이었던 날: ${esc(x.last_big.day)} (${pct(x.last_big.pct, 2)})</p>` : ""}
+      <p class="tiny">${esc(x.first)} ~ ${esc(x.last)} 일봉 기준. 휴장일은 빼고 셌어요.</p></div>`);
+  },
   async hxAiPast() {
     const el = $("#hxAiPast");
     if (!el) return;
@@ -3520,6 +3572,7 @@ atAttrHtml(st) {
           <div class="tiny">기간 안에 산 것 ${won(T.buys)}건 · 지금 들고 있는 것 ${won(T.open)}건 · 거래한 날 ${T.days}일${T.n ? ` · 이익/손실 비 ${T.pf ?? "-"}` : ""}</div>` : ""}
       </section>
       ${has && T.n ? this.hxAiCard(d) : ""}
+      <section class="card hx-calm" id="hxCalm"><div class="empty small loading">지수 기록을 세는 중</div></section>
       ${has ? `<div class="hx-tabs">${seg("기록보기", [["day", "날짜별"], ["strat", "전략별"], ["angle", "기준별"], ["trade", `거래 ${d.trades_n > 400 ? "400+" : d.trades_n}`]], H.view)}</div>
       <div id="hxBody">${this.hxBody()}</div>` : `<section class="card"><div class="empty">이 조건의 자동매매 기록이 아직 없어요. 모의 자동 테스트가 돌면 여기 쌓여요.</div></section>`}`;
     this.jxBindMode(box);
@@ -3540,6 +3593,7 @@ atAttrHtml(st) {
       sheet.addEventListener("close", () => this.hxAiPast(), { once: true });
     };
     this.hxAiPast();
+    this.hxCalm();
     box.onkeydown = (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-hxcell],[data-hxsd]")) { e.preventDefault(); e.target.click(); } };
     box.onclick = async (e) => {
       const cell = e.target.closest("[data-hxcell]");

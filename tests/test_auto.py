@@ -2970,3 +2970,28 @@ def test_ai_performance_analysis_context(env):
     from moa.app import create_app
     xs = create_app(env.rt).test_client().get("/api/auto/ana").get_json()["items"]
     assert len(xs) == 5 and xs[0]["text"] == "분석 6" and xs[0]["cond"] == "최근 30일 · 국내"
+
+
+def test_calm_days(env, monkeypatch):
+    """지수가 평범했던 날: 앞 거래일 종가 대비 ±폭 안의 날 비율, 해마다·달마다, 못 받은 지수는 오류만."""
+    from moa import calmdays as CD
+    rows = CD.changes({"2026-01-02": 100, "2026-01-05": 100.5, "2026-01-06": 102, "2026-01-07": 99.0, "2026-02-02": 99.5})
+    assert [round(p, 2) for _, p in rows] == [0.5, 1.49, -2.94, 0.51]
+    S = CD.summarize(rows, 1.0)
+    assert (S["n"], S["calm"], S["up"], S["down"], S["calm_pct"], S["big2"]) == (4, 2, 1, 1, 50.0, 1)
+    assert [m["m"] for m in S["months"]] == ["2026-01", "2026-02"] and S["last_big"]["day"] == "2026-01-07"
+    from datetime import date, timedelta
+    d0 = date.today() - timedelta(days=400)
+    closes = {(d0 + timedelta(days=i)).isoformat(): 100 * (1.012 if i % 4 == 0 else 1.0) ** (i // 4) for i in range(400)}
+
+    def fake(sym):
+        if sym == "^KQ11":
+            raise RuntimeError("x")
+        return closes
+    monkeypatch.setattr(env.rt.calm, "_closes", fake)
+    V = env.rt.calm.view(1, 1)
+    assert V["years"] == 1 and V["band"] == 1.0 and V["indices"][0]["name"] == "코스피" and V["indices"][0]["n"] > 300
+    assert "error" in next(x for x in V["indices"] if x["name"] == "코스닥")
+    from moa.app import create_app
+    j = create_app(env.rt).test_client().get("/api/market/calm?years=9&band=7").get_json()
+    assert j["years"] == 5 and j["band"] == 1.0

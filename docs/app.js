@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.1233";
+const UI_VERSION = "261124.1244";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2337,7 +2337,15 @@ pages.invest = {
         : `<span class="td-mk-k"><span><small>산 종목</small><b>${M.bought}</b></span><span><small>판 종목</small><b>${M.sold}</b></span><span><small>평균 수익률</small><b class="${tone(M.avg_pct)}">${M.avg_pct == null ? "-" : pct(M.avg_pct, 2)}</b></span></span>
         ${M.closed ? `<span class="td-wl" role="img" aria-label="끝난 거래 ${M.closed}건 중 ${M.wins}승 ${M.losses}패"><i style="flex:${M.wins}"></i><s style="flex:${M.losses}"></s></span>
           <span class="td-mk-f">끝난 거래 ${M.closed}건 · <b>${M.wins}승 ${M.losses}패</b></span>` : `<span class="td-mk-f">아직 판 것이 없어요</span>`}
-        ${M.real_n ? `<span class="td-mk-r">실전 손익 <b class="${tone(M.real_pnl)}">${this.atM(mk, M.real_pnl, true)}</b></span>` : ""}`}</div>`;
+        ${this.atDayMoney(mk, M)}`}</div>`;
+  },
+  // 오늘 번 돈(원·달러): 직접 만든 자동매매만 더한다(실전·모의 따로). 실험은 플랜마다 가상 돈이 따로라 합치지 않는다
+  atDayMoney(mk, M, mini) {
+    const xs = [M.real_n ? ["실전", M.real_pnl] : null, M.sim_n ? ["모의", M.sim_pnl] : null].filter(Boolean);
+    if (mini) return xs.length ? xs.map(([k, v]) => `<em class="${tone(v)}">${k} ${this.atM(mk, v, true)}</em>`).join("") : M.avg_pct != null ? `<em class="${tone(M.avg_pct)}">${pct(M.avg_pct, 2)}</em>` : "";
+    if (!M.sold) return "";
+    return `<span class="td-mk-m">${xs.length ? xs.map(([k, v]) => `<span><small>${k} 손익</small><b class="${tone(v)}">${this.atM(mk, v, true)}</b></span>`).join("")
+      : `<small>실험만 거래해 금액 합계는 없어요</small>`}</span>`;
   },
   atTodayHtml(T, runs, labs, A) {
     if (!T) return "";
@@ -2358,8 +2366,8 @@ pages.invest = {
   atTodayMini(T, runs, labs) {
     if (!T) return "";
     const line = (mk) => { const M = T.mkt[mk]; if (!M.bought && !M.sold) return "";
-      return `<div class="td-ln ${mk}"><i class="mk-tag ${mk}">${mk === "kr" ? "국내" : "미국"}</i><b>${this.atDayLabel(M)}</b><span>산 ${M.bought} · 판 ${M.sold}${M.closed ? ` · ${M.wins}승 ${M.losses}패` : ""}</span>
-        ${M.real_n ? `<em class="${tone(M.real_pnl)}">실전 ${this.atM(mk, M.real_pnl, true)}</em>` : M.avg_pct != null ? `<em class="${tone(M.avg_pct)}">${pct(M.avg_pct, 2)}</em>` : ""}</div>`; };
+      return `<div class="td-ln ${mk}"><i class="mk-tag ${mk}">${mk === "kr" ? "국내" : "미국"}</i><b>${M.is_today ? "오늘" : this.atDayLabel(M)}</b><span>산 ${M.bought}·판 ${M.sold}종목${M.closed ? ` · ${M.wins}승 ${M.losses}패` : ""}</span>
+        ${this.atDayMoney(mk, M, true)}</div>`; };
     const lines = line("kr") + line("us"), nx = this.atNextNote(runs, labs);
     const notes = (nx ? [nx] : []).concat(T.notes.filter((n) => n.k === "warn"), T.notes.filter((n) => n.k === "hold"));
     return `<div class="td-mini"><div class="td-mini-h"><b>오늘 한 일</b><a href="#invest/auto">${T.rows.length ? `거래 ${T.rows.length + (T.more || 0)}줄 보기 ›` : "자동매매 ›"}</a></div>

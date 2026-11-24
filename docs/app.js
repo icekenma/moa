@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.1202";
+const UI_VERSION = "261124.1228";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2322,7 +2322,9 @@ pages.invest = {
   atTapeRow(e, i, link) {
     const sell = e.side === "sell", lab = e.kind === "lab";
     const sub = [e.unit, sell ? e.reason : "", lab ? `플랜 ${e.n}개${sell && e.n > 1 ? ` ${e.wins}승 ${e.n - e.wins}패` : ""}` : `${e.qty}주`].filter(Boolean).join(" · ");
-    const val = sell ? `<b class="${tone(e.pct)}">${pct(e.pct, 2)}</b>${lab ? "" : `<small class="${tone(e.pnl)}">${this.atM(e.mkt, e.pnl, true)}</small>`}`
+    // 판 줄: 수익률 + 금액(실험은 여러 플랜이 같이 팔 수 있어 플랜 1개면 그 금액, 여러 개면 플랜당 평균)
+    const amt = lab && e.n > 1 ? `플랜당 ${this.atM(e.mkt, e.pnl / e.n, true)}` : this.atM(e.mkt, e.pnl, true);
+    const val = sell ? `<b class="${tone(e.pct)}">${pct(e.pct, 2)}</b><small class="${tone(e.pnl)}">${amt}</small>`
       : `<b>${this.atM(e.mkt, e.price)}</b><small>${lab ? (e.still ? `${e.still}개 플랜 보유` : "모두 팔았어요") : e.still ? "보유 중" : "팔았어요"}</small>`;
     const inner = `<time>${esc((e.ts || "").slice(11, 16))}</time><i class="td-side">${sell ? "팔았음" : "샀음"}</i>
       <span class="td-n"><b>${esc(e.name)}${e.mode === "real" ? `<em class="td-real">실전</em>` : ""}</b><small><i class="td-mkd ${e.mkt}"></i>${esc(sub)}</small></span><span class="td-v">${val}</span>`;
@@ -2367,10 +2369,10 @@ pages.invest = {
   },
   atTodaySheet(e, box, go) {
     const sell = e.side === "sell", lab = e.kind === "lab", M = (v) => this.atM(e.mkt, v), hm = (t) => esc((t || "").slice(11, 16)), A = this.atState();
-    const kv = sell ? [["평균 수익률", `<i class="${tone(e.pct)}">${pct(e.pct, 2)}</i>`], [lab ? "플랜" : "손익", lab ? `${e.n}개 · ${e.wins}승 ${e.n - e.wins}패` : `<i class="${tone(e.pnl)}">${this.atM(e.mkt, e.pnl, true)}</i>`], ["판 가격(평균)", M(e.price)], ["주로 판 이유", esc(e.reason || "-")]]
+    const kv = sell ? [["평균 수익률", `<i class="${tone(e.pct)}">${pct(e.pct, 2)}</i>`], [lab && e.n > 1 ? "손익(플랜 합계)" : "손익", `<i class="${tone(e.pnl)}">${this.atM(e.mkt, e.pnl, true)}</i>${lab && e.n > 1 ? ` · 플랜당 ${this.atM(e.mkt, e.pnl / e.n, true)}` : ""}`], ...(lab ? [["플랜", `${e.n}개 · ${e.wins}승 ${e.n - e.wins}패`]] : []), ["판 가격(평균)", M(e.price)], ["주로 판 이유", esc(e.reason || "-")]]
       : [["산 가격(평균)", M(e.price)], [lab ? "산 플랜" : "수량", lab ? `${e.n}개` : `${e.qty}주`], ["처음 산 시각", hm(e.ts)], ["지금", lab ? (e.still ? `${e.still}개 플랜이 들고 있어요` : "모두 팔았어요") : e.still ? "들고 있어요" : "팔았어요"]];
     const part = (p) => sell
-      ? `<li><span><b>${esc(lab ? p.label : e.unit)}</b><small>${hm(p.entry_ts)} ${M(p.entry)} → ${hm(p.ts)} ${M(p.price)} · ${p.qty}주${p.hold_min != null ? ` · ${p.hold_min >= 90 ? Math.round(p.hold_min / 60) + "시간" : p.hold_min + "분"} 보유` : ""}</small></span><em><b class="${tone(p.pct)}">${pct(p.pct, 2)}</b><small>${esc(p.reason)}</small></em></li>`
+      ? `<li><span><b>${esc(lab ? p.label : e.unit)}</b><small>${hm(p.entry_ts)} ${M(p.entry)} → ${hm(p.ts)} ${M(p.price)} · ${p.qty}주${p.hold_min != null ? ` · ${p.hold_min >= 90 ? Math.round(p.hold_min / 60) + "시간" : p.hold_min + "분"} 보유` : ""}</small></span><em><b class="${tone(p.pct)}">${pct(p.pct, 2)}</b><small class="${tone(p.pnl)}">${this.atM(e.mkt, p.pnl, true)}</small><small>${esc(p.reason)}</small></em></li>`
       : `<li><span><b>${esc(lab ? p.label : e.unit)}</b><small>${hm(p.ts)} · ${M(p.price)} × ${p.qty}주 · 목표 +${p.target_pct}% / 손절 −${p.stop_pct}%</small></span><em><small>${p.open ? "보유 중" : "팔았어요"}</small></em></li>`;
     const why = !sell && e.why ? (e.why.reasons || []).slice(0, 3) : [];
     openSheet(`${e.name} · ${sell ? "팔았음" : "샀음"}`, `<div class="hx-list">

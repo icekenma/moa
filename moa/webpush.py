@@ -147,12 +147,12 @@ class WebPush:
                 "devices": [{"name": dev(r["ua"]), "since": r["created"][:10], "last_ok": r["last_ok"], "me": r["endpoint"] == endpoint} for r in rows]}
 
     # ----- 보내기
-    def send(self, title, body, url="", tag="", urgent=False, wait=False):
+    def send(self, title, body, url="", tag="", urgent=False, wait=False, nid=None):
         """모든 기기로 보낸다(기본은 따로 도는 스레드에서). 보낸 기기 수를 돌려준다(wait일 때)."""
         rows = self.rt.db.q("SELECT * FROM push_subs")
         if not rows or not self.available():
             return 0
-        data = json.dumps({"title": title, "body": body, "url": url or "./", "tag": tag}, ensure_ascii=False).encode()[:3000]
+        data = json.dumps({"title": title, "body": body, "url": url or "./", "tag": tag, "nid": nid}, ensure_ascii=False).encode()[:3000]
 
         def go():
             ok = 0

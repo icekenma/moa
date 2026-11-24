@@ -55,6 +55,8 @@ class Runtime:
         self.replay = Replay(self)        # 다시 돌려 보기(지난 실제 추천을 바꾼 플랜 값으로)
         from .calmdays import CalmDays
         self.calm = CalmDays(self)        # 지수가 평범했던 날 비율(성적 분석의 참고 카드)
+        from .healthalert import HealthAlert
+        self.hlalert = HealthAlert(self)   # 건강관리 알림(시간표·약·연속 기록·보스·검진·레벨업)
         from .webpush import WebPush
         self.push = WebPush(self)          # 앱 알림(웹 푸시): 홈 화면 앱으로 바로
         self.autotrade = AutoTrade(self)
@@ -156,14 +158,16 @@ class Runtime:
     #           / paper 모의 매매 하나하나(기본 끔: 요약으로 충분) / ledger 가계부 자동 기록 / info 그 밖(가격 알림·배당·고정비·복기)
     NOTIFY_CATS = {"urgent": ("꼭 알아야 할 것", 5, "rotating_light"), "real": ("실전 자동매매", 4, "chart_with_upwards_trend"),
                    "daily": ("장 마감 요약", 3, "bar_chart"), "paper": ("모의 매매 하나하나", 2, "test_tube"),
-                   "ledger": ("가계부 자동 기록", 2, "receipt"), "info": ("그 밖의 알림", 3, "bell")}
+                   "ledger": ("가계부 자동 기록", 2, "receipt"), "health": ("건강관리", 3, "seedling"), "info": ("그 밖의 알림", 3, "bell")}
+    # 알림 제목 앞 표시: 아이폰 알림 배너는 색을 바꿀 수 없어, 앱마다 다른 그림 문자로 한눈에 가른다
+    NOTIFY_MARK = {"urgent": "🚨", "real": "📈", "daily": "📊", "paper": "🧪", "ledger": "🧾", "health": "🌿", "info": "🔔"}
     NOTIFY_OFF = ("paper",)          # 기본으로 꺼 둔 갈래
 
     def notify_on(self, cat):
         conf = self.settings.get("notify") or {}
         return bool(conf.get(cat, cat not in self.NOTIFY_OFF)) or cat == "urgent"
 
-    NOTIFY_LINK = {"urgent": "#invest/auto", "real": "#invest/auto", "daily": "#invest/atlog", "paper": "#invest/auto", "ledger": "#ledger/list"}
+    NOTIFY_LINK = {"urgent": "#invest/auto", "real": "#invest/auto", "daily": "#invest/atlog", "paper": "#invest/auto", "ledger": "#ledger/list", "health": "#health/today"}
 
     def notify(self, msg, cat="info", title=None, key=None, quiet_min=0, force=False, link=None):
         """휴대폰으로 알린다(앱 알림 + ntfy, 켜 둔 쪽 모두). key를 주면 같은 key는 quiet_min분(0이면 하루) 안에 한 번만 보낸다.
@@ -183,9 +187,15 @@ class Runtime:
         push = getattr(self, "push", None)
         devs = push.count() if push is not None else 0
         on = bool(topic or devs) and (force or self.notify_on(cat))
+        mark = self.NOTIFY_MARK.get(cat, "🔔")
+        # 제목은 짧게(앱 이름은 배너에 따로 나온다) → 배너에 본문이 더 보인다. 앞에 앱 표시(건강 🌿, 투자 📈 …)
+        title = str(title or label).replace("우석World · ", "")
+        if not title.startswith(mark) and not title[:1] in "🌿📈📊🧪🧾🚨🔔":
+            title = f"{mark} {title}"
+        nid = None
         try:
-            self.db.x("INSERT INTO notify_log(ts,cat,title,msg,sent) VALUES(?,?,?,?,?)",
-                      (datetime.now().isoformat(timespec="seconds"), cat, title or label, msg, 1 if on else 0))
+            nid = self.db.x("INSERT INTO notify_log(ts,cat,title,msg,sent) VALUES(?,?,?,?,?)",
+                            (datetime.now().isoformat(timespec="seconds"), cat, title, msg, 1 if on else 0))
             self.db.x("DELETE FROM notify_log WHERE id < (SELECT MAX(id) FROM notify_log) - 300")
         except Exception:
             pass
@@ -193,12 +203,12 @@ class Runtime:
             return False
         if devs:
             try:
-                push.send(title or f"우석World · {label}", msg, link or self.NOTIFY_LINK.get(cat, "./"), tag=key or cat, urgent=cat == "urgent")
+                push.send(title, msg, link or self.NOTIFY_LINK.get(cat, "./"), tag=key or cat, urgent=cat == "urgent", nid=nid)
             except Exception:
                 pass
         if not topic:
             return True
-        body = {"topic": topic, "message": msg, "title": title or f"우석World · {label}", "priority": prio, "tags": [tag]}
+        body = {"topic": topic, "message": msg, "title": title, "priority": prio, "tags": [tag]}
         url = (self.settings.get("public_url") or "").strip()
         if url:
             body["click"] = url
@@ -212,7 +222,10 @@ class Runtime:
         return True
 
     def notify_log(self, n=40):
-        return self.db.q("SELECT ts, cat, title, msg, sent FROM notify_log ORDER BY id DESC LIMIT ?", (n,))
+        return self.db.q("SELECT id, ts, cat, title, msg, sent FROM notify_log ORDER BY id DESC LIMIT ?", (n,))
+
+    def notify_one(self, nid):
+        return self.db.one("SELECT id, ts, cat, title, msg, sent FROM notify_log WHERE id=?", (int(nid),))
 
     # ---------- 반복 ----------
     def _loop(self):
@@ -247,6 +260,10 @@ class Runtime:
                             self.dividend.daily_due()  # 하루 한 번 배당 자료 모으기(뒤에서)
                         except Exception as e:
                             self.db.log("system", "error", f"배당 자료 모으기 오류: {e}", datetime.now().isoformat(timespec="seconds"))
+                        try:
+                            self.hlalert.tick()  # 건강관리 알림(1분에 한 번)
+                        except Exception as e:
+                            self.db.log("system", "error", f"건강 알림 오류: {e}", datetime.now().isoformat(timespec="seconds"))
                         self.dca.run_due(datetime.now())
                         if datetime.now().strftime("%H:%M") >= "15:40":
                             self.dca.snapshot(date.today())

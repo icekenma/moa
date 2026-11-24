@@ -1,5 +1,5 @@
 /* 화면 파일만 저장해 두고(오프라인에서도 앱이 열리게), 데이터 요청은 항상 서버로 보낸다. */
-const CACHE = "moa-261124.1709";
+const CACHE = "moa-261124.1719";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener("activate", (e) => {
@@ -26,12 +26,14 @@ self.addEventListener("push", (e) => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch (err) { d = { body: e.data ? e.data.text() : "" }; }
   e.waitUntil(self.registration.showNotification(d.title || "우석World", {
-    body: d.body || "", tag: d.tag || undefined, renotify: !!d.tag, icon: "icon-192.png", badge: "icon-192.png", data: { url: d.url || "./" },
+    body: d.body || "", tag: d.tag || undefined, renotify: !!d.tag, icon: "icon-192.png", badge: "icon-192.png", data: { url: d.url || "./", nid: d.nid || "" },
   }));
 });
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
-  const to = new URL(e.notification.data && e.notification.data.url && e.notification.data.url.startsWith("#") ? "./" + e.notification.data.url : (e.notification.data || {}).url || "./", self.registration.scope).href;
+  const dd = e.notification.data || {}, u = dd.url || "./";
+  // 누르면 그 화면을 열고, 알림 전문을 창으로 보여 주도록 알림 번호(nf)를 붙인다(배너에는 앞부분만 보일 수 있어서)
+  const to = new URL((dd.nid ? `./?nf=${dd.nid}` : "./") + (u.startsWith("#") ? u : ""), self.registration.scope).href;
   e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((cs) => {
     const c = cs.find((x) => x.url.startsWith(self.registration.scope));
     if (c) return c.focus().then((w) => (w && w.navigate ? w.navigate(to) : null)).catch(() => self.clients.openWindow(to));

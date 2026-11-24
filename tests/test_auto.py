@@ -2902,9 +2902,9 @@ def test_web_push_encrypt_send_and_notify(env, monkeypatch):
     assert db.one("SELECT last_ok FROM push_subs")["last_ok"]
     # ntfy 토픽이 없어도 앱 알림으로 간다(동기 확인을 위해 send를 바꿔 끼움)
     got = []
-    monkeypatch.setattr(P, "send", lambda title, msg, link="", tag="", urgent=False: got.append((title, msg, link, urgent)))
+    monkeypatch.setattr(P, "send", lambda title, msg, link="", tag="", urgent=False, nid=None: got.append((title, msg, link, urgent)))
     rt.settings.update({"ntfy_topic": ""})
-    assert type(rt).notify(rt, "손절선 가까워요", "urgent", "실전 · 손절선") is True and got[-1] == ("실전 · 손절선", "손절선 가까워요", "#invest/auto", True)
+    assert type(rt).notify(rt, "손절선 가까워요", "urgent", "실전 · 손절선") is True and got[-1] == ("🚨 실전 · 손절선", "손절선 가까워요", "#invest/auto", True)
     assert cl.post("/api/notify/test").status_code == 200
     assert cl.get("/api/notify").get_json()["push"]["n"] == 1
     monkeypatch.undo()

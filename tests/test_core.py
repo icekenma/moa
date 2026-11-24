@@ -3184,3 +3184,38 @@ def test_recipe_seed_adds_category_to_old_rows(rt):
     Health(rt.db, today=lambda: date(2026, 11, 24))
     by = {r["key"]: r for r in h.recipes()}
     assert by["eomuk"]["tags"] == ["반찬", "밑반찬", "짭짤"] and "curry" in by and "bibimbap" not in by
+
+
+def test_health_alerts(rt, monkeypatch):
+    """건강 알림: 시간표 시각·약 놓침·연속 기록·레벨업을 '건강관리' 갈래로, 같은 일은 한 번만, 밤에는 안 보냄. 제목 앞에 🌿."""
+    from datetime import datetime, timedelta
+    sent = []
+    rt.settings.update({"ntfy_topic": "x-test"})
+    monkeypatch.setattr("moa.runtime.requests.post", lambda *a, **k: sent.append(k.get("json")))
+    monkeypatch.setattr("moa.runtime.threading.Thread", lambda target, daemon=True: type("T", (), {"start": lambda self: target()})())
+    h = rt.health
+    today = h._today()
+    c = h.save_cfg({"meds": [{"name": "약 가", "when": "am"}]})
+    plan = dict(c["plan"])
+    plan["cal"] = {today.isoformat(): {"mode": "", "blocks": [["08:00", "med_am", "아침 약", "식후 바로"], ["10:00", "gym", "운동", "하체"]]}}
+    h.save_cfg({"plan": plan})
+    A = rt.hlalert
+    at = lambda hm: datetime.combine(today, datetime.strptime(hm, "%H:%M").time())
+    assert A.tick(at("08:03")) == ["quest"] and sent[-1]["title"] == "🌿 08:00 · 아침 약" and sent[-1]["message"] == "식후 바로"
+    assert A.tick(at("08:05")) == []                                         # 같은 일은 한 번
+    assert A.tick(at("09:31")) == ["med"]                                    # 1시간 반 지나도 체크 없음
+    h.set_check({"key": "med_am", "on": True})
+    assert A.tick(at("10:02")) == ["quest"] and "운동" in sent[-1]["title"]
+    assert A.tick(at("23:30")) == [] and A.tick(at("06:00")) == []           # 밤에는 안 보냄
+    A.set({"quest": False})
+    rt._notified = {}
+    assert A.tick(at("10:03")) == []                                         # 끈 종류는 안 보냄
+    assert rt.notify_log(1)[0]["cat"] == "health"
+    v = A.view()
+    assert [k["key"] for k in v["kinds"]][:2] == ["quest", "med"] and v["log"] and v["log"][0]["title"].startswith("🌿")
+    rt.notify("투자 알림", "real", "실전 · 매도")
+    assert sent[-1]["title"] == "📈 실전 · 매도"                               # 투자는 📈
+    c2 = create_app(rt).test_client()
+    nid = rt.notify_log(1)[0]["id"]
+    assert c2.get(f"/api/notify/{nid}").get_json()["msg"] == "투자 알림"
+    assert c2.post("/api/health/alerts", json={"weekly": False}).get_json()["kinds"][-1]["on"] is False

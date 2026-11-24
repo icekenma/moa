@@ -107,7 +107,7 @@
     };
     const nx = d.follows.find((f) => f.next);
     return `${head(`${+d.today.slice(5, 7)}월 ${+d.today.slice(8, 10)}일 ${d.dow}요일${mode ? ` · ${mode}` : ""}`, "오늘의 모험",
-      `${d.week_no ? `<span class="hl-chip">${d.week_no}주차</span>` : ""}<button type="button" class="hl-ico" data-act="manage" aria-label="목표·자료 관리">${MORE}</button>`)}
+      `${d.week_no ? `<span class="hl-chip">${d.week_no}주차</span>` : ""}<button type="button" class="hl-ico" data-act="alerts" aria-label="건강 알림 설정"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></button><button type="button" class="hl-ico" data-act="manage" aria-label="목표·자료 관리">${MORE}</button>`)}
       ${hero}${boss}
       <section class="hl-sec"><div class="hl-sec-h"><h2>오늘의 퀘스트</h2><span>${done} / ${real.length} 완료</span></div>
         <ol class="hq-list">${Q.map(row).join("")}
@@ -555,6 +555,38 @@
     };
     inp.click();
   }
+  // 건강 알림: 종류마다 켬/끔(바로 저장) · 시험 알림 · 최근 건강 알림
+  async function alertSheet() {
+    openSheet("건강 알림", `<div class="hn-box"><div class="empty small loading">알림 설정을 여는 중</div></div>`);
+    let V;
+    try { V = await GET("/api/health/alerts"); } catch (e) { const b = $(".hn-box"); if (b) b.innerHTML = `<div class="notice warn">${esc(e.message)}</div>`; return; }
+    const box = $(".hn-box");
+    if (!box) return;
+    const hm = (t) => `${Number(t.slice(5, 7))}/${Number(t.slice(8, 10))} ${t.slice(11, 16)}`;
+    const paint = () => {
+      box.innerHTML = `<div class="hn-st ${V.devices || V.ntfy ? "on" : ""}"><i aria-hidden="true"></i><div><b>${V.devices ? `휴대폰 ${V.devices}대로 보내요` : V.ntfy ? "ntfy로 보내요" : "아직 알림 받을 휴대폰이 없어요"}</b>
+          <small>${V.devices || V.ntfy ? (V.cat_on ? "건강 알림은 제목 앞에 🌿가 붙어요(투자는 📈)" : "건강관리 갈래가 꺼져 있어요. 아래 '건강 알림 받기'를 켜 주세요") : "투자 › AI › 자동매매 › 알림에서 '이 휴대폰에서 알림 받기'를 켜면 건강 알림도 같이 와요"}</small></div></div>
+        <div class="hn-row master"><span><b>건강 알림 받기</b><small>끄면 아래 알림이 모두 안 와요</small></span><button type="button" class="switch" role="switch" id="hnCat" aria-checked="${V.cat_on}" aria-label="건강 알림 받기"><span></span></button></div>
+        <div class="hn-list">${V.kinds.map((k) => `<div class="hn-row"><span><b>${esc(k.label)}</b><small>${esc(k.desc)}</small></span><button type="button" class="switch" role="switch" data-hn="${k.key}" aria-checked="${k.on}" aria-label="${esc(k.label)}" ${V.cat_on ? "" : "disabled"}><span></span></button></div>`).join("")}</div>
+        <p class="hl-hint">밤 11시~아침 7시에는 보내지 않아요. 같은 일은 한 번만 알려요. 몸무게 같은 수치는 잠금 화면에 보일 수 있어 알림 글에 넣지 않아요.</p>
+        <button type="button" class="hl-btn green" id="hnTest">시험 알림 보내기</button>
+        ${V.log.length ? `<div class="hn-log"><b>최근 건강 알림</b><ul>${V.log.map((x) => `<li class="${x.sent ? "" : "off"}"><time>${hm(x.ts)}</time><div><b>${esc(x.title)}</b><p>${esc(x.msg)}</p></div></li>`).join("")}</ul></div>` : ""}`;
+    };
+    paint();
+    box.onclick = async (e) => {
+      const t = e.target.closest("[data-hn], #hnCat, #hnTest");
+      if (!t || t.disabled) return;
+      try {
+        if (t.id === "hnTest") { await api("POST", "/api/health/alerts/test"); toast("시험 알림을 보냈어요"); V = await GET("/api/health/alerts"); return paint(); }
+        const on = t.getAttribute("aria-checked") !== "true";
+        if (t.id === "hnCat") { const cur = (await GET("/api/notify")).cats.reduce((o, c) => ((o[c.key] = c.on), o), {}); await api("PUT", "/api/settings", { notify: { ...cur, health: on } }); }
+        else V = await api("POST", "/api/health/alerts", { [t.dataset.hn]: on });
+        V = await GET("/api/health/alerts"); paint();
+        toast(`${t.getAttribute("aria-label")} ${on ? "켬" : "끔"}`);
+      } catch (err) { toast(err.message, true); }
+    };
+  }
+
   function manageSheet() {
     openSheet("목표·자료 관리", `<div class="hl-menu">
       <button type="button" data-m="goal"><b>목표 정하기</b><small>키, 목표 체중·허리, 목표 날짜</small></button>
@@ -616,7 +648,7 @@
     if ((b = el("[data-rc]"))) return recipeSheet(b.dataset.rc);
     if ((b = el("[data-rt]"))) { H.rt = b.dataset.rt; H.rn = 0; return draw(); }
     if ((b = el("[data-rmore]"))) { H.rn = (H.rn || RPAGE) + RPAGE * 2; return draw(); }
-    if ((b = el("[data-act]"))) return ({ recipe: () => recipeEdit(0), goal: goalSheet, manage: manageSheet, import: importPick, plan: planSheet, lab: () => labSheet(0), follow: () => followSheet(0), med: () => medSheet(-1) }[b.dataset.act] || (() => {}))();
+    if ((b = el("[data-act]"))) return ({ recipe: () => recipeEdit(0), goal: goalSheet, manage: manageSheet, import: importPick, plan: planSheet, lab: () => labSheet(0), follow: () => followSheet(0), med: () => medSheet(-1), alerts: alertSheet }[b.dataset.act] || (() => {}))();
     if ((b = el("[data-tab]"))) { H.tab = b.dataset.tab; return draw(); }
     if ((b = el("[data-wtab]"))) { H.wtab = b.dataset.wtab; draw(); return window.scrollTo(0, 0); }
     if ((b = el("[data-gym]"))) return gymSheet(b.dataset.gym);

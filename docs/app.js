@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.1709";
+const UI_VERSION = "261124.1719";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -7563,7 +7563,7 @@ pages.settings = {
       real: "실전 매수·매도, 손절선 가까움, 실전 후보, 개선안 승인 대기, 자동 개선 반영·되돌림(실전)",
       daily: "장 마감 뒤 실전 손익·모의 실험 1등·AI 비용 한 번에",
       paper: "모의 매수·매도 하나하나(많아서 기본 끔)",
-      ledger: "카드 문자로 가계부에 자동 기록됐을 때", info: "추천 규칙 갱신, 자동 개선(모의), 고정비 예정 등",
+      ledger: "카드 문자로 가계부에 자동 기록됐을 때", health: "시간표·약·연속 기록·주간 보스·검진 일정·레벨업(🌿, 종류별 설정은 건강관리 › 홈 › 종 버튼)", info: "추천 규칙 갱신, 자동 개선(모의), 고정비 예정 등",
     };
     el.innerHTML = `<div class="nf-push ${state[0]}"><span class="nf-dot" aria-hidden="true"></span><div><b>${state[1]}</b><small>${esc(state[2])}</small></div>
         ${P.ok && can && (!ios || standalone) && Notification.permission !== "denied" ? `<button type="button" class="btn sm ${here ? "" : "dark"}" id="nfPush">${here ? "끄기" : "켜기"}</button>` : ""}</div>
@@ -7571,7 +7571,7 @@ pages.settings = {
         <button type="button" class="switch" role="switch" data-nf="${c.key}" aria-checked="${!!c.on}" ${c.fixed ? "disabled" : ""} aria-label="${esc(c.label)} 알림"><span></span></button></div>`).join("")}</div>
       <div class="tiny">켜고 끄면 바로 저장돼요. 같은 일은 한 번만 알려요(손절선 가까움은 종목마다, 손실 한도 다가감은 하루 한 번).${N.topic ? " ntfy로도 함께 보내요." : ""}</div>
       <button type="button" class="btn sm" id="nfTest">시험 알림 보내기</button>
-      <details class="nf-log" ${opt.sheet ? "open" : ""}><summary>최근 알림 ${N.log.length}건</summary><ul>${N.log.slice(0, opt.sheet ? 15 : 40).map((x) => `<li class="${x.sent ? "" : "off"}"><time>${esc(hm(x.ts))}</time><div><b>${esc(x.title || "알림")}</b><p>${esc(x.msg)}</p>${x.sent ? "" : `<small>보내지 않음(꺼 둔 갈래이거나 받을 곳 없음)</small>`}</div></li>`).join("")}</ul></details>`;
+      <details class="nf-log" ${opt.sheet ? "open" : ""}><summary>최근 알림 ${N.log.length}건</summary><ul>${N.log.slice(0, opt.sheet ? 15 : 40).map((x) => `<li class="${x.sent ? "" : "off"} c-${esc(x.cat)}"><time>${esc(hm(x.ts))}</time><div><b>${esc(x.title || "알림")}</b><p>${esc(x.msg)}</p>${x.sent ? "" : `<small>보내지 않음(꺼 둔 갈래이거나 받을 곳 없음)</small>`}</div></li>`).join("")}</ul></details>`;
     const b64 = (s) => { const p = "=".repeat((4 - (s.length % 4)) % 4), r = atob((s + p).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(r, (c) => c.charCodeAt(0)); };
     el.onclick = async (e) => {
       const sw = e.target.closest("[data-nf]");
@@ -8295,3 +8295,18 @@ if (document.readyState === "loading") document.addEventListener("DOMContentLoad
 window.__moaReady = true;
 try { sessionStorage.removeItem("moa.retry"); } catch (e) { /* 무시 */ }
 if (/[?&]u=\d+/.test(location.search)) history.replaceState(null, "", location.pathname + location.hash);  // 주소의 임시 꼬리표 지우기
+// 알림을 눌러 들어왔으면(?nf=번호) 그 화면 위에 알림 전문을 창으로 보여 준다(배너는 앞부분만 보일 수 있어서)
+(() => {
+  const nf = (location.search.match(/[?&]nf=(\d+)/) || [])[1];
+  if (!nf) return;
+  history.replaceState(null, "", location.pathname + location.hash);
+  let n = 0;
+  const show = async () => {
+    if (lock.on || !startApp.done) { if (++n < 40) setTimeout(show, 1500); return; }
+    try {
+      const x = await GET(`/api/notify/${nf}`);
+      openSheet(x.title || "알림", `<div class="nf-one c-${esc(x.cat)}"><time>${esc(x.ts.slice(5, 16).replace("T", " ").replace("-", "/"))}</time><p>${esc(x.msg).replace(/\n/g, "<br>")}</p></div>`);
+    } catch (e) { /* 예전 서버거나 지워진 알림: 그 화면만 연다 */ }
+  };
+  setTimeout(show, 1200);
+})();

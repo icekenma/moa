@@ -1259,6 +1259,26 @@ def create_app(rt, updater=None):
         rt.notify("시험 알림이에요. 이 글이 보이면 알림이 잘 가고 있어요.", "info", "우석World · 시험 알림", force=True, link="#settings/trading")
         return jsonify(ok=True)
 
+    @app.get("/api/notify/<int:nid>")
+    def notify_one(nid):
+        r = rt.notify_one(nid)
+        return (jsonify(r), 200) if r else (jsonify({"error": "알림을 찾지 못했어요"}), 404)
+
+    @app.get("/api/health/alerts")
+    def health_alerts():
+        return jsonify(rt.hlalert.view())
+
+    @app.post("/api/health/alerts")
+    def health_alerts_set():
+        return jsonify(rt.hlalert.set(body()))
+
+    @app.post("/api/health/alerts/test")
+    def health_alerts_test():
+        if not rt.settings.get("ntfy_topic") and not rt.push.count():
+            return jsonify({"error": "알림 받을 곳이 없어요. 투자 › 자동매매 › 알림에서 '이 휴대폰에서 받기'를 먼저 켜 주세요"}), 400
+        rt.notify("건강관리 시험 알림이에요. 이 글이 배너에 보이면 잘 오고 있어요.", "health", "시험 알림", force=True, link="#health/today")
+        return jsonify(ok=True)
+
     @app.post("/api/push/sub")
     def push_sub():
         d = body()

@@ -500,3 +500,25 @@ html[data-sec="health"]{--ember:#E8862E;--ember-s:#FDEBD8;--ember-d:#8A4708}
 
 .ml-cnt{font-size:12px;font-weight:700;color:var(--ink3);padding:10px 0 2px}
 .ml-book>.ml-more{justify-content:center;min-height:48px;font-weight:800;color:var(--hg);border-top:1px solid #EEF0EB}
+
+/* ---------- 건강 알림 창(hn-) ---------- */
+.hn-box{display:flex;flex-direction:column;gap:10px}
+.hn-st{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:14px;background:color-mix(in srgb,#2FBF8F 10%,transparent)}
+.hn-st>i{width:10px;height:10px;border-radius:50%;background:#9AA7B8;flex:0 0 auto}
+.hn-st.on>i{background:#2FBF8F;box-shadow:0 0 0 4px color-mix(in srgb,#2FBF8F 25%,transparent)}
+.hn-st>div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.hn-st b{font-size:13.5px}.hn-st small{font-size:11.5px;line-height:1.45;opacity:.75}
+.hn-list{display:flex;flex-direction:column}
+.hn-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid color-mix(in srgb,currentColor 12%,transparent)}
+.hn-list .hn-row:first-child{border-top:0}
+.hn-row.master{padding:11px 12px;border:1px solid color-mix(in srgb,#2FBF8F 40%,transparent);border-radius:12px}
+.hn-row>span{display:flex;flex-direction:column;gap:2px;min-width:0}
+.hn-row b{font-size:13.5px}.hn-row small{font-size:11.5px;line-height:1.45;opacity:.7}
+.hn-row .switch[disabled]{opacity:.4}
+.hn-log>b{font-size:13px}
+.hn-log ul{list-style:none;margin:6px 0 0;padding:0}
+.hn-log li{display:grid;grid-template-columns:70px 1fr;gap:8px;padding:8px 0 8px 10px;border-top:1px solid color-mix(in srgb,currentColor 12%,transparent);position:relative}
+.hn-log li::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:2px;background:#2FBF8F}
+.hn-log li.off{opacity:.55}
+.hn-log time{font-size:11.5px;opacity:.7;font-variant-numeric:tabular-nums}
+.hn-log li b{font-size:13px}.hn-log li p{margin:2px 0 0;font-size:12.5px;line-height:1.5;opacity:.85}

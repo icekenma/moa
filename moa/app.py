@@ -1155,6 +1155,10 @@ def create_app(rt, updater=None):
     def ai_status():
         return jsonify(rt.ai.status())
 
+    @app.post("/api/ai/enabled")
+    def ai_enabled():
+        return jsonify(rt.ai.set_enabled(bool(body().get("on"))))
+
     @app.get("/api/ai/meter")
     def ai_meter():
         w = request.args.get("web")

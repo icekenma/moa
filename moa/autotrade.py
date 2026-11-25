@@ -562,7 +562,7 @@ class AutoTrade:
 
     def ready(self):
         b, why = self.real_broker()
-        return {"ai": self.rt.ai.configured(), "data": self.rt.invest.kr() is not None,
+        return {"ai": self.rt.ai.configured(), "ai_off": self.rt.ai.has_key() and not self.rt.ai.enabled(), "data": self.rt.invest.kr() is not None,
                 "real": {"ok": b is not None, "label": getattr(b, "label", None), "why": why}}
 
     # ------------------------------------------------------------------ 만들기·조작
@@ -1646,7 +1646,7 @@ class AutoTrade:
                 return False, "watchwait", (f"직전 추천이 관망이라, 지수가 회복되거나 {int(gap * 2 / 60)}분이 지날 때까지 다시 묻지 않아요"
                                             + (f"(그때 {was:+.2f}% → 지금 {idx:+.2f}%)" if idx is not None and was is not None else ""))
         if not self.rt.ai.configured():
-            return False, "nokey", "AI 키가 없어요"
+            return False, "nokey", ("AI를 꺼 두었어요(설정 › AI) · 들고 있는 종목은 손절·익절 규칙대로 계속 관리해요" if self.rt.ai.has_key() else "AI 키가 없어요")
         c = self.rt.ai.conf()
         if c.get("budget_usd") and self.rt.ai.month_usd()[0] >= float(c["budget_usd"]):
             return False, "budget", "이번 달 AI 예산을 다 썼어요"
@@ -1866,7 +1866,7 @@ class AutoTrade:
             if code in ("dayloss", "streak", "aicost", "market", "watchwait"):
                 for x in sibs or [run]:
                     self._note_once(x, why if code != "market" else why.split("(")[0].strip() + " · 비용 없음")
-            if run["mode"] == "real" and code in ("dayloss", "streak", "market", "budget", "nokey"):
+            if run["mode"] == "real" and code in ("dayloss", "streak", "market", "budget", "nokey") and not (code == "nokey" and self.rt.ai.has_key()):
                 self._tell(run, f"새로 사지 않고 쉬어요 · {why}", "오늘 매수 쉼", urgent=code in ("dayloss", "nokey"), key=f"rest:{run['id']}:{code}:{AP.mkt_date(run['mkt'])}")
             return
         ids = [x["id"] for x in sibs] if sibs else [run["id"]]

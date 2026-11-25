@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261124.1719";
+const UI_VERSION = "261125.1603";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2244,7 +2244,8 @@ pages.invest = {
   },
   atReadyHtml(R) {
     const rows = [];
-    if (!R.ai) rows.push(`Claude API 키가 없어요. <a href="#settings/ai">AI 설정에서 넣기</a>`);
+    if (R.ai_off) rows.push(`AI(Claude API)를 꺼 두었어요. 새 추천을 받지 않아 새로 사지 않고, 들고 있는 종목은 손절·익절 규칙대로 계속 관리해요. <a href="#settings/ai">AI 설정에서 켜기</a>`);
+    else if (!R.ai) rows.push(`Claude API 키가 없어요. <a href="#settings/ai">AI 설정에서 넣기</a>`);
     if (!R.data) rows.push(`실시간 순위를 받으려면 키움 계좌 연결이 필요해요. <a href="#settings/accounts">계좌 연결하기</a>`);
     return rows.map((r) => `<div class="notice warn">${r}</div>`).join("");
   },
@@ -7864,9 +7865,13 @@ pages.settings = {
     const s = await GET("/api/settings");
     const c = s.ai || {};
     view.innerHTML = `
+      <section class="card ai-master ${st.enabled ? "on" : "off"}">
+        <div class="ai-m-row"><span><b>AI 사용 (Claude API)</b><small>${st.enabled ? "켜져 있어요. 자동매매 추천·복기·리서치·AI 분석이 API를 써요(비용이 들어요)" : "꺼져 있어요. Claude API를 전혀 부르지 않아 비용이 들지 않아요. 자동매매는 새로 사지 않고, 들고 있는 종목만 규칙대로 관리해요"}</small></span>
+          <button type="button" class="switch" role="switch" id="aiMaster" aria-checked="${!!st.enabled}" aria-label="AI 사용"><span></span></button></div>
+      </section>
       <section class="card ai-cr" id="crCard">${creditHtml(st.credit)}</section>
       <section class="card">
-        <div class="card-head"><h2>Claude AI 도우미</h2><span class="tag ${st.configured ? "g" : "warn"}">${st.configured ? "연결됨" : "키 필요"}</span></div>
+        <div class="card-head"><h2>Claude AI 도우미</h2><span class="tag ${st.configured ? "g" : "warn"}">${st.configured ? "연결됨" : st.has_key ? "꺼 둠" : "키 필요"}</span></div>
         <div class="small muted">투자 화면의 ✦ 버튼에서 종목 정리, 포트폴리오 점검, AI 종목 추천, 자유 질문을 할 수 있어요. AI는 주문하지 않아요.</div>
         <label class="field">Claude API 키<input id="aiKey" type="password" value="${esc(c.api_key || "")}" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off"></label>
         <div class="tiny">platform.claude.com/settings/keys에서 만들어요. 키는 노트북에만 저장하고 화면엔 가려서 보여요.</div>
@@ -7897,6 +7902,12 @@ pages.settings = {
         ${st.recent.length ? st.recent.map((r) => `<div class="item"><span class="ico">${esc({ stock: "종목", portfolio: "점검", review: "복기", sweep: "훑기", chat: "질문", test: "확인", pick: "추천", pickw: "중기", learn: "복기", divplan: "배당" }[r.kind] || r.kind)}</span>
           <span class="main"><b>${esc(r.ts.slice(5, 16).replace("T", " "))}</b><span class="sub">${esc(r.model.replace("claude-", ""))} · 입력 ${won(r.in_tok)} · 출력 ${won(r.out_tok)}${r.searches ? ` · 검색 ${r.searches}` : ""}</span></span>
           <span class="end"><b>$${Number(r.usd).toFixed(4)}</b></span></button>`).join("") : `<div class="empty">아직 사용 기록이 없어요</div>`}</div></section>`;
+    $("#aiMaster").onclick = async (e) => {
+      const on = e.currentTarget.getAttribute("aria-checked") !== "true";
+      if (on && !confirm("AI(Claude API)를 다시 켤까요? 자동매매 추천·복기·리서치가 다시 비용을 써요")) return;
+      try { await api("POST", "/api/ai/enabled", { on }); toast(on ? "AI를 켰어요" : "AI를 껐어요. 이제 API를 부르지 않아요"); } catch (err) { return toast(err.message, true); }
+      this.ai();
+    };
     const body = () => ({ ai: { api_key: $("#aiKey").value.trim(), admin_key: $("#aiAdmin").value.trim(), model: $("#aiModel").value, review_model: $("#aiReview").value, budget_usd: Number($("#aiBudget").value) || 0, web_search: $("#aiWeb").checked } });
     bindCredit($("#crCard"), () => this.ai());
     const dartShow = (s) => {

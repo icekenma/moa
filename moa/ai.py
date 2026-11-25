@@ -112,8 +112,23 @@ class AI:
     def conf(self):
         return self.rt.settings.get("ai")
 
-    def configured(self):
+    OFF_MSG = "AI(Claude API)를 꺼 두었어요. 설정 › AI에서 'AI 사용'을 켜면 다시 써요"
+
+    def enabled(self):
+        """AI 전체 스위치. 기본 꺼짐(2026-11-25 사용자 요청: API 사용을 모두 멈춤). 켜야만 Claude를 부른다."""
+        return self.rt.db.get_setting("ai_enabled") is True
+
+    def set_enabled(self, on):
+        self.rt.db.set_setting("ai_enabled", bool(on))
+        self.rt.db.log("system", "info", f"AI 사용 {'켬' if on else '끔'}", datetime.now().isoformat(timespec="seconds"))
+        return self.status()
+
+    def has_key(self):
         return bool((self.conf().get("api_key") or "").strip())
+
+    def configured(self):
+        """AI를 부를 수 있나: 키가 있고, AI 사용이 켜져 있을 때만. 꺼져 있으면 자동 기능(추천·복기·리서치 …)이 모두 조용히 쉰다."""
+        return self.has_key() and self.enabled()
 
     def month_usd(self):
         r = self.rt.db.one("SELECT COALESCE(SUM(usd),0) AS s, COUNT(*) AS n FROM ai_usage WHERE ts >= ?",
@@ -224,7 +239,7 @@ class AI:
     def status(self):
         c = self.conf()
         used, n = self.month_usd()
-        return {"configured": self.configured(), "model": c.get("model"), "review_model": self.review_model(), "budget_usd": c.get("budget_usd"),
+        return {"configured": self.configured(), "enabled": self.enabled(), "has_key": self.has_key(), "model": c.get("model"), "review_model": self.review_model(), "budget_usd": c.get("budget_usd"),
                 "web_search": c.get("web_search", True), "month_usd": round(used, 4), "month_calls": n,
                 "models": {k: v[0] for k, v in MODELS.items()}, "credit": self.credit(),
                 "recent": self.rt.db.q("SELECT ts, kind, model, in_tok, out_tok, searches, usd FROM ai_usage "
@@ -364,7 +379,7 @@ class AI:
     def stream(self, kind, d):
         """화면에 줄 이벤트를 하나씩 낸다: {"t":"status"|"text"|"source"|"done"|"error", ...}"""
         if not self.configured():
-            yield {"t": "error", "msg": "설정 → AI에서 Claude API 키를 넣어 주세요"}
+            yield {"t": "error", "msg": self.OFF_MSG if self.has_key() else "설정 → AI에서 Claude API 키를 넣어 주세요"}
             return
         c = self.conf()
         used, _ = self.month_usd()
@@ -627,6 +642,8 @@ class AI:
             raise AIError(f"Claude 오류: {err.get('message') or err}")
 
     def _post(self, body):
+        if not self.enabled():                       # 마지막 관문: 꺼져 있으면 어떤 경로로도 Claude를 부르지 않는다
+            raise AIError(self.OFF_MSG)
         key = self.conf().get("api_key", "").strip()
         try:
             r = self.session.post(API_URL, json=body, stream=True, timeout=(10, 180),
@@ -665,7 +682,7 @@ class AI:
     def test(self):
         """키 확인: 아주 짧은 요청 한 번."""
         if not self.configured():
-            raise AIError("API 키를 넣어 주세요")
+            raise AIError(self.OFF_MSG if self.has_key() else "API 키를 넣어 주세요")
         model = self.conf().get("model") or "claude-sonnet-5-5"
         body = {"model": model, "max_tokens": 20, "stream": True,
                 "messages": [{"role": "user", "content": "'연결됐어요'라고만 답해."}]}

@@ -3219,3 +3219,21 @@ def test_health_alerts(rt, monkeypatch):
     nid = rt.notify_log(1)[0]["id"]
     assert c2.get(f"/api/notify/{nid}").get_json()["msg"] == "투자 알림"
     assert c2.post("/api/health/alerts", json={"weekly": False}).get_json()["kinds"][-1]["on"] is False
+
+
+@pytest.mark.ai_switch
+def test_ai_master_switch_off_by_default(rt):
+    """AI 사용은 기본 꺼짐: 키가 있어도 Claude를 부르지 않고(마지막 관문 _post까지), 자동매매는 새로 사지 않되 실전 '쉼' 알림을 울리지 않는다. 켜면 다시 쓴다."""
+    from moa.ai import AIError
+    rt.settings.update({"ai": {"api_key": "sk-test-key-1234567890"}})
+    A = rt.ai
+    assert A.has_key() and not A.enabled() and not A.configured()
+    with pytest.raises(AIError, match="꺼 두었어요"):
+        list(A._post({"model": "x"}))
+    evs = list(A.stream("chat", {"question": "안녕"}))
+    assert evs[0]["t"] == "error" and "꺼 두었어요" in evs[0]["msg"]
+    c = create_app(rt).test_client()
+    st = c.get("/api/ai/status").get_json()
+    assert st["enabled"] is False and st["has_key"] is True and st["configured"] is False
+    assert c.post("/api/ai/enabled", json={"on": True}).get_json()["enabled"] is True and A.configured()
+    assert c.post("/api/ai/enabled", json={"on": False}).get_json()["configured"] is False

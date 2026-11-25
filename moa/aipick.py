@@ -2064,8 +2064,12 @@ def auto_learn(self):
         n = len(_done_rows(self, None, h))
         if n < H["min"] or n - int(ls.get("n") or 0) < H["step"]:
             continue
-        if (ls.get("at") or "")[:10] == datetime.now().strftime("%Y-%m-%d"):
+        today = datetime.now().strftime("%Y-%m-%d")
+        tries = self.rt.db.get_setting("ai_learn_try") or {}
+        if (ls.get("at") or "")[:10] == today or tries.get(h) == today:     # 실패해도 하루 한 번만 시도(실패 때 계속 다시 부르던 구멍)
             continue
+        tries[h] = today
+        self.rt.db.set_setting("ai_learn_try", tries)
         self._learning = True
 
         def run(h=h, H=H):

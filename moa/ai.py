@@ -274,10 +274,11 @@ class AI:
         out = {}
         for r in self.rt.db.q("SELECT ts, kind, model, in_tok, out_tok, searches, usd FROM ai_usage WHERE ts>=?", (since,)):
             utc = (datetime.fromisoformat(r["ts"][:19]) - timedelta(hours=9)).strftime("%Y-%m-%d")     # 서버는 한국 시간으로 적는다
-            d = out.setdefault(utc, {"day": utc, "models": {}, "kinds": {}, "usd": 0.0, "calls": 0, "searches": 0})
+            d = out.setdefault(utc, {"day": utc, "models": {}, "kinds": {}, "kinds_n": {}, "usd": 0.0, "calls": 0, "searches": 0})
             name = MODELS.get(r["model"], (r["model"],))[0].split(" · ")[0]
             d["models"][name] = d["models"].get(name, 0) + int(r["in_tok"] or 0) + int(r["out_tok"] or 0)
             d["kinds"][r["kind"]] = round(d["kinds"].get(r["kind"], 0) + float(r["usd"] or 0), 4)
+            d["kinds_n"][r["kind"]] = d["kinds_n"].get(r["kind"], 0) + 1
             d["usd"] += float(r["usd"] or 0)
             d["calls"] += 1
             d["searches"] += int(r["searches"] or 0)

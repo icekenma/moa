@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261125.1625";
+const UI_VERSION = "261125.1638";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -7912,7 +7912,7 @@ pages.settings = {
         <div class="tiny">${esc(D.note)}. Claude 콘솔 표와 나란히 보면, 콘솔 쪽이 크게 많을 때 그 차이는 다른 앱·키가 쓴 거예요.</div>
         ${D.rows.length ? `<div class="ai-dt-wrap"><table class="ai-dt"><thead><tr><th>날짜(UTC)</th>${D.models.map((m) => `<th>${esc(m)}</th>`).join("")}<th>금액</th></tr></thead>
           <tbody>${D.rows.map((r) => `<tr><th>${esc(r.day.slice(5).replace("-", "/"))}</th>${D.models.map((m) => `<td>${tk(r.models[m])}</td>`).join("")}<td><b>$${r.usd.toFixed(2)}</b></td></tr>
-            <tr class="k"><td colspan="${D.models.length + 2}">${Object.entries(r.kinds).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${esc(kindName[k] || k)} $${v.toFixed(2)}`).join(" · ")} · ${r.calls}번</td></tr>`).join("")}</tbody></table></div>`
+            <tr class="k"><td colspan="${D.models.length + 2}">${Object.entries(r.kinds).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${esc(kindName[k] || k)} $${v.toFixed(2)}${(r.kinds_n || {})[k] ? `(${r.kinds_n[k]}번)` : ""}`).join(" · ")} · ${r.calls}번</td></tr>`).join("")}</tbody></table></div>`
           : `<div class="empty small">최근 사용 기록이 없어요</div>`}`;
     }).catch(() => { const el = $("#aiDay"); if (el) el.remove(); });
     $("#aiMaster").onclick = async (e) => {

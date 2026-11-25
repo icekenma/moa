@@ -386,11 +386,18 @@ class SelfImprove:
                 continue
             last = self.rt.db.one("SELECT MAX(ts) t FROM at_proposals WHERE run_id=? AND source='ai'", (b["id"],)) or {}
             t = last.get("t") or ""
-            if t and t > (datetime.now() - timedelta(hours=REVIEW_GAP_H)).isoformat(timespec="seconds"):
+            gap = (datetime.now() - timedelta(hours=REVIEW_GAP_H)).isoformat(timespec="seconds")
+            if t and t > gap:
+                continue
+            # 시도 시각도 본다: 복기가 실패하면 개선안이 남지 않아 5분마다 다시 부르던 구멍(2026-11-25 비용 사고)을 막는다
+            tries = self.rt.db.get_setting("si_rv_try") or {}
+            if (tries.get(str(b["id"])) or "") > gap:
                 continue
             if self._stats(b["id"], t)["n"] < REVIEW_EVERY.get(b["style"], 8):
                 continue
-            self.note("review", b["mkt"], b["style"], "AI 복기 시작(Fable)", f"실험 기본 플랜의 새 거래 {self._stats(b['id'], t)['n']}건을 복기해 개선안을 찾아요")
+            self.note("review", b["mkt"], b["style"], "AI 복기 시작", f"실험 기본 플랜의 새 거래 {self._stats(b['id'], t)['n']}건을 복기해 개선안을 찾아요")
+            tries[str(b["id"])] = datetime.now().isoformat(timespec="seconds")
+            self.rt.db.set_setting("si_rv_try", tries)
             th = threading.Thread(target=at._ai_review_bg, args=(b["id"],), name=f"moa-si-review-{b['id']}", daemon=True)
             self._rv[b["id"]] = th
             th.start()

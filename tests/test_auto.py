@@ -322,7 +322,15 @@ def test_ai_review_parsing(env):
         at.review_context({"run_id": rid})
     _seed(env, rid, 12)
     title, ask, data = at.review_context({"run_id": rid})
-    assert "복기" in title and "json" in ask and len(data["끝난 거래(최근 60건)"]) == 12
+    assert "복기" in title and "json" in ask and len(data["끝난 거래(지난 복기 뒤, 최대 40건)"]) == 12 and data["지난 AI 복기"] is None
+    # 지난 AI 복기 뒤에 산 거래만 보낸다(이미 본 거래를 다시 보내지 않음). 새 거래가 10건 미만이면 최근 10건
+    env.rt.db.x("INSERT INTO at_proposals(run_id,ts,source,status,summary,changes) VALUES(?,?,?,?,?,?)", (rid, "2000-01-01T00:00:00", "ai", "none", "지난 복기", "[]"))
+    _, _, d2 = at.review_context({"run_id": rid})
+    assert len(d2["끝난 거래(지난 복기 뒤, 최대 40건)"]) == 12 and d2["지난 AI 복기"]["요약"] == "지난 복기"
+    env.rt.db.x("UPDATE at_proposals SET ts='2999-01-01T00:00:00' WHERE run_id=? AND source='ai'", (rid,))
+    _, _, d3 = at.review_context({"run_id": rid})
+    assert len(d3["끝난 거래(지난 복기 뒤, 최대 40건)"]) == 10 and d3["지난 AI 복기"]["이후 새 거래"] == 0
+    env.rt.db.x("DELETE FROM at_proposals WHERE run_id=?", (rid,))
     text = ("손절이 많아요\n- 낮은 승률대가 문제\n```json\n" + json.dumps({"summary": "승률 기준 상향", "changes": [
         {"key": "min_win_prob", "to": 95, "why": "낮은 승률대 손실"},
         {"key": "warmup_trades", "to": 0, "why": "금지된 값"},
@@ -3043,3 +3051,36 @@ def test_replay_recorded_picks(env):
     labels = [r["바꾼것"] for r in E["결과"]]
     assert "## 다시 돌려 보니" in ask and labels[0] == "지금 값" and "최소 승률 +5" in labels and E["추천횟수"] == 3
     assert next(r for r in E["결과"] if r["바꾼것"] == "최소 승률 +5")["거래"] == 3 and E["결과"][0]["거래"] == 6
+
+
+
+def test_failed_reviews_are_not_retried_every_tick(env, monkeypatch):
+    """2026-11-25 비용 사고: AI 복기가 실패하면 개선안이 남지 않아 5분마다 다시 불렀다 → 시도 시각으로 48시간 막는다.
+    실험 플랜은 자동 개선이 꺼져 있어도 플랜마다 AI 복기를 하지 않는다."""
+    import moa.selfimprove as SI
+    si, at = env.rt.selfimp, env.at
+    calls = []
+    monkeypatch.setattr(at, "_ai_review_bg", lambda rid: calls.append(rid))           # 실패(개선안 없음)
+    monkeypatch.setattr(type(env.rt.ai), "configured", lambda self: True)
+    b = {"id": 777, "mkt": "kr", "style": "day", "params": {}, "created_at": "2000-01-01T00:00:00"}
+    monkeypatch.setattr(si, "_labs", lambda: [(b, [b])])
+    monkeypatch.setattr(si, "_stats", lambda rid, since="", **k: {"n": 50})
+    monkeypatch.setattr(si, "note", lambda *a, **k: None)
+    monkeypatch.setattr(SI.threading, "Thread", lambda target, args, **k: type("T", (), {"start": lambda self: target(*args), "is_alive": lambda self: False})())
+    si._reviews()
+    si._reviews()
+    si._reviews()
+    assert calls == [777]
+    # 실험 플랜 하나에 거래가 쌓여도 플랜 단위 AI 복기는 없다(자동 개선을 꺼도)
+    monkeypatch.setattr(si, "on", lambda: False)
+    started = []
+    monkeypatch.setattr(at, "review", lambda rid, auto=False: None)
+    import moa.autotrade as ATM
+    monkeypatch.setattr(ATM.threading, "Thread", lambda *a, **k: started.append(k) or type("T", (), {"start": lambda self: None})())
+    rid = env.run()
+    run = at._run(rid)
+    run["lab_id"] = 5
+    run["params"]["review_every"] = 1
+    _seed(env, rid, 3)
+    at._after_close(run)
+    assert started == []

@@ -1162,9 +1162,8 @@ class AutoTrade:
                 self._tell(run, f"개선안이 나왔어요({len(pr['changes'])}건). 앱에서 확인하고 승인해 주세요", "개선안 승인 대기", force_real=True)
         except Exception as e:
             self.rt.db.log("system", "error", f"자동매매 분석 오류: {e}", self._now())
-        si = getattr(self.rt, "selfimp", None)
-        if si is not None and si.on() and run.get("lab_id"):
-            return                                       # 실험은 자동 개선이 기본 플랜만 골라 복기한다(selfimprove._reviews)
+        if run.get("lab_id"):
+            return       # 실험 플랜(묶음마다 20개 남짓)은 같은 추천을 나눠 사서 기록이 거의 같다 → 플랜마다 AI 복기하지 않는다(자동 개선이 기본 플랜만)
         if p.get("ai_review") and self.rt.ai.configured():
             threading.Thread(target=self._ai_review_bg, args=(run["id"],), daemon=True).start()
 
@@ -2916,8 +2915,12 @@ class AutoTrade:
             raise ValueError(f"끝난 거래가 5건은 있어야 AI가 복기할 수 있어요(지금 {len(rows)}건)")
         st = self.stats(run["id"], rows)
         st.pop("curve", None)
+        # 지난 AI 복기 뒤에 산 거래만 보낸다(이미 복기한 거래를 매번 다시 보내지 않게). 적으면 최근 10건, 많아도 40건
+        prev = self.rt.db.one("SELECT ts, summary FROM at_proposals WHERE run_id=? AND source='ai' ORDER BY id DESC LIMIT 1", (run["id"],))
+        new = [r for r in rows if prev and (r["entry_ts"] or "") >= prev["ts"]] if prev else rows
+        pick = (new if len(new) >= 10 else rows[-10:])[-40:]
         trades = []
-        for r in rows[-60:]:
+        for r in pick:
             why = json.loads(r["why"] or "{}")
             trades.append({"종목": r["name"], "산 날": r["entry_day"], "산 시각": r["entry_hm"], "판": r["ver"], "수익률%": r["pnl_pct"],
                            "사유": r["reason"], "목표%": r["target_pct"], "손절%": r["stop_pct"], "보유 중 최고%": r["mfe_pct"],
@@ -2942,7 +2945,7 @@ class AutoTrade:
                "수익을 장담하는 말은 하지 마. 웹 검색은 하지 마.")
         data = {"기준시각": self._now(), "운용": {"쓸 돈": run["budget"], "통화": "원" if run["mkt"] == "kr" else "달러", "기간": f"{run['start_date']}~{run['end_date']}",
                                              "플랜 판": run["ver"], "지금 돈": self.money(run)},
-                "성적": st, "기회 분석": opp, "바꿀 수 있는 값": keys, "끝난 거래(최근 60건)": trades, "최근 판단 기록": skips,
+                "성적": st, "지난 AI 복기": ({"시각": prev["ts"], "요약": prev["summary"], "이후 새 거래": len(new)} if prev else None), "기회 분석": opp, "바꿀 수 있는 값": keys, "끝난 거래(지난 복기 뒤, 최대 40건)": trades, "최근 판단 기록": skips,
                 "플랜 변경 이력": self.changes(run["id"])}
         return f"자동매매 복기 · {run['name']}", ask, data
 

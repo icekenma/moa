@@ -1506,6 +1506,7 @@ def create_app(rt, updater=None):
     jobs, jobs_lock = {}, threading.Lock()
 
     def job_start(kind, d):
+        d = dict(d or {}, _user=True)       # 화면에서 누른 요청(설정·화면에서 고른 엔진을 그대로 쓴다)
         now = _time.time()
         job = {"id": secrets.token_urlsafe(12), "events": [], "done": False, "cancel": False, "at": now, "cv": threading.Condition()}
         with jobs_lock:

@@ -65,7 +65,7 @@ HOLD_SYSTEM = """너는 한국 개인 투자자의 앱(moa)에 들어 있는 보
 SHARE_SEC = 600        # 같은 조건의 추천을 함께 쓰는 시간(초)
 QUICK_MIN = 10         # 빠른 재추천의 가장 짧은 간격(분)
 # 정밀 추천 엔진 사다리. 성과가 나쁘면 한 칸씩 올린다(Sonnet → Opus → Fable). 하루 AI 비용 한도는 그대로 지킨다(필요하면 횟수를 줄여서)
-ENGINE_LADDER = ["claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2"]
+ENGINE_LADDER = ["claude-haiku-4-5", "claude-sonnet-5-5"]   # 성과가 나빠도 Sonnet까지만 올린다(2026-11-25 비용 사고 뒤 Opus·Fable 자동 승격 없앰)
 ESC_N = 20             # 엔진을 판단하는 데 필요한 정밀 추천 거래 수(지난번 바꾼 뒤부터)
 ESC_WIN = 45           # 이익 거래 비율이 이보다 낮거나, 한 번 평균이 0% 이하면 '성과가 나쁨'
 # 매매 기록에 함께 보여 주는 지수(시장마다 첫째가 대표 지수: '그날 지수' 기준별 성적에 쓴다)

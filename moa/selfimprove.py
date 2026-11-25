@@ -8,7 +8,7 @@
            같은 시장·방식의 자동매매(모의, 그리고 켜 두면 실전)에 반영한다. 다른 실험 플랜은 새 기본값에서 다시 갈라진다.
   ⑤ 지켜보기 반영한 뒤 거래가 쌓이면 반영 전과 견줘, 나빠졌으면 되돌리고 그 값은 2주 동안 다시 쓰지 않는다.
 
-이 순환에서 AI를 부르면 언제나 가장 좋은 엔진(FABLE)을 쓴다(ai.review_model).
+이 순환이 부르는 AI(자동 복기)는 Sonnet까지만 쓴다(ai.BG_MAX, 2026-11-25 비용 사고 뒤 Fable 고정을 없앰).
 절대 스스로 바꾸지 않는 것: 하루·전체 손실 한도, 굴리는 돈, AI 비용 한도, 실전 주문 허용, 가장 기본 원칙(evolution.CORE),
 그리고 PLAN_KEYS 범위 밖의 값. 실험의 기준선 플랜('가리지 않고 사기')은 승격 후보가 아니다.
 """
@@ -485,7 +485,8 @@ class SelfImprove:
         cnt = {k: self.rt.db.one("SELECT COUNT(*) n FROM si_log WHERE kind=?", (k,))["n"] for k in ("adopt", "rollback", "keep", "test", "lesson")}
         from .evolution import DEV
         ui_log = [{"ver": v, "day": d, "title": t, "what": w, "why": y} for v, d, a, t, w, y in DEV if a == "ui"][:8]
-        return {"on": c["on"], "real": c["real"], "ui": c["ui"], "ui_on": c["on"] and c["ui"], "ui_log": ui_log, "engine": {"model": FABLE, "name": MODELS[FABLE][0].split(" · ")[0]},
+        from .ai import BG_MAX
+        return {"on": c["on"], "real": c["real"], "ui": c["ui"], "ui_on": c["on"] and c["ui"], "ui_log": ui_log, "engine": {"model": BG_MAX, "name": MODELS[BG_MAX][0].split(" · ")[0]},
                 "cost": {"usd": round(float(u.get("s") or 0), 3), "n": int(u.get("n") or 0), "krw": round(float(u.get("s") or 0) * self.rt.ai.fx())},
                 "counts": cnt, "groups": groups, "lessons": lessons, "events": ev,
                 "rules": {"min_n": MIN_N, "edge": EDGE, "watch_n": WATCH_N, "cool_h": COOL_H, "block_d": BLOCK_D, "review_every": REVIEW_EVERY},
@@ -495,5 +496,5 @@ class SelfImprove:
                            f"새 값은 먼저 실험에서 같은 추천으로 시험하고, 거래가 충분히(단타 {MIN_N['day']}건·스윙 {MIN_N['swing']}건) 쌓여 기본보다 거래당 +{EDGE:g}%p 넘게 나을 때만 반영해요",
                            f"반영한 뒤 단타 {WATCH_N['day']}건·스윙 {WATCH_N['swing']}건을 반영 전과 견줘, 나빠졌으면 되돌리고 그 값은 {BLOCK_D}일 동안 다시 안 써요",
                            f"한 번 반영하면 그 묶음은 {COOL_H // 24}일 동안 새로 반영하지 않아요(한꺼번에 여러 번 바뀌지 않게)",
-                           "이 순환에서 AI를 부를 때는 언제나 Fable(가장 좋은 엔진)을 써요",
+                           "이 순환의 AI 복기는 Sonnet까지만 써요. 하루 AI 비용 상한(설정 › AI)을 넘으면 그날은 부르지 않아요",
                            "투자 화면 다듬기는 보이는 방식만 바꿔요. 사고파는 판단·주문·금액 계산은 건드리지 않아요"]}

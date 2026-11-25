@@ -27,6 +27,9 @@ MODELS = {  # 화면에 보여 줄 모델과 백만 토큰당 가격(USD, 입력
 SEARCH_USD = 0.01  # 웹 검색 1회
 LITE_MODEL = "claude-haiku-4-5"  # 자동매매의 '빠른 재추천'에 쓰는 가장 싼 엔진(검색 없이, 짧은 답만 받는다)
 REVIEW_MODEL = "claude-opus-5-5"  # 쌓인 기록을 복기하는 엔진(가끔만 돌아서 좋은 엔진을 써도 비용이 작다). 설정 → AI의 '복기 엔진'
+BG_MAX = "claude-sonnet-5-5"          # 사용자가 직접 누르지 않은 요청(자동매매 추천·복기·리서치 …)이 쓸 수 있는 가장 비싼 엔진
+EXPENSIVE = ("claude-fable-5-2", "claude-opus-5-5")
+DAY_CAP_DEFAULT = 2.0                  # 하루 AI 비용 상한(달러). 넘으면 그날은 멈춘다. 설정 › AI에서 바꾼다
 REVIEW_KINDS = ("auto", "learn", "ana")  # 자동매매 복기 · 추천 성적 복기 · 매매 기록 성적 분석
 FX_DEFAULT = 1400.0
 
@@ -130,6 +133,29 @@ class AI:
         """AI를 부를 수 있나: 키가 있고, AI 사용이 켜져 있을 때만. 꺼져 있으면 자동 기능(추천·복기·리서치 …)이 모두 조용히 쉰다."""
         return self.has_key() and self.enabled()
 
+    def day_cap(self):
+        v = self.conf().get("daily_cap_usd")
+        return DAY_CAP_DEFAULT if v is None else max(0.0, float(v or 0))
+
+    def today_usd(self):
+        r = self.rt.db.one("SELECT COALESCE(SUM(usd),0) AS s FROM ai_usage WHERE ts >= ?", (datetime.now().strftime("%Y-%m-%d"),))
+        return float(r["s"])
+
+    def _cap_alert(self):
+        """하루 상한의 50%·80%·100%에 닿으면 한 번씩 알린다."""
+        cap = self.day_cap()
+        if not cap:
+            return
+        used, day = self.today_usd(), datetime.now().strftime("%Y-%m-%d")
+        for p, cat in ((1.0, "urgent"), (0.8, "urgent"), (0.5, "info")):
+            if used >= cap * p:
+                try:
+                    self.rt.notify(f"오늘 AI 비용 ${used:.2f} · 하루 상한 ${cap:g}의 {int(p * 100)}%" + ("예요. 오늘은 더 부르지 않아요" if p >= 1 else "에 닿았어요"),
+                                   cat, "AI 비용 상한" if p >= 1 else "AI 비용", key=f"aicap:{day}:{int(p * 100)}", link="#settings/ai")
+                except Exception:
+                    pass
+                break
+
     def month_usd(self):
         r = self.rt.db.one("SELECT COALESCE(SUM(usd),0) AS s, COUNT(*) AS n FROM ai_usage WHERE ts >= ?",
                            (datetime.now().strftime("%Y-%m-01"),))
@@ -208,11 +234,7 @@ class AI:
             return FX_DEFAULT
 
     def review_model(self):
-        """복기 엔진. 자동 개선이 켜져 있으면 언제나 가장 좋은 엔진(Fable)을 쓴다(사용자 요청 2026-11-24)."""
-        si = getattr(self.rt, "selfimp", None)
-        if si is not None and si.on():
-            from .selfimprove import FABLE
-            return FABLE
+        """복기 엔진(설정 › AI). 자동으로 도는 복기는 이 엔진이 비싸도 BG_MAX(Sonnet)까지만 쓴다(2026-11-25 비용 사고 뒤)."""
         m = self.conf().get("review_model")
         return m if m in MODELS else REVIEW_MODEL
 
@@ -239,7 +261,7 @@ class AI:
     def status(self):
         c = self.conf()
         used, n = self.month_usd()
-        return {"configured": self.configured(), "enabled": self.enabled(), "has_key": self.has_key(), "model": c.get("model"), "review_model": self.review_model(), "budget_usd": c.get("budget_usd"),
+        return {"configured": self.configured(), "enabled": self.enabled(), "has_key": self.has_key(), "day_cap": self.day_cap(), "today_usd": round(self.today_usd(), 4), "model": c.get("model"), "review_model": self.review_model(), "budget_usd": c.get("budget_usd"),
                 "web_search": c.get("web_search", True), "month_usd": round(used, 4), "month_calls": n,
                 "models": {k: v[0] for k, v in MODELS.items()}, "credit": self.credit(),
                 "recent": self.rt.db.q("SELECT ts, kind, model, in_tok, out_tok, searches, usd FROM ai_usage "
@@ -270,6 +292,7 @@ class AI:
         self.rt.db.x("INSERT INTO ai_usage(ts,kind,model,in_tok,out_tok,searches,usd) VALUES(?,?,?,?,?,?,?)",
                      (datetime.now().isoformat(timespec="seconds"), kind, model, usage["in"], usage["out"],
                       usage["searches"], usd))
+        self._cap_alert()
         return usd
 
     # ---------- 화면별 자료 모으기 ----------
@@ -405,6 +428,11 @@ class AI:
         if c.get("budget_usd") and used >= float(c["budget_usd"]):
             yield {"t": "error", "msg": f"이번 달 AI 예산(${c['budget_usd']})을 다 썼어요. 설정 → AI에서 늘릴 수 있어요"}
             return
+        cap = self.day_cap()
+        if cap and self.today_usd() >= cap:
+            self._cap_alert()
+            yield {"t": "error", "msg": f"오늘 AI 비용이 하루 상한(${cap:g})에 닿아 내일까지 쉬어요. 설정 → AI에서 바꿀 수 있어요"}
+            return
         if kind == "ana" and not d.get("question"):
             yield {"t": "status", "msg": "성적을 모으고, 지난 추천을 값을 바꿔 다시 돌려 보는 중(비용 없음)"}
         try:
@@ -425,6 +453,8 @@ class AI:
             model = self.review_model()
         if d.get("model") in MODELS:  # 화면에서 고른 엔진
             model = d["model"]
+        if not d.get("_user") and model in EXPENSIVE:   # 사용자가 누르지 않은 요청은 Sonnet까지만(엔진 자동 승격·복기 포함)
+            model = BG_MAX
         pick = kind == "pick"
         from .aipick import hz, system_prompt
         hzn = hz(d.get("horizon"))

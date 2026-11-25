@@ -2180,7 +2180,7 @@ def test_ai_stream_recovers_from_paused_empty_or_broken_answers(rt, monkeypatch)
     # 5) 다른 화면(종목 정리 등)도 빈 답이면 한 번 더 받고, 그래도 비면 오류로 알린다(비용은 기록)
     calls.clear()
     monkeypatch.setattr(rt.ai, "_post", lambda body: (calls.append(body.get("model")), msg("", "refusal") if len(calls) == 1 else msg("답이에요", "end_turn"))[1])
-    evs = list(rt.ai.stream("chat", {"question": "배당이 뭐야", "model": "claude-fable-5-2", "web_search": False}))
+    evs = list(rt.ai.stream("chat", {"question": "배당이 뭐야", "model": "claude-fable-5-2", "web_search": False, "_user": True}))
     assert calls == ["claude-fable-5-2", "claude-sonnet-5-5"] and "".join(e["text"] for e in evs if e["t"] == "text") == "답이에요" and evs[-1]["model"] == "claude-sonnet-5-5"
     calls.clear()
     n0 = rt.db.one("SELECT COUNT(*) AS n FROM ai_usage")["n"]
@@ -3259,3 +3259,28 @@ def test_ai_daily_usage_utc(rt):
     days = {r["day"]: r for r in R}
     assert days["2026-11-24"]["models"] == {"Fable 5.2": 1200} and days["2026-11-25"]["models"] == {"Sonnet 5.5": 600}   # 한국 08:30 = UTC 전날
     assert days["2026-11-24"]["kinds"] == {"pick": 0.026}
+
+
+
+def test_ai_background_engine_cap_and_daily_limit(rt, monkeypatch):
+    """비용 사고(2026-11-25) 뒤: 사용자가 누르지 않은 요청은 Sonnet까지만, 하루 상한을 넘으면 그날은 멈추고 50·80·100%에 알린다."""
+    rt.settings.update({"ai": {"api_key": "sk-test-key-1234567890", "model": "claude-fable-5-2", "daily_cap_usd": 1.0}})
+    used = []
+
+    def fake(body):
+        used.append(body["model"])
+        yield {"type": "message_start", "message": {"usage": {"input_tokens": 100000, "output_tokens": 0}}}
+        yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "답"}}
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1000}}
+        yield {"type": "message_stop"}
+    monkeypatch.setattr(rt.ai, "_post", fake)
+    notes = []
+    monkeypatch.setattr(rt, "notify", lambda msg, cat="info", title=None, key=None, quiet_min=0, force=False, link=None: notes.append((cat, title, key)) or True)
+    list(rt.ai.stream("chat", {"question": "x", "web_search": False}))                  # 백그라운드(표시 없음) → Sonnet
+    list(rt.ai.stream("chat", {"question": "x", "web_search": False, "_user": True}))   # 화면에서 누름 → 고른 Fable
+    assert used == ["claude-sonnet-5-5", "claude-fable-5-2"]
+    assert rt.ai.today_usd() > 1.0
+    evs = list(rt.ai.stream("chat", {"question": "x", "web_search": False, "_user": True}))
+    assert evs[0]["t"] == "error" and "하루 상한" in evs[0]["msg"] and len(used) == 2   # 상한을 넘은 뒤에는 부르지 않음
+    assert any(c == "urgent" and k.endswith(":100") for c, _, k in notes)

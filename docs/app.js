@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261125.1609";
+const UI_VERSION = "261125.1625";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -7866,7 +7866,7 @@ pages.settings = {
     const c = s.ai || {};
     view.innerHTML = `
       <section class="card ai-master ${st.enabled ? "on" : "off"}">
-        <div class="ai-m-row"><span><b>AI 사용 (Claude API)</b><small>${st.enabled ? "켜져 있어요. 자동매매 추천·복기·리서치·AI 분석이 API를 써요(비용이 들어요)" : "꺼져 있어요. Claude API를 전혀 부르지 않아 비용이 들지 않아요. 자동매매는 새로 사지 않고, 들고 있는 종목만 규칙대로 관리해요"}</small></span>
+        <div class="ai-m-row"><span><b>AI 사용 (Claude API)</b><small>${st.enabled ? `켜져 있어요. 오늘 $${Number(st.today_usd || 0).toFixed(2)} / 하루 상한 $${st.day_cap} · 자동으로 도는 요청은 Sonnet까지만 써요` : "꺼져 있어요. Claude API를 전혀 부르지 않아 비용이 들지 않아요. 자동매매는 새로 사지 않고, 들고 있는 종목만 규칙대로 관리해요"}</small></span>
           <button type="button" class="switch" role="switch" id="aiMaster" aria-checked="${!!st.enabled}" aria-label="AI 사용"><span></span></button></div>
       </section>
       <section class="card ai-cr" id="crCard">${creditHtml(st.credit)}</section>
@@ -7879,7 +7879,7 @@ pages.settings = {
         <label class="field">모델<select id="aiModel">${Object.entries(st.models).map(([k, v]) => `<option value="${k}" ${k === c.model ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
         <label class="field">복기 엔진<select id="aiReview">${Object.entries(st.models).map(([k, v]) => `<option value="${k}" ${k === (c.review_model || "claude-opus-5-5") ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label>
         <div class="tiny">쌓인 매매·추천 기록을 돌아보고 규칙을 고칠 때 쓰는 엔진이에요. 플랜마다 주 1번 안팎이라 좋은 엔진을 써도 한 번 100원 남짓이에요.</div>
-        <div class="fields"><label class="field">월 예산(달러)<input id="aiBudget" class="r" inputmode="decimal" value="${esc(c.budget_usd ?? 10)}"></label>
+        <div class="fields"><label class="field">하루 상한(달러)<input id="aiDayCap" class="r" inputmode="decimal" value="${esc(c.daily_cap_usd ?? st.day_cap ?? 2)}"></label><label class="field">월 예산(달러)<input id="aiBudget" class="r" inputmode="decimal" value="${esc(c.budget_usd ?? 10)}"></label>
           <label class="field">이번 달 사용<input value="$${st.month_usd} · ${st.month_calls}회" disabled></label></div>
         <label class="check"><input type="checkbox" id="aiWeb" ${c.web_search !== false ? "checked" : ""}> 웹 검색으로 최신 뉴스 찾기(검색 1회 약 14원 추가)</label>
         <details><summary class="tiny">콘솔 전체 사용액까지 반영(선택: Admin API 키)</summary>
@@ -7921,7 +7921,7 @@ pages.settings = {
       try { await api("POST", "/api/ai/enabled", { on }); toast(on ? "AI를 켰어요" : "AI를 껐어요. 이제 API를 부르지 않아요"); } catch (err) { return toast(err.message, true); }
       this.ai();
     };
-    const body = () => ({ ai: { api_key: $("#aiKey").value.trim(), admin_key: $("#aiAdmin").value.trim(), model: $("#aiModel").value, review_model: $("#aiReview").value, budget_usd: Number($("#aiBudget").value) || 0, web_search: $("#aiWeb").checked } });
+    const body = () => ({ ai: { api_key: $("#aiKey").value.trim(), admin_key: $("#aiAdmin").value.trim(), model: $("#aiModel").value, review_model: $("#aiReview").value, budget_usd: Number($("#aiBudget").value) || 0, daily_cap_usd: Math.max(0, Number($("#aiDayCap").value) || 0), web_search: $("#aiWeb").checked } });
     bindCredit($("#crCard"), () => this.ai());
     const dartShow = (s) => {
       const n = s.note || {};

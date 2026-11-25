@@ -1663,17 +1663,17 @@ def test_cost_cap_follows_seed_and_old_runs_get_it_once(env, monkeypatch):
 
 
 def test_engine_moves_up_when_results_are_poor_and_back_if_worse(env, monkeypatch):
-    """정밀 추천으로 산 거래가 20건 쌓일 때마다 본다. 나쁘면 Sonnet → Opus → Fable, 올렸는데 더 나빠지면 되돌리고 멈춘다."""
+    """정밀 추천으로 산 거래가 20건 쌓일 때마다 본다. 나쁘면 Haiku → Sonnet까지만 올리고(2026-11-25부터 Opus·Fable 자동 승격 없음),
+    올렸는데 더 나빠지면 되돌리고 멈춘다."""
     at = env.at
     per = {"claude-fable-5-2": 0.8, "claude-opus-5-5": 0.4, "claude-sonnet-5-5": 0.2, "claude-haiku-4-5": 0.1}
     monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (per[model] * (1 if web else 0.6), {"fx": 1400.0}))
-    monkeypatch.setattr(env.rt.ai, "conf", lambda: {"model": "claude-sonnet-5-5", "web_search": True})
+    monkeypatch.setattr(env.rt.ai, "conf", lambda: {"model": "claude-haiku-4-5", "web_search": True})
     notes = []
     monkeypatch.setattr(env.rt, "notify", lambda m, *a, **k: notes.append(m))
     rid = env.run(mode="paper")
-    env.rt.db.x("UPDATE at_runs SET model='claude-sonnet-5-5' WHERE id=?", (rid,))
+    env.rt.db.x("UPDATE at_runs SET model='claude-haiku-4-5' WHERE id=?", (rid,))
     env.open = False
-    day = [0]
 
     def trades(n, pct, lite=False):
         for i in range(n):
@@ -1682,38 +1682,30 @@ def test_engine_moves_up_when_results_are_poor_and_back_if_worse(env, monkeypatc
                         (rid, "2099-01-01T10:00:00", "2099-01-01T11:00:00", pct, pct, json.dumps({"lite": lite})))
 
     def check():
-        day[0] += 1
         m0 = at._run(rid)["model"]
         env.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.engine_day','x') WHERE id=?", (rid,))
         at._engine_watch()
         r = at._run(rid)
-        if r["model"] != m0:                                              # 바꾼 뒤부터 새로 센다: 앞 거래는 바꾸기 전 시각으로 옮겨 둔다
+        if r["model"] != m0:
             env.rt.db.x("UPDATE at_trades SET exit_ts='2000-01-01T00:00:00' WHERE run_id=?", (rid,))
         return r
     trades(19, -0.4)
     trades(10, -2.0, lite=True)                                           # 빠른 재추천 거래는 엔진 판단에 넣지 않는다
-    assert check()["model"] == "claude-sonnet-5-5"
+    assert check()["model"] == "claude-haiku-4-5"
     trades(1, -0.4)
     r = check()
-    assert r["model"] == "claude-opus-5-5" and r["params"]["engine_ceil"] == "claude-opus-5-5" and r["params"]["engine_hist"][-1]["avg"] == -0.4
-    assert "Opus" in notes[-1] and "성과가 나빠" in notes[-1]
+    assert r["model"] == "claude-sonnet-5-5" and r["params"]["engine_ceil"] == "claude-sonnet-5-5" and "Sonnet" in notes[-1]
     n = len(notes)
     env.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.engine_day',?) WHERE id=?", (AP.mkt_date("kr"), rid))
     at._engine_watch()
     assert len(notes) == n                                                # 하루에 한 번만 본다
-    # Opus에서도 나쁘지만 덜 나쁨 → Fable
-    trades(20, -0.1)
+    trades(20, -0.1)                                                      # Sonnet에서도 나쁘지만 덜 나쁨 → 더 올리지 않는다(Opus·Fable 없음)
+    assert check()["model"] == "claude-sonnet-5-5"
+    trades(20, -0.9)                                                      # 올린 뒤 더 나빠짐 → Haiku로 되돌리고 멈춘다
     r = check()
-    assert r["model"] == "claude-fable-5-2" and len(r["params"]["engine_hist"]) == 2
-    # Fable에서 더 나빠짐 → Opus로 되돌리고 멈춘다
+    assert r["model"] == "claude-haiku-4-5" and r["params"]["engine_lock"] is True
     trades(20, -0.9)
-    r = check()
-    assert r["model"] == "claude-opus-5-5" and r["params"]["engine_lock"] is True and "되돌렸어요" in notes[-1]
-    trades(20, -3.0)
-    assert check()["model"] == "claude-opus-5-5"
-    # 다른 설정(비용 한도 다시 맞추기)이 돌아도 올린 엔진을 지킨다
-    m, patch, _ = at.fit_cost(3_000_000, "kr", "day", "paper", at._run(rid)["params"], "auto", ceil=at._run(rid)["params"]["engine_ceil"])
-    assert m == "claude-opus-5-5"
+    assert check()["model"] == "claude-haiku-4-5"
 
 
 def test_flow_shows_whole_pipeline_and_where_it_is(env):
@@ -1758,7 +1750,6 @@ def test_review_uses_its_own_engine(env):
     """복기(자동매매 복기·추천 성적 복기)는 따로 정한 엔진(기본 Opus)으로. 추천 엔진 설정과는 별개.
     자동 개선이 켜져 있으면(기본) 언제나 Fable — 이 테스트는 꺼 두고 예전 동작을 본다."""
     ai = env.rt.ai
-    assert ai.meter("auto")["model"] == ai.meter("learn")["model"] == "claude-fable-5-2"           # 자동 개선 켜짐(기본) → Fable 고정
     env.rt.selfimp.set({"on": False})
     assert ai.meter("auto")["model"] == "claude-opus-5-5" and ai.meter("learn")["model"] == "claude-opus-5-5"
     assert ai.meter("chat")["model"] == "claude-sonnet-5-5"
@@ -2797,7 +2788,7 @@ def test_self_improve_loop(env, monkeypatch):
     → 반영 뒤 나빠지면 되돌림. 손실 한도는 바꾸지 않고, 복기 엔진은 Fable."""
     from datetime import datetime, timedelta
     at, si, db = env.at, env.rt.selfimp, env.rt.db
-    assert si.on() and env.rt.ai.review_model() == "claude-fable-5-2"
+    assert si.on() and env.rt.ai.review_model() == "claude-opus-5-5"
     monkeypatch.setattr(at, "_per_usd", lambda style, model, web: (0.1, {"fx": 1400.0}))
     mine = env.run()
     L = at.lab_create({"budget": 3_000_000, "mkt": "kr", "style": "day", "days": 20, "model": "claude-sonnet-5-5"})["labs"][0]
@@ -2854,14 +2845,14 @@ def test_self_improve_loop(env, monkeypatch):
     assert si._blocked("kr", "day", "min_win_prob", 48)                                     # 되돌린 값은 2주간 다시 안 씀
     V = si.view()
     kinds = {e["kind"] for e in V["events"]}
-    assert {"test", "adopt", "rollback"} <= kinds and V["engine"]["model"] == "claude-fable-5-2" and V["groups"][0]["label"] == "국내 단타"
+    assert {"test", "adopt", "rollback"} <= kinds and V["engine"]["model"] == "claude-sonnet-5-5" and V["groups"][0]["label"] == "국내 단타"
     from moa.app import create_app
     cl = create_app(env.rt).test_client()
     assert cl.get("/api/si").get_json()["on"] is True
     assert cl.post("/api/si", json={"real": False}).get_json()["real"] is False
     assert V["ui_on"] is True and V["ui_log"] and V["ui_log"][0]["ver"].startswith("v")
     assert cl.post("/api/si", json={"ui": False}).get_json()["ui_on"] is False
-    assert cl.post("/api/si", json={"on": False}).get_json()["on"] is False and env.rt.ai.review_model() == "claude-opus-5-5"
+    assert cl.post("/api/si", json={"on": False}).get_json()["on"] is False
 
 
 def test_web_push_encrypt_send_and_notify(env, monkeypatch):
@@ -2964,7 +2955,7 @@ def test_ai_performance_analysis_context(env):
     _, ask2, _ = ai.context("ana", {"days": 30, "question": "손절이 왜 많아?"})
     assert ask2.startswith("손절이 왜 많아?")
     m = ai.meter("ana")
-    assert m["model"] == "claude-fable-5-2"
+    assert m["model"] == "claude-opus-5-5"          # 직접 누르는 분석은 설정의 복기 엔진(기본 Opus)
     for i in range(7):
         at.save_ana(f"분석 {i}", {"days": 30, "mkt": "kr"}, "claude-fable-5-2", 0.12)
     from moa.app import create_app

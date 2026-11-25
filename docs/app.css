@@ -4240,3 +4240,34 @@ html .rp-k .rp-step>.rp-in{flex:0 0 auto;margin:0}
 .ai-dt thead th{border-top:0;font-size:11.5px;color:var(--ink3);font-weight:700}
 .ai-dt th:first-child{text-align:left}
 .ai-dt tr.k td{border-top:0;padding-top:0;text-align:left;font-size:11px;color:var(--ink3);white-space:normal}
+
+/* 2주 점검(v5.57) */
+.tr-card{padding:14px 15px 12px;display:flex;flex-direction:column;gap:9px}
+.tr-head{display:flex;align-items:center;justify-content:space-between;gap:10px;background:none;border:0;padding:0;color:inherit;text-align:left;font:inherit;cursor:pointer}
+.tr-t{display:flex;flex-direction:column;gap:2px;min-width:0}
+.tr-t b{font-size:15px;font-weight:800;letter-spacing:-.02em}
+.tr-t small,.tr-c small{font-size:12px;color:var(--ink2,#666)}
+.tr-score{display:flex;align-items:baseline;gap:2px;font-variant-numeric:tabular-nums}
+.tr-score b{font-size:26px;font-weight:800;letter-spacing:-.03em;line-height:1}
+.tr-score small{font-size:12px;color:var(--ink2,#666)}
+.tr-bar{height:4px;border-radius:2px;background:color-mix(in srgb,currentColor 12%,transparent);overflow:hidden}
+.tr-bar i{display:block;height:100%;background:var(--in);border-radius:2px}
+.tr-warn{font-size:12.5px;line-height:1.5;padding:7px 9px;border-radius:9px;background:color-mix(in srgb,var(--hl) 22%,transparent)}
+.tr-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.tr-list li{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-top:1px solid color-mix(in srgb,currentColor 9%,transparent)}
+.tr-list li:first-child{border-top:0}
+.tr-c{display:flex;flex-direction:column;gap:2px;min-width:0}
+.tr-c b{font-size:13.5px;font-weight:700}
+.tr-c small{font-variant-numeric:tabular-nums;line-height:1.45}
+.tr-chip{flex:none;min-width:46px;text-align:center;font-size:11.5px;font-weight:700;padding:3px 6px;border-radius:6px;margin-top:1px}
+.tr-pass .tr-chip{background:color-mix(in srgb,var(--in) 18%,transparent);color:var(--in)}
+.tr-fail .tr-chip{background:color-mix(in srgb,var(--hl) 40%,transparent);color:inherit}
+.tr-wait .tr-chip{background:color-mix(in srgb,currentColor 8%,transparent);color:var(--ink2,#777)}
+.tr-more{display:flex;flex-direction:column;gap:9px}
+.tr-more[hidden]{display:none}
+.tr-tb{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
+.tr-tb th,.tr-tb td{padding:6px 4px;text-align:right;border-top:1px solid color-mix(in srgb,currentColor 9%,transparent)}
+.tr-tb th:first-child{text-align:left;font-weight:600}
+.tr-tb thead th{font-size:11.5px;font-weight:600;color:var(--ink2,#777);border-top:0}
+.tr-tb small{display:block;font-size:10.5px;color:var(--ink2,#777)}
+.tr-card .btn.sm{align-self:flex-start}

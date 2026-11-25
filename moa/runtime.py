@@ -55,6 +55,8 @@ class Runtime:
         self.replay = Replay(self)        # 다시 돌려 보기(지난 실제 추천을 바꾼 플랜 값으로)
         from .calmdays import CalmDays
         self.calm = CalmDays(self)        # 지수가 평범했던 날 비율(성적 분석의 참고 카드)
+        from .trial import Trial
+        self.trial = Trial(self)          # 2주 점검(투자 부분 개선 효과를 숫자로)
         from .healthalert import HealthAlert
         self.hlalert = HealthAlert(self)   # 건강관리 알림(시간표·약·연속 기록·보스·검진·레벨업)
         from .webpush import WebPush
@@ -260,6 +262,10 @@ class Runtime:
                             self.dividend.daily_due()  # 하루 한 번 배당 자료 모으기(뒤에서)
                         except Exception as e:
                             self.db.log("system", "error", f"배당 자료 모으기 오류: {e}", datetime.now().isoformat(timespec="seconds"))
+                        try:
+                            self.trial.tick()  # 2주 점검 중간·끝 알림(한 번씩)
+                        except Exception as e:
+                            self.db.log("system", "error", f"2주 점검 오류: {e}", datetime.now().isoformat(timespec="seconds"))
                         try:
                             self.hlalert.tick()  # 건강관리 알림(1분에 한 번)
                         except Exception as e:

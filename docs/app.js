@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261125.1645";
+const UI_VERSION = "261125.1652";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2259,6 +2259,43 @@ pages.invest = {
       <div class="tiny">${r.mode === "real" ? "실전" : "모의"} · ${r.mkt === "us" ? "미국" : "국내"} ${esc(r.style_label)} · ${r.start_date.slice(5).replace("-", "/")}~${r.end_date.slice(5).replace("-", "/")} · 거래 ${r.closed}건${r.closed ? ` (승 ${r.wins})` : ""} · 보유 ${r.open}${r.now ? ` · 오늘 추천 ${r.now.today.cycles}/${r.now.today.cycles_max}` : ""}</div>
     </button>`;
   },
+  // ----- 2주 점검(v5.57): 투자 부분 개선 효과를 네 가지 숫자로. 판단은 사용자가 한다
+  async atTrial(box) {
+    let T;
+    try { T = await GET("/api/auto/trial"); } catch (e) { return; }
+    if (!box.isConnected || investState.tab !== "auto") return;
+    const old = $(".tr-card", box);
+    const st = { pass: "통과", fail: "미달", wait: "판단 전" };
+    const el = document.createElement("section");
+    el.className = "card tr-card";
+    el.innerHTML = `<button type="button" class="tr-head" aria-expanded="false">
+        <span class="tr-t"><b>2주 점검</b><small>${esc(T.start.slice(5).replace("-", "/"))}~${esc(T.end.slice(5).replace("-", "/"))} · ${T.done ? "끝" : `${T.day}일째, ${T.left}일 남음`}</small></span>
+        <span class="tr-score"><b>${T.pass}</b><small>/4 통과</small></span></button>
+      <div class="tr-bar" aria-hidden="true"><i style="width:${Math.round(T.day / T.days * 100)}%"></i></div>
+      ${T.warn.map((w) => `<div class="tr-warn">${esc(w)}</div>`).join("")}
+      <ol class="tr-list">${T.checks.map((c) => `<li class="tr-${c.state}"><span class="tr-chip">${st[c.state]}</span><span class="tr-c"><b>${esc(c.title)}</b><small>${esc(c.value)}</small></span></li>`).join("")}</ol>
+      <div class="tr-more" hidden>
+        ${T.labs.length ? `<table class="tr-tb"><thead><tr><th>묶음</th><th>기본 플랜</th><th>다 사기</th><th>차이</th></tr></thead><tbody>${T.labs.map((L) => `<tr><th>${esc(L.label)}</th>
+          <td>${L.base.n ? `${L.base.avg_pct >= 0 ? "+" : ""}${L.base.avg_pct.toFixed(2)}%<small>${L.base.n}건</small>` : "-"}</td>
+          <td>${L.all.n ? `${L.all.avg_pct >= 0 ? "+" : ""}${L.all.avg_pct.toFixed(2)}%<small>${L.all.n}건</small>` : "-"}</td>
+          <td>${L.diff == null ? `<small>${T.min_n}건씩 필요</small>` : `${L.diff >= 0 ? "+" : ""}${L.diff.toFixed(2)}%p`}</td></tr>`).join("")}</tbody></table>` : ""}
+        <div class="tiny">${T.checks.map((c) => `${esc(c.title)}: ${esc(c.help)}`).join("<br>")}<br>거래당 수익률은 수수료를 뺀 값이고, 모의(가상 돈) 기준이에요. 7일째와 끝나는 날 알림이 가요.</div>
+        <button type="button" class="btn ghost sm" id="trRestart">오늘부터 다시 세기</button>
+      </div>`;
+    if (old) old.replaceWith(el);
+    else { const top = $(".at-top", box) || $(".g-lobby-top", box); if (top) top.after(el); else box.prepend(el); }
+    $(".tr-head", el).onclick = (e) => {
+      const more = $(".tr-more", el), open = more.hidden;
+      more.hidden = !open; e.currentTarget.setAttribute("aria-expanded", String(open));
+    };
+    $("#trRestart", el).onclick = async (e) => {
+      e.stopPropagation();
+      if (!confirm("2주 점검을 오늘부터 다시 셀까요?")) return;
+      try { await api("POST", "/api/auto/trial/restart"); } catch (err) { return; }
+      this.atTrial(box);
+    };
+  },
+
   // ----- 목록: 한 화면에 들어오게. 모의 자동 테스트는 시장×방식 네 칸, 직접 만든 것은 한 줄씩. 자세한 것은 눌러서 본다
   async atList(box) {
     const A = this.atState(), [O, LB] = await Promise.all([GET("/api/auto"), GET("/api/auto/lab")]);
@@ -2277,6 +2314,7 @@ pages.invest = {
           <span class="mk-tag ${L.mkt}">${L.mkt === "kr" ? "국내" : "미국"}</span><span class="at-row-n"><b>${esc(L.style_label)} 실험</b><small>${esc(L.start_date.slice(5))}~${esc(L.end_date.slice(5))} · 끝난 거래 ${L.closed}건</small></span>
           <span class="at-row-v"><small>끝남</small></span></button>`).join("")}</section></details>` : ""}
       <div class="tiny" style="padding:0 3px">수익을 보장하지 않아요. 손실 한도에 닿으면 스스로 멈추지만, 급변할 때는 한도보다 더 잃을 수 있어요.</div>`;
+    this.atTrial(box);
     $("#atNewBtn").onclick = () => { A.view = "new"; A.pv = null; this.auto(box); };
     $("#atBell").onclick = () => openSheet("자동매매 알림", `<div id="nfSheet" class="nf-sheet"><div class="empty small loading">알림 설정을 여는 중</div></div>`, () => pages.settings.notifyBox($("#nfSheet"), { sheet: true }));
     box.onclick = async (e) => {

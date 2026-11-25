@@ -3084,3 +3084,35 @@ def test_failed_reviews_are_not_retried_every_tick(env, monkeypatch):
     _seed(env, rid, 3)
     at._after_close(run)
     assert started == []
+
+
+def test_two_week_check(env, monkeypatch):
+    """2주 점검: 기본 플랜 vs '다 사기' 기준선, 수익, AI 비용 상한, 비용 뺀 손익. 7일째·끝날에 한 번씩 알림."""
+    from datetime import date as D
+    tr, db = env.rt.trial, env.rt.db
+    db.set_setting("trial", {"start": "2026-11-02", "days": 14, "sent": []})
+    b = env.run()
+    db.x("UPDATE at_runs SET lab_id=9, variant='base' WHERE id=?", (b,))
+    a = env.run()
+    db.x("UPDATE at_runs SET lab_id=9, variant='all' WHERE id=?", (a,))
+    v = tr.view()
+    assert [c["state"] for c in v["checks"]] == ["wait", "wait", "pass", "wait"] and v["labs"][0]["label"] == "국내 단타"
+    _seed(env, b, 20)                                      # 평균 +0.2%
+    _seed(env, a, 20)
+    db.x("UPDATE at_trades SET pnl_pct=pnl_pct-0.5, pnl=pnl-500 WHERE run_id=?", (a,))   # 기준선이 더 나쁨
+    monkeypatch.setattr(type(env.rt.ai), "fx", lambda self: 1400.0)
+    db.x("INSERT INTO ai_usage(ts,kind,model,in_tok,out_tok,searches,usd) VALUES('2026-11-03T10:00:00','learn','m',1,1,0,5.0)")
+    v = tr.view()
+    st = {c["key"]: c["state"] for c in v["checks"]}
+    assert st == {"edge": "pass", "profit": "pass", "cost": "fail", "net": "fail"} and v["labs"][0]["diff"] == 0.5
+    assert v["cost"]["over"] == 1 and v["checks"][3]["value"] == "모의 손익 +4,000원 − AI 비용 7,000원 = -3,000원"
+    notes = []
+    monkeypatch.setattr(env.rt, "notify", lambda m, *a, **k: notes.append((m, k.get("key"))))
+    import moa.trial as TRM
+    from datetime import datetime as _dt
+    monkeypatch.setattr(TRM, "datetime", type("DT", (), {"now": staticmethod(lambda: _dt(2026, 11, 25, 10, 0))}))
+    tr.tick()
+    tr.tick()
+    assert len(notes) == 2 and notes[0][1].endswith(":7") and notes[1][1].endswith(":14") and "통과" in notes[0][0]
+    v2 = tr.restart()
+    assert v2["start"] == D.today().isoformat() and v2["day"] == 1

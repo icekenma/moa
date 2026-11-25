@@ -1640,6 +1640,14 @@ def create_app(rt, updater=None):
         except ValueError as e:
             return jsonify({"error": str(e)}), 404
 
+    @app.get("/api/auto/trial")
+    def auto_trial():
+        return jsonify(rt.trial.view())
+
+    @app.post("/api/auto/trial/restart")
+    def auto_trial_restart():
+        return jsonify(rt.trial.restart())
+
     @app.get("/api/market/calm")
     def market_calm():
         try:

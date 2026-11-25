@@ -1155,6 +1155,10 @@ def create_app(rt, updater=None):
     def ai_status():
         return jsonify(rt.ai.status())
 
+    @app.get("/api/ai/daily")
+    def ai_daily():
+        return jsonify(rt.ai.daily(int(request.args.get("days", 8))))
+
     @app.post("/api/ai/enabled")
     def ai_enabled():
         return jsonify(rt.ai.set_enabled(bool(body().get("on"))))

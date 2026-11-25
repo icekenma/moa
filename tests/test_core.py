@@ -3237,3 +3237,25 @@ def test_ai_master_switch_off_by_default(rt):
     assert st["enabled"] is False and st["has_key"] is True and st["configured"] is False
     assert c.post("/api/ai/enabled", json={"on": True}).get_json()["enabled"] is True and A.configured()
     assert c.post("/api/ai/enabled", json={"on": False}).get_json()["configured"] is False
+
+
+def test_ai_daily_usage_utc(rt):
+    """설정 › AI 날짜별 사용량: 콘솔과 같은 UTC 날짜·입력+출력 토큰으로, 모델·용도별 금액."""
+    rt.db.x("INSERT INTO ai_usage(ts,kind,model,in_tok,out_tok,searches,usd) VALUES(?,?,?,?,?,?,?)", ("2026-11-25T08:30:00", "pick", "claude-fable-5-2", 1000, 200, 1, 0.026))
+    rt.db.x("INSERT INTO ai_usage(ts,kind,model,in_tok,out_tok,searches,usd) VALUES(?,?,?,?,?,?,?)", ("2026-11-25T09:30:00", "ana", "claude-sonnet-5-5", 500, 100, 0, 0.002))
+    from datetime import datetime as _d
+    import moa.ai as M
+    class D(_d):
+        @classmethod
+        def now(cls, tz=None):
+            return _d(2026, 11, 26, 12, 0)
+    import pytest as _p
+    mp = _p.MonkeyPatch()
+    mp.setattr(M, "datetime", D)
+    try:
+        R = rt.ai.daily(8)["rows"]
+    finally:
+        mp.undo()
+    days = {r["day"]: r for r in R}
+    assert days["2026-11-24"]["models"] == {"Fable 5.2": 1200} and days["2026-11-25"]["models"] == {"Sonnet 5.5": 600}   # 한국 08:30 = UTC 전날
+    assert days["2026-11-24"]["kinds"] == {"pick": 0.026}

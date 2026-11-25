@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261125.1603";
+const UI_VERSION = "261125.1609";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -7870,6 +7870,7 @@ pages.settings = {
           <button type="button" class="switch" role="switch" id="aiMaster" aria-checked="${!!st.enabled}" aria-label="AI 사용"><span></span></button></div>
       </section>
       <section class="card ai-cr" id="crCard">${creditHtml(st.credit)}</section>
+      <section class="card ai-day" id="aiDay"><div class="empty small loading">날짜별 사용량을 모으는 중</div></section>
       <section class="card">
         <div class="card-head"><h2>Claude AI 도우미</h2><span class="tag ${st.configured ? "g" : "warn"}">${st.configured ? "연결됨" : st.has_key ? "꺼 둠" : "키 필요"}</span></div>
         <div class="small muted">투자 화면의 ✦ 버튼에서 종목 정리, 포트폴리오 점검, AI 종목 추천, 자유 질문을 할 수 있어요. AI는 주문하지 않아요.</div>
@@ -7902,6 +7903,18 @@ pages.settings = {
         ${st.recent.length ? st.recent.map((r) => `<div class="item"><span class="ico">${esc({ stock: "종목", portfolio: "점검", review: "복기", sweep: "훑기", chat: "질문", test: "확인", pick: "추천", pickw: "중기", learn: "복기", divplan: "배당" }[r.kind] || r.kind)}</span>
           <span class="main"><b>${esc(r.ts.slice(5, 16).replace("T", " "))}</b><span class="sub">${esc(r.model.replace("claude-", ""))} · 입력 ${won(r.in_tok)} · 출력 ${won(r.out_tok)}${r.searches ? ` · 검색 ${r.searches}` : ""}</span></span>
           <span class="end"><b>$${Number(r.usd).toFixed(4)}</b></span></button>`).join("") : `<div class="empty">아직 사용 기록이 없어요</div>`}</div></section>`;
+    GET("/api/ai/daily").then((D) => {
+      const el = $("#aiDay");
+      if (!el) return;
+      const tk = (n) => (n ? n.toLocaleString("ko-KR") : "0");
+      const kindName = { pick: "추천", pickw: "추천(검색)", pickq: "빠른 재추천", auto: "자동매매 복기", learn: "추천 규칙 복기", ana: "AI 성적 분석", brief: "장 전 리서치", hold: "보유 점검", chat: "질문" };
+      el.innerHTML = `<div class="card-head"><h2>날짜별 사용량</h2><span class="tag">이 앱만</span></div>
+        <div class="tiny">${esc(D.note)}. Claude 콘솔 표와 나란히 보면, 콘솔 쪽이 크게 많을 때 그 차이는 다른 앱·키가 쓴 거예요.</div>
+        ${D.rows.length ? `<div class="ai-dt-wrap"><table class="ai-dt"><thead><tr><th>날짜(UTC)</th>${D.models.map((m) => `<th>${esc(m)}</th>`).join("")}<th>금액</th></tr></thead>
+          <tbody>${D.rows.map((r) => `<tr><th>${esc(r.day.slice(5).replace("-", "/"))}</th>${D.models.map((m) => `<td>${tk(r.models[m])}</td>`).join("")}<td><b>$${r.usd.toFixed(2)}</b></td></tr>
+            <tr class="k"><td colspan="${D.models.length + 2}">${Object.entries(r.kinds).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${esc(kindName[k] || k)} $${v.toFixed(2)}`).join(" · ")} · ${r.calls}번</td></tr>`).join("")}</tbody></table></div>`
+          : `<div class="empty small">최근 사용 기록이 없어요</div>`}`;
+    }).catch(() => { const el = $("#aiDay"); if (el) el.remove(); });
     $("#aiMaster").onclick = async (e) => {
       const on = e.currentTarget.getAttribute("aria-checked") !== "true";
       if (on && !confirm("AI(Claude API)를 다시 켤까요? 자동매매 추천·복기·리서치가 다시 비용을 써요")) return;

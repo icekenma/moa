@@ -245,6 +245,25 @@ class AI:
                 "recent": self.rt.db.q("SELECT ts, kind, model, in_tok, out_tok, searches, usd FROM ai_usage "
                                        "ORDER BY id DESC LIMIT 10")}
 
+    def daily(self, days=8):
+        """콘솔 '토큰 사용량'과 같은 기준(UTC 날짜, 입력+출력 토큰, 모델별)으로 이 앱이 쓴 양. 콘솔과 견주면 다른 키·앱이 쓴 양을 가려낼 수 있다."""
+        from datetime import timedelta
+        since = (datetime.now() - timedelta(days=days + 1)).isoformat(timespec="seconds")
+        out = {}
+        for r in self.rt.db.q("SELECT ts, kind, model, in_tok, out_tok, searches, usd FROM ai_usage WHERE ts>=?", (since,)):
+            utc = (datetime.fromisoformat(r["ts"][:19]) - timedelta(hours=9)).strftime("%Y-%m-%d")     # 서버는 한국 시간으로 적는다
+            d = out.setdefault(utc, {"day": utc, "models": {}, "kinds": {}, "usd": 0.0, "calls": 0, "searches": 0})
+            name = MODELS.get(r["model"], (r["model"],))[0].split(" · ")[0]
+            d["models"][name] = d["models"].get(name, 0) + int(r["in_tok"] or 0) + int(r["out_tok"] or 0)
+            d["kinds"][r["kind"]] = round(d["kinds"].get(r["kind"], 0) + float(r["usd"] or 0), 4)
+            d["usd"] += float(r["usd"] or 0)
+            d["calls"] += 1
+            d["searches"] += int(r["searches"] or 0)
+        rows = sorted(out.values(), key=lambda x: x["day"], reverse=True)[:days]
+        for x in rows:
+            x["usd"] = round(x["usd"], 3)
+        return {"rows": rows, "models": sorted({m for x in rows for m in x["models"]}), "note": "콘솔 '토큰 사용량' 표와 같은 기준(UTC 날짜 · 입력+출력 토큰)이에요"}
+
     def _record(self, kind, model, usage):
         i, o = _model_price(model)
         usd = (usage["in"] * i + usage["out"] * o) / 1e6 + usage["searches"] * SEARCH_USD

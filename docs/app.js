@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261125.1638";
+const UI_VERSION = "261125.1645";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -7913,7 +7913,9 @@ pages.settings = {
         ${D.rows.length ? `<div class="ai-dt-wrap"><table class="ai-dt"><thead><tr><th>날짜(UTC)</th>${D.models.map((m) => `<th>${esc(m)}</th>`).join("")}<th>금액</th></tr></thead>
           <tbody>${D.rows.map((r) => `<tr><th>${esc(r.day.slice(5).replace("-", "/"))}</th>${D.models.map((m) => `<td>${tk(r.models[m])}</td>`).join("")}<td><b>$${r.usd.toFixed(2)}</b></td></tr>
             <tr class="k"><td colspan="${D.models.length + 2}">${Object.entries(r.kinds).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${esc(kindName[k] || k)} $${v.toFixed(2)}${(r.kinds_n || {})[k] ? `(${r.kinds_n[k]}번)` : ""}`).join(" · ")} · ${r.calls}번</td></tr>`).join("")}</tbody></table></div>`
-          : `<div class="empty small">최근 사용 기록이 없어요</div>`}`;
+          : `<div class="empty small">최근 사용 기록이 없어요</div>`}
+        ${(D.calls || []).length ? `<details class="ai-why"><summary>자동 복기 호출 ${D.calls.length}건(최근)</summary><div class="tiny">${D.calls.map((c) => `${esc(c.ts.slice(5, 16).replace("T", " "))} · ${esc(kindName[c.kind] || c.kind)} · ${esc(c.model.replace("claude-", ""))} · 입력 ${tk(c.in_tok)} · 출력 ${tk(c.out_tok)} · $${Number(c.usd).toFixed(2)}`).join("<br>")}</div></details>` : ""}
+        ${(D.errors || []).length ? `<details class="ai-why"><summary>최근 AI 오류 ${D.errors.length}건</summary><div class="tiny">${D.errors.map((x) => `${esc(x.ts.slice(5, 16).replace("T", " "))} · ${esc(x.msg.slice(0, 160))}`).join("<br>")}</div></details>` : ""}`;
     }).catch(() => { const el = $("#aiDay"); if (el) el.remove(); });
     $("#aiMaster").onclick = async (e) => {
       const on = e.currentTarget.getAttribute("aria-checked") !== "true";

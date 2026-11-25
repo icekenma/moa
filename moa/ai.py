@@ -285,7 +285,10 @@ class AI:
         rows = sorted(out.values(), key=lambda x: x["day"], reverse=True)[:days]
         for x in rows:
             x["usd"] = round(x["usd"], 3)
-        return {"rows": rows, "models": sorted({m for x in rows for m in x["models"]}), "note": "콘솔 '토큰 사용량' 표와 같은 기준(UTC 날짜 · 입력+출력 토큰)이에요"}
+        # 비용 원인 확인용(2026-11-25): 자동 복기 호출과 최근 AI 오류
+        calls = self.rt.db.q("SELECT ts, kind, model, in_tok, out_tok, usd FROM ai_usage WHERE kind IN ('learn','auto') ORDER BY id DESC LIMIT 15")
+        errs = self.rt.db.q("SELECT ts, msg FROM engine_log WHERE level='error' AND (msg LIKE '%복기%' OR msg LIKE '%AI%') ORDER BY id DESC LIMIT 8")
+        return {"calls": calls, "errors": errs, "rows": rows, "models": sorted({m for x in rows for m in x["models"]}), "note": "콘솔 '토큰 사용량' 표와 같은 기준(UTC 날짜 · 입력+출력 토큰)이에요"}
 
     def _record(self, kind, model, usage):
         i, o = _model_price(model)

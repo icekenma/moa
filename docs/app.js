@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261125.1809";
+const UI_VERSION = "261125.1947";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2387,6 +2387,11 @@ pages.invest = {
     return `<span class="td-mk-m">${xs.length ? xs.map(([k, v]) => `<span><small>${k} 손익</small><b class="${tone(v)}">${this.atM(mk, v, true)}</b></span>`).join("")
       : `<small>실험만 거래해 금액 합계는 없어요</small>`}</span>`;
   },
+  // 한 줄 알림. 들고 있는 것의 평가 금액(실전·모의)은 굵게: 오늘 번 돈과 함께 가장 먼저 찾는 숫자
+  atNoteLi(n) {
+    const t = n.k === "hold" ? esc(n.text).replace(/((?:국내 |미국 )?(?:실전|모의) 평가 [+-]\$?[\d,.]+원?)/g, "<b class=\"td-amt\">$1</b>") : esc(n.text);
+    return `<li class="${n.tone || ""}">${t}</li>`;
+  },
   atTodayHtml(T, runs, labs, A) {
     if (!T) return "";
     const f = A.tdF || "all", rows = T.rows.map((e, i) => [e, i]).filter(([e]) => f === "all" || e.mkt === f), cut = A.tdAll ? rows : rows.slice(0, 5);
@@ -2395,7 +2400,7 @@ pages.invest = {
     return `<section class="card td" aria-label="오늘 한 일">
       <div class="td-h"><b>오늘 한 일</b><span>지금까지 쌓인 숫자와 따로, 오늘 거래만</span></div>
       <div class="td-mks">${this.atTodayPanel(T, "kr")}${this.atTodayPanel(T, "us")}</div>
-      ${notes.length ? `<ul class="td-notes">${notes.map((n) => `<li class="${n.tone || ""}">${esc(n.text)}</li>`).join("")}</ul>` : ""}
+      ${notes.length ? `<ul class="td-notes">${notes.map((n) => this.atNoteLi(n)).join("")}</ul>` : ""}
       ${T.rows.length ? `<div class="td-tape-h"><b>시간순 거래</b>${both ? `<span class="td-seg" role="group" aria-label="시장 고르기">${[["all", "전체"], ["kr", "국내"], ["us", "미국"]].map(([k, l]) => `<button type="button" data-tdf="${k}" aria-pressed="${f === k}">${l}</button>`).join("")}</span>` : ""}</div>
         <div class="td-tape">${cut.map(([e, i]) => this.atTapeRow(e, i)).join("")}</div>
         ${rows.length > 5 ? `<button type="button" class="td-more" id="tdMore">${A.tdAll ? "접기" : `나머지 ${rows.length - 5}건 더 보기`}</button>` : ""}
@@ -2412,7 +2417,7 @@ pages.invest = {
     const notes = (nx ? [nx] : []).concat(T.notes.filter((n) => n.k === "warn"), T.notes.filter((n) => n.k === "hold"));
     return `<div class="td-mini"><div class="td-mini-h"><b>오늘 한 일</b><a href="#invest/auto">${T.rows.length ? `거래 ${T.rows.length + (T.more || 0)}줄 보기 ›` : "자동매매 ›"}</a></div>
       ${lines || `<div class="td-ln none">오늘은 아직 거래가 없어요</div>`}
-      ${notes.length ? `<ul class="td-notes">${notes.map((n) => `<li class="${n.tone || ""}">${esc(n.text)}</li>`).join("")}</ul>` : ""}
+      ${notes.length ? `<ul class="td-notes">${notes.map((n) => this.atNoteLi(n)).join("")}</ul>` : ""}
       ${T.rows.length ? `<div class="td-tape">${T.rows.slice(0, 3).map((e, i) => this.atTapeRow(e, i, true)).join("")}</div>` : ""}</div>`;
   },
   atTodaySheet(e, box, go) {

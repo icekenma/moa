@@ -4056,10 +4056,14 @@ class AutoTrade:
         for u in units.values():
             u["avg_pct"] = round(u.pop("pct") / u["closed"], 2) if u["closed"] else None
         # 지금 들고 있는 것(마지막으로 받은 시세 기준)
-        hold = {}
+        hold, upnl = {}, {}
         for t in db.q("SELECT run_id, mkt, sym, name, qty, entry_price, last FROM at_trades WHERE status='open'"):
             if t["run_id"] not in runs:
                 continue
+            r = runs[t["run_id"]]
+            if not r.get("lab_id"):      # 보유 평가 금액도 오늘 번 돈처럼 직접 만든 자동매매만(실전·모의 따로)
+                k = (t["mkt"], r["mode"] == "real")
+                upnl[k] = upnl.get(k, 0.0) + t["qty"] * ((t["last"] or t["entry_price"]) - t["entry_price"])
             g = hold.setdefault((t["mkt"], t["sym"]), {"mkt": t["mkt"], "sym": t["sym"], "name": t["name"], "cost": 0.0, "value": 0.0, "real": False})
             g["cost"] += t["qty"] * t["entry_price"]; g["value"] += t["qty"] * (t["last"] or t["entry_price"])
             g["real"] = g["real"] or runs[t["run_id"]]["mode"] == "real"
@@ -4080,8 +4084,13 @@ class AutoTrade:
                               "text": f"{nm} {when} 끝난 거래 {M['closed']}건 · {M['wins']}승 {M['losses']}패 · 평균 {M['avg_pct']:+.2f}%"})
         if hs:
             up = sum(1 for g in hs if g["pct"] > 0)
-            notes.append({"k": "hold", "tone": "", "text": f"들고 있는 {len(hs)}종목 중 {up}종목이 플러스 · 가장 좋은 {hs[0]['name']} {hs[0]['pct']:+.2f}%"
-                          + (f", 가장 나쁜 {hs[-1]['name']} {hs[-1]['pct']:+.2f}%" if len(hs) > 1 else "")})
+            two = len({m for m, _ in upnl}) > 1
+            money = " · ".join(f"{('국내 ' if m == 'kr' else '미국 ') if two else ''}{'실전' if real else '모의'} 평가 {won(v, m)}"
+                               for (m, real), v in sorted(upnl.items(), key=lambda kv: (kv[0][0], not kv[0][1])))
+            tot = sum(upnl.values()) if not two else 0
+            notes.append({"k": "hold", "tone": "" if two or not upnl else "up" if tot > 0 else "down" if tot < 0 else "",
+                          "text": f"들고 있는 {len(hs)}종목" + (f" {money}" if money else "") + f" · 플러스 {up}종목 · 최고 {hs[0]['name']} {hs[0]['pct']:+.2f}%"
+                          + (f" · 최저 {hs[-1]['name']} {hs[-1]['pct']:+.2f}%" if len(hs) > 1 else "")})
         for r in runs.values():
             if r["mode"] == "real" and not r.get("lab_id") and r["status"] in ACTIVE and r["end_date"] <= AP.mkt_date(r["mkt"]):
                 notes.append({"k": "warn", "tone": "warn", "text": f"실전 '{r['name']}' 기간이 {r['end_date'][5:].replace('-', '/')}에 끝나요. 새로 사지 않아요", "run": r["id"]})

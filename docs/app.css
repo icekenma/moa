@@ -3836,6 +3836,7 @@ html.gm-on dialog.sheet .sheet-in{border-radius:24px}
 .td-notes li.up::before{background:var(--up)}.td-notes li.down::before{background:var(--down)}
 .td-notes li.warn{color:var(--td-ink);font-weight:700}.td-notes li.warn::before{background:#E8A21A;border-radius:1px;transform:rotate(45deg)}
 .td-notes li.live::before{background:#1FA971;box-shadow:0 0 0 3px rgba(31,169,113,.2)}
+.td-notes .td-amt{color:var(--td-ink);font-weight:800;white-space:nowrap}.td-notes li.up .td-amt{color:var(--up)}.td-notes li.down .td-amt{color:var(--down)}
 .td-tape-h{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:9px;border-top:1px solid var(--td-line)}
 .td-tape-h b{font-size:12.5px;font-weight:800;color:var(--td-ink2)}
 .td-seg{display:inline-flex;gap:2px;padding:2px;border-radius:9px;background:var(--td-fill)}

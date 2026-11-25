@@ -2643,6 +2643,11 @@ def test_today_groups_trades_and_falls_back_to_last_session(env, monkeypatch):
     assert u == {"bought": 2, "sold": 1, "closed": 2, "wins": 1, "avg_pct": 0.0} and T["units"][f"run:{own}"]["closed"] == 1
     assert T["hold_n"] == 1 and T["hold"][0]["name"] == "SK하이닉스" and T["hold"][0]["pct"] == 2.0
     assert any("3건" in n["text"] and "2승 1패" in n["text"] for n in T["notes"]) and any("들고 있는 1종목" in n["text"] for n in T["notes"])
+    hn = next(n for n in T["notes"] if n["k"] == "hold")
+    assert "평가" not in hn["text"]                                  # 실험만 들고 있으면 금액은 말하지 않는다(플랜마다 가상 돈)
+    x(ins, (own, "000660", "SK하이닉스", 2, "open", f"{d}T09:40:00", d, "09:40", 150000, None, None, None, None, None, None, 148500))
+    hn = next(n for n in at.today()["notes"] if n["k"] == "hold")
+    assert "모의 평가 -3,000원" in hn["text"] and hn["tone"] == "down"   # 직접 만든 자동매매의 보유 평가 금액만
     assert T["mkt"]["us"]["closed"] == 0 and T["mkt"]["us"]["is_today"]
     env.open, env.day = False, "2026-11-19"                          # 다음 날 장 열기 전: 어제(지난 장)를 보여 준다
     T2 = at.today()

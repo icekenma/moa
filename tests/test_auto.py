@@ -1216,6 +1216,8 @@ def test_lab_runs_many_plans_on_one_recommendation(env, monkeypatch):
 
 def test_autopilot_only_needs_on_off_and_feeds_a_real_plan(env, monkeypatch):
     """모의 자동 테스트: 켜면 시장·방식별 실험을 앱이 만들고, 끄면 멈춘다. 결과가 쌓이면 실전 후보 플랜을 알려 준다."""
+    import moa.autotrade as ATM_OLD
+    monkeypatch.setattr(ATM_OLD, "AUTO_SET", {("kr", "day"): (1.05, 10_000_000), ("us", "day"): (1.05, 10_000), ("kr", "swing"): (0.45, 10_000_000), ("us", "swing"): (0.45, 10_000)})   # 예전 하루 $3 기준으로 동작만 본다
     from moa.autotrade import AUTO_SET
     at = env.at
     monkeypatch.setattr(at, "_per_usd", lambda style, model, web: ({"claude-sonnet-5-5": 0.2, "claude-haiku-4-5": 0.1}.get(model, 0.8) * (1 if web else 0.6), {"fx": 1400.0}))
@@ -1609,6 +1611,8 @@ def test_old_runs_show_full_plan_in_order(env):
 
 def test_lab_refits_when_daily_ai_budget_changes(env, monkeypatch):
     """하루 AI 비용 목표가 바뀌면(예전 $1 → $3) 돌고 있는 실험의 엔진·횟수를 묶음마다 한 번 다시 맞춘다."""
+    import moa.autotrade as ATM_OLD
+    monkeypatch.setattr(ATM_OLD, "AUTO_SET", {("kr", "day"): (1.05, 10_000_000), ("us", "day"): (1.05, 10_000), ("kr", "swing"): (0.45, 10_000_000), ("us", "swing"): (0.45, 10_000)})   # 예전 하루 $3 기준으로 동작만 본다
     at = env.at
     monkeypatch.setattr(at, "_per_usd", lambda style, model, web: ({"claude-sonnet-5-5": 0.2, "claude-haiku-4-5": 0.1}.get(model, 0.8) * (1 if web else 0.6), {"fx": 1400.0}))
     at.auto_set(True)
@@ -1772,6 +1776,8 @@ def test_review_uses_its_own_engine(env):
 def test_lab_cap_not_eaten_by_one_full_pick(env, monkeypatch):
     """실험(미국 스윙 등): 하루 한도는 정한 몫 아래로 내리지 않고, 정밀 추천이 남은 한도를 넘기면 그 차례는 빠른 재추천으로 받는다.
     한도와 쓴 돈은 묶음 합계로 본다."""
+    import moa.autotrade as ATM_OLD
+    monkeypatch.setattr(ATM_OLD, "AUTO_SET", {("kr", "day"): (1.05, 10_000_000), ("us", "day"): (1.05, 10_000), ("kr", "swing"): (0.45, 10_000_000), ("us", "swing"): (0.45, 10_000)})   # 예전 하루 $3 기준으로 동작만 본다
     at = env.at
     at.auto_set(True)
     lab = next(x for x in at.labs()["labs"] if (x["mkt"], x["style"]) == ("us", "swing"))
@@ -3116,3 +3122,11 @@ def test_two_week_check(env, monkeypatch):
     assert len(notes) == 2 and notes[0][1].endswith(":7") and notes[1][1].endswith(":14") and "통과" in notes[0][0]
     v2 = tr.restart()
     assert v2["start"] == D.today().isoformat() and v2["day"] == 1
+
+
+
+def test_auto_test_budget_fits_daily_cap():
+    """2026-11-25: 모의 자동 테스트의 하루 목표는 AI 하루 상한(기본 $2) 안에 든다(사용자가 $1.5를 고름)."""
+    import moa.autotrade as ATM
+    from moa.ai import DAY_CAP_DEFAULT
+    assert ATM.AUTO_DAY_USD == 1.5 and sum(v[0] for v in ATM.AUTO_SET.values()) < DAY_CAP_DEFAULT

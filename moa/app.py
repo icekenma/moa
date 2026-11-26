@@ -15,6 +15,7 @@ from .market import Cache
 from .settings import MASK
 from .trading import backtest as BT
 from .trading.strategy import STRATEGIES
+from .aipick import RULE_WARM as AP_RULE_WARM
 
 WEB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs")
 FORWARD_HEADERS = ("X-Forwarded-For", "X-Forwarded-Host", "Forwarded", "Tailscale-User-Login",
@@ -1620,6 +1621,31 @@ def create_app(rt, updater=None):
     @app.get("/api/auto/history")
     def auto_history():
         return jsonify(rt.autotrade.history(request.args.to_dict()))
+
+    @app.get("/api/rulebt")
+    def rulebt_view():
+        """AI 없이 거래 시험: 규칙 추천의 지금까지 성적(실제 추천을 채점한 것)과 마지막 과거 시험 결과."""
+        live = {}
+        for h in ("day", "swing"):
+            st = rt.aipick.rule_stats(None, h)
+            live[h] = {k: st[k] for k in ("n", "wins", "win_rate", "avg_pct")}
+        at = rt.autotrade
+        return jsonify(on=not rt.ai.configured(), auto=at.auto_on(), live=live, warm=AP_RULE_WARM, last=rt.rulebt.last())
+
+    @app.post("/api/rulebt")
+    def rulebt_start():
+        d = body()
+        try:
+            return jsonify(rt.rulebt.start(d.get("days"), d.get("top")))
+        except (ValueError, TypeError) as e:
+            return jsonify({"error": str(e)}), 400
+
+    @app.get("/api/rulebt/<jid>")
+    def rulebt_job(jid):
+        try:
+            return jsonify(rt.rulebt.job(jid))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 404
 
     @app.get("/api/replay")
     def replay_sources():

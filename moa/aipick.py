@@ -550,7 +550,7 @@ class AIPick:
     def memo(self, mkt, h):
         """가장 최근 정밀 추천(당일은 오늘, 중기는 최근 4일)이 찾은 시장 판단과 재료. 빠른 재추천이 뉴스를 다시 찾지 않고 이어받는다."""
         since = (datetime.now() - timedelta(days=0 if h == "day" else 4)).strftime("%Y-%m-%d")
-        for r in self.rt.db.q("SELECT ts, stance, view, picks, text, horizon FROM ai_picks WHERE mkt=? AND ts>=? AND COALESCE(lite,0)=0 ORDER BY id DESC LIMIT 12", (mkt, since)):
+        for r in self.rt.db.q("SELECT ts, stance, view, picks, text, horizon FROM ai_picks WHERE mkt=? AND ts>=? AND COALESCE(lite,0)=0 AND model!=? ORDER BY id DESC LIMIT 12", (mkt, since, RULE_MODEL)):
             if hz(r.get("horizon")) != h:
                 continue
             out = {"받은 시각": r["ts"][5:16].replace("T", " "), "stance": r["stance"], "시장 판단": r["view"], "판단 글": str(r["text"] or "")[:700]}
@@ -895,23 +895,11 @@ class AIPick:
         h = hz(h)
         if h != "day":
             return self.fallback_swing(mkt, h)
-        best, bs = None, -1e9
         ss = self._sess.get(mkt) or session(mkt)
-        for c in self._cands.get(mkt) or []:
-            f = c.get("오늘_5분봉")
-            if not isinstance(f, dict):
-                f = {}
-            cp = c.get("등락률%") or 0
-            if cp < -5 or cp > 20:
-                continue
-            sc = (f.get("VWAP대비%") or 0) * 2 + (f.get("최근30분%") or 0) * 1.5 + (f.get("고점대비%") or 0) \
-                + min(2.0, f.get("최근30분_거래량배수") or 0) + (c.get("호가_매수잔량/매도잔량") or 1) - 1 \
-                - abs(cp - 4) * 0.15  # 너무 급등·급락한 종목보다 +4% 안팎을 선호
-            sc += (self.learn_score(_feat_of(c, ss), "day", mkt) or 0) * 0.5  # 과거에 잘 통한 조건이면 가산
-            if sc > bs:
-                best, bs = c, sc
-        if not best:
+        ranked = self._rank_day(mkt, ss)
+        if not ranked:
             return None
+        best = ranked[0][1]
         q = self.quote(mkt, best["sym"])
         price = q.get("price") or best.get("현재가")
         return {"sym": best["sym"], "name": best.get("name") or best["sym"], "price": price, "change_pct": q.get("change_pct", best.get("등락률%")),
@@ -927,25 +915,12 @@ class AIPick:
         H = HORIZONS[h]
         ss = self._sess.get(mkt) or session(mkt)
         ix = self._idx.get(mkt) or {}
-        best, bs = None, -1e9
-        for c in self._cands.get(_ck(mkt, h)) or []:
-            f = c.get("일봉")
-            if not isinstance(f, dict):
-                continue
-            r5, cp = f.get("5일%") or 0, c.get("등락률%") or 0
-            if r5 > 30 or cp > 20 or cp < -6:
-                continue
-            sc = (1.5 if (f.get("20일선대비%") or 0) > 0 else -1.5) + max(-5, min(12, r5)) * 0.15 + min(2.0, f.get("5일거래량배수") or 0) \
-                + (1 if (f.get("60일고점대비%") or -99) > -8 else 0) - abs(cp - 3) * 0.1
-            sc += (self.learn_score(_feat_swing(c, {}, ss, ix, True), h, mkt) or 0) * 0.5
-            if sc > bs:
-                best, bs = c, sc
-        if not best:
+        ranked = self._rank_swing(mkt, h, ss, ix)
+        if not ranked:
             return None
+        best = ranked[0][1]
         f = best["일봉"]
-        atr = f.get("하루변동폭%") or 3
-        k = 1 if h == "swing" else 1.8
-        tp, sl = round(min(max(2.5 * atr * k, 6 * k), H["tp_max"] / 2), 1), round(min(max(1.4 * atr * k, 3.5 * k), H["sl_max"] * 0.7), 1)
+        tp, sl = swing_exits(f.get("하루변동폭%"), h)
         try:
             tn = self.tune(h, mkt)
             if tn.get("tp") and tn.get("sl"):
@@ -966,16 +941,134 @@ class AIPick:
         x["feat"] = _feat_swing(best, x, ss, ix, True)
         return x
 
+    # ----- 규칙 추천(v5.60): AI를 부르지 않고 같은 후보 자료를 지표 점수로 줄 세운다(비용 0)
+    def _rank_day(self, mkt, ss, learn=True):
+        """단타 후보를 지표 점수로 줄 세운다: [(점수, 후보)] 높은 순. 너무 급등·급락한 종목은 뺀다."""
+        out = []
+        for c in self._cands.get(mkt) or []:
+            sc = day_score(c)
+            if sc is None:
+                continue
+            if learn:
+                sc += (self.learn_score(_feat_of(c, ss), "day", mkt) or 0) * 0.5  # 과거에 잘 통한 조건이면 가산
+            out.append((sc, c))
+        out.sort(key=lambda x: -x[0])
+        return out
+
+    def _rank_swing(self, mkt, h, ss, ix, learn=True):
+        out = []
+        for c in self._cands.get(_ck(mkt, h)) or []:
+            sc = swing_score(c.get("일봉"), c.get("등락률%"))
+            if sc is None:
+                continue
+            if learn:
+                sc += (self.learn_score(_feat_swing(c, {}, ss, ix, True), h, mkt) or 0) * 0.5
+            out.append((sc, c))
+        out.sort(key=lambda x: -x[0])
+        return out
+
+    def rule_stats(self, mkt=None, h="day"):
+        """규칙 추천 자신의 지난 결과(끝난 것만): 건수·이긴 비율·평균."""
+        rows = _done_rows(self, mkt, h, model=RULE_MODEL)
+        n = len(rows)
+        w = sum(1 for r in rows if (r["net_pct"] or 0) > 0)
+        return {"n": n, "wins": w, "win_rate": round(w / n * 100, 1) if n else None,
+                "avg_pct": round(sum(r["net_pct"] for r in rows) / n, 2) if n else None, "rows": rows}
+
+    def rule_prob(self, mkt, h, score, st=None):
+        """규칙 추천의 승률: 지어내지 않고 규칙 추천 자신의 지난 결과(수수료 뺀 수익이 플러스였던 비율)로 센다.
+        같은 점수 구간(±15)의 비율을 전체 비율 쪽으로, 전체 비율은 50% 쪽으로 당긴다(표본 8건만큼). 표본이 RULE_WARM보다 적으면 None."""
+        st = st or self.rule_stats(None, h)
+        rows, n = st["rows"], st["n"]
+        if n < RULE_WARM:
+            return None, n
+        base = (st["wins"] + 8 * 0.5) / (n + 8)
+        band = [r for r in rows if abs((r["score"] or 0) - score) <= 15]
+        bw = sum(1 for r in band if (r["net_pct"] or 0) > 0)
+        return round((bw + 8 * base) / (len(band) + 8) * 100), n
+
+    def rule_pick(self, d):
+        """AI 없이 고르는 추천(규칙 추천). 지금 AI에 보내는 후보 자료(키움 순위·분봉/일봉)를 그대로 모아 지표 점수로 상위 3종목.
+        - 점수(0~100): 이번 후보 안에서의 순위(백분위). 승률: 규칙 추천 자신의 지난 결과(rule_prob). 처음 RULE_WARM건은 승률 없음.
+        - 목표·손절: 실제 결과에서 뽑은 손절 폭(tune, 없으면 기본값)에 손익비 RULE_RR을 곱한 목표.
+        - 시장 판단(stance): 지수가 크게 빠진 날은 '관망'(플랜에 따라 쉬거나 작게 삼), 아니면 '보통'.
+        ai_picks에 model='rule'로 남겨 추천 성적표가 채점한다(AI 학습·AI 성적에는 섞지 않는다). 주문은 내지 않는다."""
+        h = hz(d.get("horizon"))
+        H = HORIZONS[h]
+        mkt = "us" if d.get("mkt") == "us" else "kr"
+        swing = h != "day"
+        self.context(dict(d, lite=False, web_search=False, theme=""))   # 후보·특징값을 모은다(AI를 부르지 않는다)
+        ss = self._sess.get(mkt) or session(mkt)
+        ix = self._idx.get(mkt) or {}
+        ranked = self._rank_swing(mkt, h, ss, ix) if swing else self._rank_day(mkt, ss)
+        st = self.rule_stats(None, h)
+        idx = None
+        try:
+            idx = self.rt.autotrade.index_pct(mkt)
+        except Exception:
+            pass
+        weak = idx is not None and idx <= RULE_WEAK[h]
+        try:
+            tn = self.tune(h, mkt)
+        except Exception:
+            tn = {}
+        end_d = swing_end(mkt, kst_now().replace(tzinfo=None), H["days"])[1].isoformat() if swing else ""
+        n_all = len(ranked)
+        picks = []
+        for i, (raw, c) in enumerate(ranked[:3]):
+            score = int(round(100 * (n_all - i) / n_all)) if n_all else 0
+            q = self.quote(mkt, c["sym"])
+            price = q.get("price") or c.get("현재가")
+            if not price:
+                continue
+            if swing:
+                tp0, sl = swing_exits((c.get("일봉") or {}).get("하루변동폭%"), h)
+            else:
+                sl = 1.0
+            if tn.get("ready") and tn.get("sl"):
+                sl = float(tn["sl"])
+            tp = round(min(sl * RULE_RR, H["tp_max"]), 2)
+            wp, wn = self.rule_prob(mkt, h, score, st)
+            x = {"sym": c["sym"], "name": c.get("name") or c["sym"], "price": price, "change_pct": q.get("change_pct", c.get("등락률%")),
+                 "exch": q.get("exch"), "score": score, "win_prob": wp, "rule": True, "rule_n": wn, "rule_raw": round(raw, 2),
+                 "cal_prob": None, "cal_n": 0, "entry_type": "market", "entry_price": price,
+                 "target_pct": tp, "stop_pct": round(sl, 2), "trail_pct": 0, "weight_pct": 10,
+                 "risks": ["뉴스·공시를 읽지 않고 지표만 본 추천이에요"]}
+            if swing:
+                f = c["일봉"]
+                x.update(horizon=h, hold_days=H["days"], end_date=end_d, theme="", catalyst="재료 확인 없이 일봉 흐름만으로 고른 후보예요",
+                         catalyst_type="기술적", catalyst_date="", in_cand=True, idx0=ix.get("price"), idx_sym=ix.get("sym"), daily=f,
+                         reasons=[f"규칙 점수 {i + 1}위/{n_all}: 20일선 {'위' if (f.get('20일선대비%') or 0) > 0 else '아래'} · 5일 {f.get('5일%') or 0:+.1f}% · "
+                                  f"거래량 {f.get('5일거래량배수') or 0:g}배 · 60일 고점 대비 {f.get('60일고점대비%') or 0:+.1f}%"])
+                x["feat"] = _feat_swing(c, x, ss, ix, True)
+            else:
+                f = c.get("오늘_5분봉") if isinstance(c.get("오늘_5분봉"), dict) else {}
+                x.update(exit_by="15:00" if mkt == "kr" else "", feat=_feat_of(c, ss),
+                         reasons=[f"규칙 점수 {i + 1}위/{n_all}: VWAP 대비 {f.get('VWAP대비%') or 0:+.2f}% · 최근 30분 {f.get('최근30분%') or 0:+.2f}% · "
+                                  f"거래량 {f.get('최근30분_거래량배수') or 0:g}배 · 오늘 {c.get('등락률%') or 0:+.1f}%"])
+            x["reasons"].append(f"손절 {x['stop_pct']:g}% · 목표 {tp:g}%(손익비 {RULE_RR:g})" + (" · 실제 결과로 맞춘 손절 폭" if tn.get("ready") else ""))
+            picks.append(x)
+        stance = "관망" if weak else "보통"
+        view = (f"지수 {idx:+.2f}%" if idx is not None else "지수 자료 없음") + (" · 약한 날이라 관망" if weak else "") + f" · 후보 {n_all}종목을 지표 점수로 줄 세움"
+        note = "" if picks else "조건에 맞는 후보가 없었어요"
+        text = ("AI를 쓰지 않은 규칙 추천이에요. 후보 자료를 지표 점수로 줄 세워 위에서부터 골랐어요"
+                + (f" · 규칙 추천 성적 {st['n']}건 이긴 비율 {st['win_rate']:g}%" if st["n"] else " · 아직 규칙 추천 성적이 없어요"))
+        pid = self.rt.db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text,horizon,theme,lv,lite) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (datetime.now().isoformat(timespec="seconds"), mkt, RULE_MODEL, 0.0, stance, view,
+                            json.dumps(picks, ensure_ascii=False), text, h, "", 0, 0))
+        return {"id": pid, "stance": stance, "view": view, "picks": picks, "mkt": mkt, "note": note, "rule": True,
+                "horizon": h, "label": H["label"], "theme": "", "lite": False}
+
     def today(self):
         d = datetime.now().strftime("%Y-%m-%d")
         w = self.rt.db.one("SELECT COUNT(*) n FROM ai_guards WHERE status='watching'")["n"]
         done = self.rt.db.q("SELECT base, entry, exit_price FROM ai_guards WHERE status='done' AND closed_at LIKE ?", (d + "%",))
         pl = [(r["exit_price"] / (r["base"] or r["entry"]) - 1) * 100 for r in done if r["exit_price"] and (r["base"] or r["entry"])]
-        n = self.rt.db.one("SELECT COUNT(*) n FROM ai_picks WHERE ts LIKE ? AND COALESCE(lite,0)=0", (d + "%",))["n"]
+        n = self.rt.db.one("SELECT COUNT(*) n FROM ai_picks WHERE ts LIKE ? AND COALESCE(lite,0)=0 AND model!=?", (d + "%", RULE_MODEL))["n"]
         return {"watching": w, "done_today": len(done), "avg_pct": round(sum(pl) / len(pl), 2) if pl else 0, "picks_today": n}
 
     def history(self):
-        rows = self.rt.db.q("SELECT id,ts,mkt,model,usd,stance,view,picks,horizon,theme FROM ai_picks WHERE COALESCE(lite,0)=0 ORDER BY id DESC LIMIT 30")
+        rows = self.rt.db.q("SELECT id,ts,mkt,model,usd,stance,view,picks,horizon,theme FROM ai_picks WHERE COALESCE(lite,0)=0 AND model!=? ORDER BY id DESC LIMIT 30", (RULE_MODEL,))
         for r in rows:
             r["picks"] = json.loads(r["picks"] or "[]")
             r["horizon"] = hz(r.get("horizon"))
@@ -1140,6 +1233,43 @@ class AIPick:
 # 추천 성적: 사지 않았어도 추천 시점 이후 실제 가격으로 결과를 매긴다
 # ======================================================================
 FEE = {"kr": 0.2, "us": 0.25}  # 왕복 비용(%)
+# 규칙 추천(AI 안 씀, v5.60)
+RULE_MODEL = "rule"                                     # ai_picks·ai_outcomes의 model 값
+RULE_WARM = 20                                          # 규칙 추천 자신의 끝난 결과가 이만큼 쌓이기 전에는 승률을 말하지 않는다
+RULE_RR = 1.8                                           # 목표 = 손절 폭 × 이 배수
+RULE_WEAK = {"day": -1.0, "swing": -1.5, "month": -2.0}  # 지수가 이만큼 빠진 날은 '관망'
+
+
+def day_score(c):
+    """단타 후보(오늘 5분봉 특징)의 지표 점수. 너무 급등·급락한 종목은 None. 규칙 추천·AI 예비 종목이 함께 쓴다."""
+    f = c.get("오늘_5분봉")
+    if not isinstance(f, dict):
+        f = {}
+    cp = c.get("등락률%") or 0
+    if cp < -5 or cp > 20:
+        return None
+    return (f.get("VWAP대비%") or 0) * 2 + (f.get("최근30분%") or 0) * 1.5 + (f.get("고점대비%") or 0) \
+        + min(2.0, f.get("최근30분_거래량배수") or 0) + (c.get("호가_매수잔량/매도잔량") or 1) - 1 \
+        - abs(cp - 4) * 0.15  # 너무 급등·급락한 종목보다 +4% 안팎을 선호
+
+
+def swing_score(f, cp):
+    """스윙·장기 후보(일봉 특징)의 지표 점수: 추세 위 + 거래량이 붙고 + 아직 덜 오른 종목. 과거 시험(rulebt)도 같은 식을 쓴다."""
+    if not isinstance(f, dict):
+        return None
+    r5, cp = f.get("5일%") or 0, cp or 0
+    if r5 > 30 or cp > 20 or cp < -6:
+        return None
+    return (1.5 if (f.get("20일선대비%") or 0) > 0 else -1.5) + max(-5, min(12, r5)) * 0.15 + min(2.0, f.get("5일거래량배수") or 0) \
+        + (1 if (f.get("60일고점대비%") or -99) > -8 else 0) - abs(cp - 3) * 0.1
+
+
+def swing_exits(atr, h):
+    """일봉 흔들림(하루 변동폭 %)으로 잡는 기본 목표·손절(%)."""
+    H = HORIZONS[hz(h)]
+    atr = atr or 3
+    k = 1 if hz(h) == "swing" else 1.8
+    return round(min(max(2.5 * atr * k, 6 * k), H["tp_max"] / 2), 1), round(min(max(1.4 * atr * k, 3.5 * k), H["sl_max"] * 0.7), 1)
 
 
 def _bar_dt(t, ref):
@@ -1471,6 +1601,9 @@ def stats(self, days=0, mkt="", model="", horizon="day", kind=""):
     if model:
         q += " AND model=?"
         a.append(model)
+    else:                                         # AI 성적표: 규칙 추천(AI 아님)은 model='rule'로 따로 볼 때만
+        q += " AND model!=?"
+        a.append(RULE_MODEL)
     if kind in ("full", "lite"):                 # 정밀 추천만 · 빠른 재추천만
         q += " AND COALESCE(lite,0)=?"
         a.append(1 if kind == "lite" else 0)
@@ -1712,10 +1845,12 @@ def _ensure_cols(db):
             pass
 
 
-def _done_rows(self, mkt=None, h="day"):
+def _done_rows(self, mkt=None, h="day", model=None):
     _ensure_cols(self.rt.db)
     # 학습(통계·승률 보정·자동 조정·복기·과거성적 가산점)은 정밀 추천만 쓴다. 빠른 재추천(가장 싼 엔진, 뉴스 없이)은 성적표에서만 따로 본다
-    rows = self.rt.db.q("SELECT * FROM ai_outcomes WHERE status='done' AND net_pct IS NOT NULL AND COALESCE(horizon,'day')=? AND COALESCE(lite,0)=0 ORDER BY ts", (hz(h),))
+    # 규칙 추천(model='rule', AI 아님)은 AI 학습에 섞지 않는다. model=RULE_MODEL이면 규칙 추천만
+    rows = self.rt.db.q("SELECT * FROM ai_outcomes WHERE status='done' AND net_pct IS NOT NULL AND COALESCE(horizon,'day')=? AND COALESCE(lite,0)=0 AND "
+                        + ("model=?" if model == RULE_MODEL else "model!=?") + " ORDER BY ts", (hz(h), RULE_MODEL))
     rows = [r for r in rows if r["result"] in FIN]
     votes = self.rt.myview.votes() if getattr(self.rt, "myview", None) else {}
     for r in rows:

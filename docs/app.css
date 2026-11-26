@@ -4272,3 +4272,28 @@ html .rp-k .rp-step>.rp-in{flex:0 0 auto;margin:0}
 .tr-tb thead th{font-size:11.5px;font-weight:600;color:var(--ink2,#777);border-top:0}
 .tr-tb small{display:block;font-size:10.5px;color:var(--ink2,#777)}
 .tr-card .btn.sm{align-self:flex-start}
+/* AI 없이 거래 시험(v5.60, rb-) */
+.rb-card{padding:14px 15px 12px;display:flex;flex-direction:column;gap:9px}
+.rb-h{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.rb-h b{font-size:15px;font-weight:800;letter-spacing:-.02em}
+.rb-state{font-size:11.5px;font-weight:700;padding:3px 8px;border-radius:999px;background:color-mix(in srgb,currentColor 10%,transparent)}
+.rb-state.on{background:color-mix(in srgb,#1FA971 20%,transparent);color:#1FA971}
+.rb-sub,.rb-note{margin:0;font-size:12px;line-height:1.5;color:var(--ink2,#666)}
+.rb-ks{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px}
+.rb-k{display:flex;flex-direction:column;gap:2px;padding:9px 10px;border-radius:11px;background:color-mix(in srgb,currentColor 6%,transparent);min-width:0}
+.rb-k small{font-size:11.5px;color:var(--ink2,#666)}
+.rb-k b{font-size:18px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.rb-k em{font-style:normal;font-size:11.5px;color:var(--ink2,#666);font-variant-numeric:tabular-nums}
+.rb-bt{display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px solid color-mix(in srgb,currentColor 9%,transparent)}
+.rb-bt-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.rb-bt-h b{font-size:13.5px;font-weight:800}
+.rb-bt-h small{font-size:11.5px;color:var(--ink2,#666);font-variant-numeric:tabular-nums}
+.rb-go{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.rb-tr summary{font-size:12.5px;font-weight:700;cursor:pointer}
+.rb-rows{display:flex;flex-direction:column;margin-top:6px}
+.rb-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid color-mix(in srgb,currentColor 8%,transparent);font-variant-numeric:tabular-nums}
+.rb-row span{display:flex;flex-direction:column;min-width:0}
+.rb-row span b{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rb-row small{font-size:11.5px;color:var(--ink2,#666)}
+.rb-link{padding:0 1px}
+.rb-chip{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:color-mix(in srgb,#1FA971 18%,transparent);color:#1FA971}

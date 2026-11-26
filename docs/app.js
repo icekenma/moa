@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261125.1947";
+const UI_VERSION = "261126.1903";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -2059,7 +2059,7 @@ pages.invest = {
       const head = `<span class="g-st-h"><i class="mk-tag ${a.mkt}">${kr ? "국내" : "미국"}</i><b>${esc(a.style_label)}</b>${N && N.busy ? `<em class="g-scan">${G.ico.radar}스캔 중</em>` : L ? `<span class="live-dot ${L.status === "running" ? "on" : ""}"></span>` : ""}</span>`;
       if (!L) return `<div class="g-st ${a.mkt} off">${head}<div class="g-track empty"><span>${S.on ? "곧 시작해요" : "꺼져 있어요"}</span></div><span class="g-st-f">끝난 거래 ${a.trades}건</span></div>`;
       const lead = race(L).filter((r) => r.n || r.open).sort((x, y) => y.net - x.net)[0];
-      const when = !N ? "" : N.busy ? "AI 추천 받는 중" : N.next.kind === "at" ? `다음 추천 ${esc(N.next.text)}` : N.next.kind === "soon" ? "곧 추천을 받아요" : esc(N.next.label).slice(0, 22);
+      const when = !N ? "" : N.busy ? (N.picker === "rule" ? "규칙으로 고르는 중" : "AI 추천 받는 중") : N.next.kind === "at" ? `다음 추천 ${esc(N.next.text)}` : N.next.kind === "soon" ? "곧 추천을 받아요" : esc(N.next.label).slice(0, 22);
       return `<button type="button" class="g-st ${a.mkt}" data-lab="${L.id}">${head}
         ${G.trackMini(race(L))}
         <span class="g-st-lead">${a.best ? `<span class="g-crown">⭐</span><b>실전 후보 · ${esc(a.best.label)}</b><b class="${tone(a.best.net_pct)}">${pct(a.best.net_pct, 2)}</b>` : lead ? `<span class="g-crown">👑</span><b>${esc(lead.label)}</b><b class="${tone(lead.net)}">${pct(lead.net, 2)}</b>` : "<span>출발 전</span>"}</span>
@@ -2244,8 +2244,7 @@ pages.invest = {
   },
   atReadyHtml(R) {
     const rows = [];
-    if (R.ai_off) rows.push(`AI(Claude API)를 꺼 두었어요. 새 추천을 받지 않아 새로 사지 않고, 들고 있는 종목은 손절·익절 규칙대로 계속 관리해요. <a href="#settings/ai">AI 설정에서 켜기</a>`);
-    else if (!R.ai) rows.push(`Claude API 키가 없어요. <a href="#settings/ai">AI 설정에서 넣기</a>`);
+    if (R.ai_off || !R.ai) rows.push(`AI(Claude API)를 ${R.ai_off ? "꺼 두었어요" : "쓰지 않아요"}. <b>모의는 규칙 추천(AI 안 씀, 비용 0)으로 계속 사고팔아요.</b> 실전은 새로 사지 않고 들고 있는 종목만 손절·익절 규칙대로 관리해요. <a href="#settings/ai">AI 설정</a>`);
     if (!R.data) rows.push(`실시간 순위를 받으려면 키움 계좌 연결이 필요해요. <a href="#settings/accounts">계좌 연결하기</a>`);
     return rows.map((r) => `<div class="notice warn">${r}</div>`).join("");
   },
@@ -2256,7 +2255,7 @@ pages.invest = {
       <div class="at-run-mid"><span class="at-eq">${this.atM(r.mkt, m.equity)}</span><span class="at-ret ${tone(m.ret_pct)}">${pct(m.ret_pct, 2)}</span></div>
       ${r.now ? (r.now.busy ? this.atScanHtml(r.now, true) : `<div class="at-run-next"><span class="at-dot ${r.status === "running" && r.now.engine.ok ? "on" : ""}"></span><span>${esc(r.now.next.label)}</span></div>
       <div class="small">${this.atNextLine(r.now)}</div>`) : ""}
-      <div class="tiny">${r.mode === "real" ? "실전" : "모의"} · ${r.mkt === "us" ? "미국" : "국내"} ${esc(r.style_label)} · ${r.start_date.slice(5).replace("-", "/")}~${r.end_date.slice(5).replace("-", "/")} · 거래 ${r.closed}건${r.closed ? ` (승 ${r.wins})` : ""} · 보유 ${r.open}${r.now ? ` · 오늘 추천 ${r.now.today.cycles}/${r.now.today.cycles_max}` : ""}</div>
+      <div class="tiny">${r.now && r.now.picker === "rule" ? `<span class="rb-chip">규칙 추천 · AI 안 씀</span> ` : ""}${r.mode === "real" ? "실전" : "모의"} · ${r.mkt === "us" ? "미국" : "국내"} ${esc(r.style_label)} · ${r.start_date.slice(5).replace("-", "/")}~${r.end_date.slice(5).replace("-", "/")} · 거래 ${r.closed}건${r.closed ? ` (승 ${r.wins})` : ""} · 보유 ${r.open}${r.now ? ` · 오늘 추천 ${r.now.today.cycles}/${r.now.today.cycles_max}` : ""}</div>
     </button>`;
   },
   // ----- 2주 점검(v5.57): 투자 부분 개선 효과를 네 가지 숫자로. 판단은 사용자가 한다
@@ -2296,6 +2295,58 @@ pages.invest = {
     };
   },
 
+  // ----- AI 없이 거래 시험(v5.60): 규칙 추천의 실제 성적 + 지난 일봉으로 과거 시험(스윙·국내). 비용 0, 주문 없음
+  async atRuleBt(box, jobId) {
+    let R;
+    try { R = await GET("/api/rulebt"); } catch (e) { return; }
+    if (!box.isConnected || investState.tab !== "auto") return;
+    const S = this.rbS || (this.rbS = {});
+    const p2 = (v) => (v == null ? "-" : `${v >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`);
+    const live = (h, nm) => { const x = R.live[h] || {};
+      return `<div class="rb-k"><small>${nm}</small>${x.n ? `<b class="${tone(x.avg_pct)}">${p2(x.avg_pct)}</b><em>${x.n}건 · 이긴 비율 ${x.win_rate}%</em>` : `<b>-</b><em>아직 채점된 추천이 없어요</em>`}</div>`; };
+    const L = R.last, A = L && L.all;
+    const half = (x) => (x && x.n ? `${x.n}건 ${p2(x.avg)}` : "-");
+    const el = document.createElement("section");
+    el.className = "card rb-card";
+    el.innerHTML = `<div class="rb-h"><b>AI 없이 거래 시험</b><span class="rb-state ${R.on ? "on" : ""}">${R.on ? (R.auto ? "규칙 추천으로 모의 거래 중" : "규칙 추천 준비됨") : "AI가 켜져 있어 모의도 AI 추천"}</span></div>
+      <p class="rb-sub">AI를 부르지 않고, AI에 보내던 후보 자료(키움 순위·분봉·일봉)를 지표 점수로 줄 세워 위에서부터 사요. 비용 0, 실전 주문은 나가지 않아요.</p>
+      <div class="rb-ks">${live("day", "단타 규칙 추천")}${live("swing", "스윙 규칙 추천")}</div>
+      <div class="rb-note">추천마다 실제 가격으로 채점한 거래당 평균(수수료 뺀)이에요. ${R.warm}건이 쌓이면 그 성적으로 승률을 매겨 승률 기준에도 써요.</div>
+      <div class="rb-bt">
+        <div class="rb-bt-h"><b>지난 일봉으로 시험 · 스윙 국내</b>${L ? `<small>${esc((L.from || "").slice(2).replace(/-/g, "/"))}~${esc((L.to || "").slice(2).replace(/-/g, "/"))} · ${L.stocks}종목</small>` : ""}</div>
+        ${A && A.n ? `<div class="rb-ks">
+            <div class="rb-k"><small>거래당 평균</small><b class="${tone(A.avg)}">${p2(A.avg)}</b><em>${A.n}건 · 이긴 비율 ${A.win}%</em></div>
+            <div class="rb-k"><small>후보 전체를 샀다면</small><b class="${tone(L.base.avg)}">${p2(L.base.avg)}</b><em>차이 <span class="${tone(L.edge)}">${L.edge == null ? "-" : `${L.edge >= 0 ? "+" : ""}${L.edge.toFixed(2)}%p`}</span></em></div>
+            <div class="rb-k"><small>1천만 원 굴렸다면</small><b class="${tone(A.ret)}">${p2(A.ret)}</b><em>최대 낙폭 -${A.mdd}%</em></div></div>
+          <div class="rb-note">앞 70% ${half(L.first)} · 뒤 30% ${half(L.last)} — 두 구간이 비슷해야 우연이 아닐 가능성이 커요. 지금 거래대금이 큰 종목으로만 시험해 그 사이 사라진 종목은 빠져 있어요(실제보다 좋게 나올 수 있음).</div>
+          <details class="rb-tr"><summary>최근 거래 ${L.trades.length}건</summary><div class="rb-rows">${L.trades.map((t) => `<div class="rb-row"><span><b>${esc(t.name)}</b><small>${esc(t.entry_day.slice(5).replace("-", "/"))}→${esc(t.exit_day.slice(5).replace("-", "/"))} · ${esc(t.result)}</small></span><b class="${tone(t.net)}">${p2(t.net)}</b></div>`).join("")}</div></details>`
+        : L ? `<div class="rb-note">시험 기간에 산 종목이 없었어요.</div>` : `<div class="rb-note">아직 시험하지 않았어요. 키움에서 거래대금 상위 80종목의 일봉(최대 600일)을 받아, 날마다 장이 끝난 뒤 점수로 골라 다음 날 시가에 산 것으로 셈해요.</div>`}
+        <div class="rb-go"><button type="button" class="btn dark sm" id="rbGo"${S.job ? " disabled" : ""}>${S.job ? "시험하는 중" : L ? "다시 시험" : "지난 1년으로 시험"}</button><span class="tiny" id="rbMsg">${esc(S.msg || "1~3분 · 비용 없음")}</span></div>
+      </div>
+      <a class="tiny rb-link" href="#invest/backtest">단타 규칙(분봉)은 백테스트·조건 훑기에서 시험해요 ›</a>`;
+    const old = $(".rb-card", box);
+    if (old) old.replaceWith(el);
+    else { const tr = $(".tr-card", box) || $(".at-top", box) || $(".g-lobby-top", box); if (tr) tr.after(el); else box.prepend(el); }
+    const poll = async (id) => {
+      S.job = id;
+      for (let i = 0; i < 240; i++) {
+        await new Promise((r) => setTimeout(r, 2500));
+        let j;
+        try { j = await GET(`/api/rulebt/${id}`); } catch (e) { S.msg = e.message; break; }
+        S.msg = j.state === "running" ? `${j.msg} (${j.sec}초)` : j.state === "error" ? j.error : "";
+        const m = $("#rbMsg"); if (m) m.textContent = S.msg;
+        if (j.state !== "running") break;
+      }
+      S.job = null;
+      if (box.isConnected && investState.tab === "auto") this.atRuleBt(box);
+    };
+    $("#rbGo", el).onclick = async (e) => {
+      e.currentTarget.disabled = true;
+      try { const r = await api("POST", "/api/rulebt", {}); poll(r.id); } catch (err) { S.msg = err.message; this.atRuleBt(box); }
+    };
+    if (jobId && !S.job) poll(jobId);
+  },
+
   // ----- 목록: 한 화면에 들어오게. 모의 자동 테스트는 시장×방식 네 칸, 직접 만든 것은 한 줄씩. 자세한 것은 눌러서 본다
   async atList(box) {
     const A = this.atState(), [O, LB] = await Promise.all([GET("/api/auto"), GET("/api/auto/lab")]);
@@ -2315,6 +2366,7 @@ pages.invest = {
           <span class="at-row-v"><small>끝남</small></span></button>`).join("")}</section></details>` : ""}
       <div class="tiny" style="padding:0 3px">수익을 보장하지 않아요. 손실 한도에 닿으면 스스로 멈추지만, 급변할 때는 한도보다 더 잃을 수 있어요.</div>`;
     this.atTrial(box);
+    this.atRuleBt(box);
     $("#atNewBtn").onclick = () => { A.view = "new"; A.pv = null; this.auto(box); };
     $("#atBell").onclick = () => openSheet("자동매매 알림", `<div id="nfSheet" class="nf-sheet"><div class="empty small loading">알림 설정을 여는 중</div></div>`, () => pages.settings.notifyBox($("#nfSheet"), { sheet: true }));
     box.onclick = async (e) => {
@@ -2445,7 +2497,7 @@ pages.invest = {
     return `<button type="button" class="at-row ${r.mkt}" data-run="${r.id}">
       <span class="mk-tag ${r.mkt}">${r.mkt === "kr" ? "국내" : "미국"}</span>
       <span class="at-row-n"><b>${esc(r.name)}${r.pending ? ` <i class="tag warn">개선안 ${r.pending}</i>` : ""}</b>
-        <small>${r.mode === "real" ? "실전" : "모의"} · ${lbl}${n ? ` · ${n.busy ? "AI 추천 받는 중" : esc(n.next.kind === "at" ? `다음 ${n.next.text}` : n.next.label).slice(0, 30)}` : ""} · 거래 ${r.closed} · 보유 ${r.open}</small></span>
+        <small>${r.mode === "real" ? "실전" : "모의"}${n && n.picker === "rule" ? " · 규칙 추천" : ""} · ${lbl}${n ? ` · ${n.busy ? (n.picker === "rule" ? "규칙으로 고르는 중" : "AI 추천 받는 중") : esc(n.next.kind === "at" ? `다음 ${n.next.text}` : n.next.label).slice(0, 30)}` : ""} · 거래 ${r.closed} · 보유 ${r.open}</small></span>
       <span class="at-row-v"><b>${this.atM(r.mkt, m.equity)}</b><small class="${tone(m.ret_pct)}">${pct(m.ret_pct, 2)}</small></span></button>`;
   },
   // 모의 자동 테스트: 스위치 한 줄 + 시장×방식 네 칸. 칸을 누르면 그 실험의 자세한 화면
@@ -2458,7 +2510,7 @@ pages.invest = {
       const head = `<span class="at-cell-h"><i class="mk-tag ${a.mkt}">${kr ? "국내" : "미국"}</i><b>${esc(a.style_label)}</b>${L ? `<em class="live-dot ${L.status === "running" ? "on" : ""}">${L.status === "running" ? "" : "멈춤"}</em>` : ""}</span>`;
       if (!L) return `<div class="at-cell off ${a.mkt}">${head}<span class="at-cell-s">${S.on ? "곧 시작해요" : "꺼져 있어요"}</span><span class="at-cell-f">끝난 거래 ${a.trades}건</span></div>`;
       const N = L.now, best = L.runs.filter((x) => x.closed || x.open).sort((x, y) => y.net_ret_pct - x.net_ret_pct)[0];
-      const when = !N ? "" : N.busy ? "AI 추천 받는 중" : N.next.kind === "at" ? `다음 추천 ${esc(N.next.text)}` : N.next.kind === "soon" ? "곧 추천을 받아요" : esc(N.next.label).slice(0, 26);
+      const when = !N ? "" : N.busy ? (N.picker === "rule" ? "규칙으로 고르는 중" : "AI 추천 받는 중") : N.next.kind === "at" ? `다음 추천 ${esc(N.next.text)}` : N.next.kind === "soon" ? "곧 추천을 받아요" : esc(N.next.label).slice(0, 26);
       const u = U["lab:" + L.id], M = T && T.mkt[a.mkt], dl = M && !M.is_today ? "지난 장" : "오늘";
       return `<button type="button" class="at-cell ${a.mkt} ${N && N.busy ? "busy" : ""}" data-lab="${L.id}">${head}
         <span class="at-cell-s">${when}</span>
@@ -2470,7 +2522,7 @@ pages.invest = {
     const cand = S.advice.filter((a) => a.best);
     return `<section class="card at-auto ${S.on ? "on" : ""}">
         <div class="at-auto-top"><div><b>모의 자동 테스트</b>
-          <span>AI 비용 오늘 $${S.usd_today.toFixed(2)} / 하루 $${S.day_cap_usd} · 지금까지 $${S.usd_all.toFixed(2)}(${won(S.cur_all)}원)</span></div>
+          <span>${labs.some((L) => L.now && L.now.picker === "rule") ? "규칙 추천(AI 안 씀)으로 사고파는 중 · 비용 0 · " : ""}AI 비용 오늘 $${S.usd_today.toFixed(2)} / 하루 $${S.day_cap_usd} · 지금까지 $${S.usd_all.toFixed(2)}(${won(S.cur_all)}원)</span></div>
           <button type="button" class="switch" role="switch" id="atAutoSw" aria-checked="${!!S.on}" aria-label="모의 자동 테스트"><span></span></button></div>
         <div class="at-grid">${S.advice.slice().sort((a, b) => (a.mkt === b.mkt ? 0 : a.mkt === "kr" ? -1 : 1)).map(cell).join("")}</div>
         ${cand.map((a) => `<div class="at-cand"><span><b>${a.mkt === "kr" ? "국내" : "미국"} ${esc(a.style_label)} 실전 후보</b><small>${esc(a.text)}</small></span>
@@ -2660,7 +2712,7 @@ pages.invest = {
     try { pv = A.pv = await api("POST", "/api/auto/plan", this.atBody()); }
     catch (e) { if (e instanceof Locked || e instanceof NeedConnect) throw e; el.innerHTML = `<div class="notice warn">${esc(e.message)}</div>`; return; }
     if (!$("#atPlan") || A.view !== "new") return;
-    const p = pv.params, c = pv.ai_cost, real = F.mode === "real", ok = A.o.ready.ai && A.o.ready.data && (!real || A.o.ready.real.ok);
+    const p = pv.params, c = pv.ai_cost, real = F.mode === "real", ok = (A.o.ready.ai || !real) && A.o.ready.data && (!real || A.o.ready.real.ok);
     F.daily = p.daily_loss_pct; F.total = p.total_loss_pct;
     el.innerHTML = `<section class="card">
         <div class="card-head"><h2>이 조건의 플랜</h2><span class="tiny">시작한 뒤에도 고칠 수 있어요</span></div>

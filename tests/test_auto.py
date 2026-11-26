@@ -113,7 +113,9 @@ def test_create_validates(env):
 
 def test_create_needs_ai_and_data(rt, monkeypatch):
     at = rt.autotrade
-    with pytest.raises(ValueError, match="API 키"):
+    with pytest.raises(ValueError, match="실전은 AI 추천"):                 # 실전은 AI가 있어야, 모의는 AI 없이도(규칙 추천) — 키움은 둘 다 필요
+        at.create({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 10, "mode": "real"})
+    with pytest.raises(ValueError, match="키움 계좌"):
         at.create({"budget": 1_000_000, "mkt": "kr", "style": "day", "days": 10})
     monkeypatch.setattr(at, "ready", lambda: {"ai": True, "data": False, "real": {"ok": False, "why": "x", "label": None}})
     with pytest.raises(ValueError, match="키움 계좌"):
@@ -3018,10 +3020,12 @@ def test_replay_recorded_picks(env):
     d0 = date.today() - timedelta(days=6)
     while d0.weekday() >= 5:
         d0 += timedelta(days=1)
-    for k in range(3):
-        day = d0 + timedelta(days=k)
-        while day.weekday() >= 5:
-            day += timedelta(days=1)
+    days_, day = [], d0
+    while len(days_) < 3:                     # 서로 다른 평일 3일(주말을 건너뛰어도 같은 날이 두 번 나오지 않게)
+        if day.weekday() < 5:
+            days_.append(day)
+        day += timedelta(days=1)
+    for day in days_:
         ts = datetime(day.year, day.month, day.day, 9, 30)
         picks = [{"sym": "A", "name": "에이", "price": 100, "entry_price": 100, "target_pct": 3, "stop_pct": 1.5, "win_prob": 62, "score": 70},
                  {"sym": "B", "name": "비", "price": 200, "entry_price": 200, "target_pct": 3, "stop_pct": 1.5, "win_prob": 52, "score": 70}]
@@ -3135,3 +3139,121 @@ def test_auto_test_budget_fits_daily_cap():
     import moa.autotrade as ATM
     from moa.ai import DAY_CAP_DEFAULT
     assert ATM.AUTO_DAY_USD == 1.5 and sum(v[0] for v in ATM.AUTO_SET.values()) < DAY_CAP_DEFAULT
+
+
+# ---------- AI 없이 거래 시험(규칙 추천, v5.60) ----------
+def _rule_cands(env, monkeypatch):
+    """규칙 추천이 쓰는 후보 자료를 테스트가 넣는다(키움 순위·분봉 대신)."""
+    ap = env.rt.aipick
+    cands = [
+        {"sym": "005930", "name": "삼성전자", "등락률%": 3.5, "현재가": 70000, "오늘_5분봉": {"VWAP대비%": 0.8, "최근30분%": 0.6, "고점대비%": -0.2, "최근30분_거래량배수": 1.6}},
+        {"sym": "000660", "name": "SK하이닉스", "등락률%": 1.0, "현재가": 150000, "오늘_5분봉": {"VWAP대비%": -0.4, "최근30분%": -0.3, "고점대비%": -1.5, "최근30분_거래량배수": 0.8}},
+        {"sym": "035420", "name": "NAVER", "등락률%": 25.0, "현재가": 200000, "오늘_5분봉": {"VWAP대비%": 2.0, "최근30분%": 2.0}},   # 너무 급등 → 뺌
+    ]
+    calls = []
+
+    def ctx(d):
+        calls.append(d)
+        ap._cands[d.get("mkt") or "kr"] = [dict(c) for c in cands if c["sym"] not in set(d.get("exclude") or [])]
+        return "t", "a", {}
+    monkeypatch.setattr(ap, "context", ctx)
+    monkeypatch.setattr(ap, "quote", lambda mkt, sym: {"price": env.px.get(sym), "name": sym, "change_pct": 1.0})
+    return calls
+
+
+def test_rule_pick_trades_paper_without_ai(env, monkeypatch):
+    """AI가 꺼져 있어도 모의는 규칙 추천(AI를 부르지 않음)으로 사고, 실전은 사지 않는다. 규칙 추천은 AI 학습·AI 성적과 섞이지 않는다."""
+    import moa.aipick as AP2
+    at = env.at
+    monkeypatch.setattr(env.rt.ai, "configured", lambda: False)
+    monkeypatch.setattr(env.rt.ai, "stream", lambda *a, **k: (_ for _ in ()).throw(AssertionError("AI를 부르면 안 돼요")))
+    calls = _rule_cands(env, monkeypatch)
+    rid = env.run()
+    run = at._run(rid)
+    assert at.use_rule(run) and at.gate_code(run)[0]
+    at.tick(force=True)
+    at._busy[rid].join(5)
+    assert calls and calls[0]["web_search"] is False and calls[0]["lite"] is False
+    op = at._open(rid)
+    dec = json.loads(env.rt.db.q("SELECT data FROM at_log WHERE kind='cycle'")[-1]["data"])["decisions"]
+    assert [(x["sym"], x["act"], x.get("code")) for x in dec] == [("005930", "buy", None), ("000660", "skip", "score")]   # 급등 종목은 빠지고, 순위 점수 50은 기준 60 아래
+    assert dec[0]["rule"] and dec[0]["rule_warm"] == 0               # 자기 성적이 쌓이기 전에는 승률 기준을 보지 않는다
+    assert [t["sym"] for t in op] == ["005930"]
+    pk = env.rt.db.one("SELECT * FROM ai_picks WHERE id=?", (op[0]["pick_id"],))
+    assert pk["model"] == AP2.RULE_MODEL and pk["usd"] == 0 and pk["stance"] == "보통"
+    picks = json.loads(pk["picks"])
+    assert picks[0]["rule"] and picks[0]["win_prob"] is None and picks[0]["score"] == 100 and picks[0]["target_pct"] == round(picks[0]["stop_pct"] * AP2.RULE_RR, 2)
+    cyc = [x for x in at.detail(rid)["log"] if x["kind"] == "cycle"][0]
+    assert "추천" in cyc["msg"] or cyc["msg"]
+    assert at.now(at._run(rid))["picker"] == "rule" and at._ai_usd(rid) == 0
+    # AI 기록·학습에는 섞지 않는다
+    assert all(r["model"] != AP2.RULE_MODEL for r in env.rt.aipick.history())
+    assert AP2._done_rows(env.rt.aipick, None, "day") == [] and env.rt.aipick.rule_stats(None, "day")["n"] == 0
+    # 실전은 AI가 꺼져 있으면 새로 사지 않는다(규칙 추천을 쓰지 않는다)
+    real = dict(run, mode="real")
+    assert not at.use_rule(real) and at.gate_code(real)[1] in ("nokey", "gap", "full", "cycles")
+    with pytest.raises(ValueError):
+        at.create({"budget": 3_000_000, "mkt": "us", "style": "day", "days": 30, "mode": "real", "confirm": "실전"})
+    # 플랜 값 picker='rule'이면 AI가 켜져 있어도 규칙 추천
+    monkeypatch.setattr(env.rt.ai, "configured", lambda: True)
+    assert not at.use_rule(at._run(rid))
+    env.rt.db.x("UPDATE at_runs SET params=json_set(params,'$.picker','rule') WHERE id=?", (rid,))
+    assert at.use_rule(at._run(rid))
+
+
+def test_rule_prob_needs_own_results(env, monkeypatch):
+    """규칙 추천의 승률은 자기 결과가 RULE_WARM건 쌓인 뒤에만 말하고, 쌓이면 지난 결과에서 센다."""
+    import moa.aipick as AP2
+    ap = env.rt.aipick
+    AP2._init_outcomes(env.rt.db)
+    AP2._ensure_cols(env.rt.db)
+    assert ap.rule_prob("kr", "day", 90)[0] is None
+    for i in range(AP2.RULE_WARM):
+        env.rt.db.x("INSERT INTO ai_outcomes(pick_id,idx,ts,mkt,model,sym,status,result,net_pct,score,horizon,lite) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (1000 + i, 0, f"2026-11-{10 + i % 9:02d}T10:00:00", "kr", AP2.RULE_MODEL, f"S{i}", "done", "익절" if i % 4 else "손절", 1.0 if i % 4 else -1.0, 90, "day", 0))
+    p, n = ap.rule_prob("kr", "day", 90)
+    assert n == AP2.RULE_WARM and 60 < p < 75                      # 75% 이긴 것을 50% 쪽으로 조금 당김
+    assert ap.rule_stats(None, "day")["win_rate"] == 75.0 and AP2._done_rows(ap, None, "day") == []
+
+
+def test_rule_start_turns_on_paper_autotest_once(env, monkeypatch):
+    at = env.at
+    monkeypatch.setattr(env.rt.ai, "configured", lambda: False)
+    monkeypatch.setattr(env.rt.invest, "kr", lambda: object())
+    made = []
+    monkeypatch.setattr(at, "lab_create", lambda d: made.append(d))
+    at._rule_start()
+    assert at.auto_on() and env.rt.db.get_setting("rule_start_v1") and made
+    env.rt.settings.update({"autolab": {"on": False}})
+    at._rule_start()                                                 # 한 번만: 사용자가 끄면 다시 켜지 않는다
+    assert not at.auto_on()
+
+
+def test_rulebt_simulate_uses_only_past_bars():
+    """과거 시험: 날마다 그날까지의 일봉으로만 골라 다음 날 시가에 사고, 같은 목표·손절로 채점한다."""
+    from datetime import date as _d, timedelta as _td
+    from moa import rulebt as RB
+    import random
+    rnd = random.Random(3)
+    B = {}
+    for k in range(6):
+        px, bs, day = 10000.0, [], _d(2025, 1, 1)
+        for i in range(160):
+            day += _td(days=1)
+            drift = 0.004 if k < 2 else -0.002
+            o = px
+            c = max(1000.0, o * (1 + drift + rnd.uniform(-0.02, 0.02)))
+            bs.append({"t": day.isoformat(), "o": o, "h": max(o, c) * 1.01, "l": min(o, c) * 0.99, "c": c, "v": 1000 + rnd.randint(0, 500)})
+            px = c
+        B[f"S{k}"] = bs
+    r = RB.simulate(B, days=60, keep_all=True)
+    a = r["all"]
+    assert r["days"] == 60 and a["n"] > 0 and r["base"]["n"] >= a["n"] and r["edge"] is not None
+    assert all(t["entry_day"] > t["day"] and t["exit_day"] >= t["entry_day"] for t in r["trades"])
+    assert all(t["tp"] == round(min(t["sl"] * RB.AP.RULE_RR, RB.TP_CAP), 2) for t in r["trades"])
+    assert r["first"]["n"] + r["last"]["n"] == a["n"] and sum(r["results"].values()) == a["n"]
+    # 어느 날 뒤의 일봉을 바꿔도, 그 전에 끝난 거래는 그대로다(미래 정보를 쓰지 않는다)
+    cut = r["trades"][len(r["trades"]) // 2]["exit_day"]
+    B2 = {s: [dict(b, o=b["o"] * 1.3, h=b["h"] * 1.5, l=b["l"] * 0.6, c=b["c"] * 0.7) if b["t"] > cut else b for b in bs] for s, bs in B.items()}
+    keep = lambda res: [t for t in res["trades"] if t["exit_day"] <= cut]
+    assert keep(RB.simulate(B2, days=60, keep_all=True)) == keep(r) and keep(r)

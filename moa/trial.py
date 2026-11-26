@@ -104,7 +104,7 @@ class Trial:
         n_fail = sum(1 for x in checks if x["state"] == "fail")
         warn = []
         if not ai.enabled():
-            warn.append("AI가 꺼져 있어 새 추천·거래가 쌓이지 않아요. 점검하려면 설정 › AI에서 켜야 해요")
+            warn.append("AI가 꺼져 있어 모의는 규칙 추천(AI 안 씀, 비용 0)으로 쌓여요. 이 기간 숫자는 AI 판단이 아니라 규칙의 성적이에요")
         if not labs:
             warn.append("돌고 있는 모의 자동 테스트가 없어요. 투자 › AI 자동매매에서 켜야 견줄 수 있어요")
         return {"start": start, "end": (end - timedelta(days=1)).isoformat(), "day": day_n, "days": int(c.get("days") or DAYS), "done": done,

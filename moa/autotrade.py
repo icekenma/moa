@@ -70,7 +70,8 @@ ESC_N = 20             # 엔진을 판단하는 데 필요한 정밀 추천 거�
 ESC_WIN = 45           # 이익 거래 비율이 이보다 낮거나, 한 번 평균이 0% 이하면 '성과가 나쁨'
 # 매매 기록에 함께 보여 주는 지수(시장마다 첫째가 대표 지수: '그날 지수' 기준별 성적에 쓴다)
 IDX = {"kr": (("코스피", "^KS11"), ("코스닥", "^KQ11")), "us": (("S&P 500", "^GSPC"), ("나스닥", "^IXIC"))}
-QUICK_GAP = {"day": 20, "swing": 60, "month": 90}   # 모의의 빠른 재추천 간격(분): 단타는 분봉이 바뀌는 속도, 스윙·장기는 하루 몇 번
+QUICK_GAP = {"day": 20, "swing": 60, "month": 90}
+RULE_SHARE_SEC = 240   # 규칙 추천(AI 안 씀)은 같은 시장·방식이 이 시간 안에 받은 것을 함께 쓴다(키움 조회를 아끼려고)   # 모의의 빠른 재추천 간격(분): 단타는 분봉이 바뀌는 속도, 스윙·장기는 하루 몇 번
 OPP_MIN = 8            # 건너뛴 종목의 실제 결과가 이만큼은 쌓여야 기준을 낮춘다
 
 
@@ -563,6 +564,7 @@ class AutoTrade:
     def ready(self):
         b, why = self.real_broker()
         return {"ai": self.rt.ai.configured(), "ai_off": self.rt.ai.has_key() and not self.rt.ai.enabled(), "data": self.rt.invest.kr() is not None,
+                "rule": not self.rt.ai.configured(),         # AI가 꺼져 있으면 모의는 규칙 추천(AI 안 씀, 비용 0)으로 사고판다
                 "real": {"ok": b is not None, "label": getattr(b, "label", None), "why": why}}
 
     # ------------------------------------------------------------------ 만들기·조작
@@ -735,8 +737,8 @@ class AutoTrade:
         pv = self.preview(d)
         mode = "real" if d.get("mode") == "real" else "paper"
         rd = self.ready()
-        if not rd["ai"]:
-            raise ValueError("설정 → AI에서 Claude API 키를 먼저 넣어 주세요")
+        if not rd["ai"] and mode == "real":           # 모의는 AI가 꺼져 있어도 규칙 추천으로 돈다. 실전은 AI 추천만
+            raise ValueError("실전은 AI 추천이 필요해요. 설정 → AI에서 켜 주세요(모의는 AI 없이 규칙 추천으로 돌릴 수 있어요)")
         if not rd["data"]:
             raise ValueError("실시간 순위가 필요해요. 설정 → 계좌에서 키움 계좌를 먼저 연결해 주세요")
         if mode == "real":
@@ -917,6 +919,7 @@ class AutoTrade:
             self._cap_upgrade()
             self._lab_cap_upgrade()
             self._engine_watch()
+            self._rule_start()
             self._autopilot()
             self._digest()
             self._heads_up()
@@ -1644,6 +1647,8 @@ class AutoTrade:
             if not (idx is not None and was is not None and idx >= was + 0.3):
                 return False, "watchwait", (f"직전 추천이 관망이라, 지수가 회복되거나 {int(gap * 2 / 60)}분이 지날 때까지 다시 묻지 않아요"
                                             + (f"(그때 {was:+.2f}% → 지금 {idx:+.2f}%)" if idx is not None and was is not None else ""))
+        if self.use_rule(run):                         # 규칙 추천(AI 안 씀): 키·예산과 상관없다
+            return True, "", ""
         if not self.rt.ai.configured():
             return False, "nokey", ("AI를 꺼 두었어요(설정 › AI) · 들고 있는 종목은 손절·익절 규칙대로 계속 관리해요" if self.rt.ai.has_key() else "AI 키가 없어요")
         c = self.rt.ai.conf()
@@ -1844,6 +1849,7 @@ class AutoTrade:
             "ai": {"today_usd": round(usd_day, 3), "limit_usd": float(p.get("ai_daily_usd") or 1), "total_usd": round(usd_all, 3), "cycles_all": len(logs)},
             "last_cycle": last_cycle,
             "engine": {"sec": eng, "ok": eng is not None and eng < 90},
+            "picker": "rule" if self.use_rule(run) else "ai",         # 규칙 추천(AI 안 씀)으로 고르는 중인가
         }
 
     def _maybe_cycle(self, run):
@@ -1919,6 +1925,8 @@ class AutoTrade:
         lite: 빠른 재추천(가장 싼 엔진, 검색 없이, 줄인 자료)."""
         rid = run["id"]
         d = {"mkt": run["mkt"], "horizon": run["style"], "model": run["model"], "web_search": bool(run["params"].get("web_search", True))}
+        if self.use_rule(run):
+            return self._ask_rule(run, d, ids)
         cap = self._price_cap(run)
         if cap:
             d["max_price"] = cap
@@ -1946,6 +1954,36 @@ class AutoTrade:
             return out
         finally:
             lock["lock"].release()
+
+    def use_rule(self, run):
+        """이 자동매매가 AI 대신 규칙 추천(지표 점수, 비용 0)으로 고르는가. 모의만: 플랜 값 picker='rule'이거나 AI가 꺼져 있을 때.
+        실전은 언제나 AI 추천만 쓴다(AI가 꺼져 있으면 새로 사지 않는다)."""
+        return run["mode"] == "paper" and (run["params"].get("picker") == "rule" or not self.rt.ai.configured())
+
+    def _ask_rule(self, run, d, ids=None):
+        """규칙 추천을 받는다(AI를 부르지 않는다). 같은 시장·방식이 몇 분 안에 받은 규칙 추천은 함께 쓴다(키움 조회를 아끼려고)."""
+        rid = run["id"]
+        cap = self._price_cap(run)
+        if cap:
+            d["max_price"] = cap
+        ex = self._seen(ids or [rid], run["mkt"])
+        if ex:
+            d["exclude"] = ex
+        self._step(rid, 1, "AI 없이 규칙으로 후보를 줄 세우는 중(비용 없음)")
+        key = (d["mkt"], d["horizon"])
+        cache = self.__dict__.setdefault("_rule_cache", {})
+        hit = cache.get(key)
+        if hit and time.time() - hit[0] < RULE_SHARE_SEC:
+            skip = set(ex or [])
+            res = dict(hit[1], picks=[x for x in hit[1]["picks"] if x["sym"] not in skip and (not cap or (x.get("price") or 0) <= cap)])
+        else:
+            try:
+                res = self.rt.aipick.rule_pick(d)
+            except Exception as e:
+                return None, f"규칙 추천 실패: {e}", {}
+            cache[key] = (time.time(), res)
+        self._step(rid, 3, f"규칙 추천 {len(res.get('picks') or [])}종목을 플랜 기준으로 거르는 중", picks=len(res.get("picks") or []))
+        return res, None, {"usd": 0.0, "rule": True, "model": AP.RULE_MODEL}
 
     def _price_cap(self, run):
         """이 자동매매가 살 수 있는 1주 값의 상한. AI가 못 살 종목을 고르느라 추천을 버리지 않게, 후보를 고를 때부터 쓴다.
@@ -1996,7 +2034,7 @@ class AutoTrade:
             done = dict(done or {}, lite=True) if lite else done
             if early:
                 done = dict(done or {}, early=early)
-            if res and not err and not lite and run["style"] != "day":
+            if res and not err and not lite and run["style"] != "day" and not res.get("rule"):
                 try:
                     if any(self._run(i)["params"].get("counter_check") and self._run(i)["status"] == "running" for i in ids):
                         self._counter_ask(rid, run["mkt"], res)
@@ -2094,7 +2132,11 @@ class AutoTrade:
                     skip("crowd", f"쏠림을 피하려고 사지 않음({cw})")
                     continue
             wp = x.get("cal_prob") if x.get("cal_prob") is not None and (x.get("cal_n") or 0) >= 10 else x.get("win_prob")
-            if (wp or 0) < p["min_win_prob"]:
+            if x.get("rule"):
+                dec["rule"] = True
+            if x.get("rule") and wp is None:
+                dec["rule_warm"] = x.get("rule_n") or 0    # 규칙 추천: 자기 성적이 쌓이기 전(RULE_WARM건)에는 승률을 말하지 않으니 승률 기준을 보지 않는다
+            elif (wp or 0) < p["min_win_prob"]:
                 dec["wp"] = wp
                 skip("winprob", f"승률 {wp or 0:g}% < 기준 {p['min_win_prob']:g}%")
                 continue
@@ -3143,6 +3185,22 @@ class AutoTrade:
                 self.rt.db.x("UPDATE at_runs SET params=?, model=? WHERE id=?", (json.dumps(dict(r["params"], **patch), ensure_ascii=False), model, r["id"]))
             self.log(b["id"], "control", f"추천을 더 자주 받게 바꿨어요 · 정밀 추천 하루 {patch.get('cycles_per_day', b['params']['cycles_per_day'])}번 + {patch['quick_gap_min']}분마다 빠른 재추천(하루 비용 상한은 그대로)", {"patch": patch})
 
+    def _rule_start(self):
+        """v5.60 한 번만: AI가 꺼져 있고 모의 자동 테스트도 꺼져 있으면 켠다 → 규칙 추천(AI 안 씀, 비용 0)으로 모의 거래를 쌓는다.
+        사용자 요청(2026-11-26): 'API를 안 써도 거래 테스트가 가능하게, 내일 국내장부터 바로 적용'. 실전은 건드리지 않는다."""
+        db = self.rt.db
+        if db.get_setting("rule_start_v1"):
+            return
+        if self.rt.ai.configured() or self.auto_on():
+            db.set_setting("rule_start_v1", self._now())
+            return
+        if self.rt.invest.kr() is None:
+            return                                     # 키움이 연결되면 그때 켠다
+        self.auto_set(True)
+        db.set_setting("rule_start_v1", self._now())
+        self.rt.notify("AI를 쓰지 않는 규칙 추천으로 모의 자동 테스트를 켰어요. 비용은 들지 않고 실전 주문은 나가지 않아요", "paper",
+                       "모의 자동 테스트 켜짐", key="rule_start_v1", link="#invest/auto")
+
     def auto_on(self):
         return bool((self.rt.settings.get("autolab") or {}).get("on"))
 
@@ -3151,8 +3209,6 @@ class AutoTrade:
         on = bool(on)
         if on:
             rd = self.ready()
-            if not rd["ai"]:
-                raise ValueError("설정 → AI에서 Claude API 키를 먼저 넣어 주세요")
             if not rd["data"]:
                 raise ValueError("실시간 순위가 필요해요. 설정 → 계좌에서 키움 계좌를 먼저 연결해 주세요")
         self.rt.settings.update({"autolab": {"on": on}})
@@ -3209,7 +3265,7 @@ class AutoTrade:
                 self.rt.db.x("INSERT INTO at_changes(run_id,ts,ver,source,changes,stats) VALUES(?,?,?,?,?,?)", (rid, self._now(), 1, "start", "[]", None))
                 self.log(rid, "start", f"실험에 플랜을 보탰어요 · {VARIANTS[k][0]}", {"params": p, "lab": lab})
         rd = self.ready()
-        if not (rd["ai"] and rd["data"]):
+        if not rd["data"]:                             # AI가 꺼져 있으면 규칙 추천으로 돈다(비용 0)
             return
         for (mkt, style), (usd, budget) in AUTO_SET.items():
             if self._runs("WHERE status IN ('running','paused','closing') AND lab_id IS NOT NULL AND mkt=? AND style=?", (mkt, style)):
@@ -3296,8 +3352,6 @@ class AutoTrade:
         d = dict(d or {}, mode="paper", model=d.get("model") or "auto")
         pv = self.preview(d)
         rd = self.ready()
-        if not rd["ai"]:
-            raise ValueError("설정 → AI에서 Claude API 키를 먼저 넣어 주세요")
         if not rd["data"]:
             raise ValueError("실시간 순위가 필요해요. 설정 → 계좌에서 키움 계좌를 먼저 연결해 주세요")
         keys = [k for k in (d.get("variants") or list(VARIANTS)) if k in VARIANTS and variant_ok(k, pv["style"])]
@@ -3813,7 +3867,7 @@ class AutoTrade:
             if act:
                 try:
                     n = self.now(self._run(L["id"] if any(x["id"] == L["id"] for x in act) else act[0]["id"]))
-                    L["now"] = {k: n[k] for k in ("phase", "busy", "scan", "next", "today", "engine")}
+                    L["now"] = {k: n[k] for k in ("phase", "busy", "scan", "next", "today", "engine", "picker")}
                 except Exception:
                     L["now"] = None
             labs.append(L)
@@ -4102,7 +4156,7 @@ class AutoTrade:
         for run in self._runs("WHERE status IN ('running','paused','closing') AND lab_id IS NULL"):
             try:
                 n = self.now(run)
-                out.append(dict(self._summary(run), now={k: n[k] for k in ("phase", "busy", "scan", "next", "today", "size", "period", "engine")}))
+                out.append(dict(self._summary(run), now={k: n[k] for k in ("phase", "busy", "scan", "next", "today", "size", "period", "engine", "picker")}))
             except Exception as e:
                 self.rt.db.log("system", "error", f"자동매매 요약 오류: {type(e).__name__}: {e}", self._now())
         labs = []
@@ -4127,7 +4181,7 @@ class AutoTrade:
             x = self._summary(r)
             if r["status"] != "ended":
                 n = self.now(r)
-                x["now"] = {k: n[k] for k in ("phase", "busy", "scan", "next", "today", "size", "period", "engine")}
+                x["now"] = {k: n[k] for k in ("phase", "busy", "scan", "next", "today", "size", "period", "engine", "picker")}
             runs.append(x)
         return {"ready": self.ready(), "runs": runs, "today": self.today(),
                 "models": [{"id": k, "label": v[0]} for k, v in MODELS.items()], "default_model": c.get("model") or "claude-sonnet-5-5",

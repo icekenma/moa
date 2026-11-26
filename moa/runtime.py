@@ -53,6 +53,8 @@ class Runtime:
         from .autotrade import AutoTrade
         from .replay import Replay
         self.replay = Replay(self)        # 다시 돌려 보기(지난 실제 추천을 바꾼 플랜 값으로)
+        from .rulebt import RuleBT
+        self.rulebt = RuleBT(self)        # 규칙 추천 과거 시험(AI 안 씀, 스윙·국내)
         from .calmdays import CalmDays
         self.calm = CalmDays(self)        # 지수가 평범했던 날 비율(성적 분석의 참고 카드)
         from .trial import Trial

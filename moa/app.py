@@ -1468,6 +1468,10 @@ def create_app(rt, updater=None):
             out["photo"] = rt.album.brief()
         except Exception:
             out["photo"] = None
+        try:
+            out["fire"] = rt.fire.brief()
+        except Exception:
+            out["fire"] = None
         return jsonify(apps=out, version=version())
 
     @app.get("/api/div/events")
@@ -1621,6 +1625,17 @@ def create_app(rt, updater=None):
     @app.get("/api/auto/history")
     def auto_history():
         return jsonify(rt.autotrade.history(request.args.to_dict()))
+
+    @app.get("/api/fire")
+    def fire_view():
+        return jsonify(rt.fire.view())
+
+    @app.put("/api/fire")
+    def fire_save():
+        try:
+            return jsonify(rt.fire.save(body()))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
 
     @app.get("/api/rulebt")
     def rulebt_view():

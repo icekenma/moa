@@ -3284,3 +3284,40 @@ def test_ai_background_engine_cap_and_daily_limit(rt, monkeypatch):
     evs = list(rt.ai.stream("chat", {"question": "x", "web_search": False, "_user": True}))
     assert evs[0]["t"] == "error" and "하루 상한" in evs[0]["msg"] and len(used) == 2   # 상한을 넘은 뒤에는 부르지 않음
     assert any(c == "urgent" and k.endswith(":100") for c, _, k in notes)
+
+
+# ---------- 파이어(일찍 은퇴) 계획(v5.61) ----------
+def test_fire_rules_and_plan(rt):
+    """제도 숫자(퇴직수당 비율·명예퇴직수당·주택연금 표)와 계획 셈. 개인 자료는 DB 설정에만 남는다."""
+    from datetime import date
+    from moa import fire as FI
+    assert FI.retire_rate(0.5) == 0 and FI.retire_rate(3) == 6.5 and FI.retire_rate(12) == 29.25 and FI.retire_rate(25) == 39.0
+    assert FI.retire_allowance(20, 5_000_000) == round(20 * 5_000_000 * 0.39)
+    assert FI.retire_allowance(40, 1_000_000) == round(33 * 1_000_000 * 0.39)            # 33년까지만
+    assert FI.honor_allowance(19, 60, 5_000_000) == 0 and FI.honor_allowance(25, 6, 5_000_000) == 0
+    assert FI.honor_allowance(25, 36, 5_000_000) == round(5_000_000 * 0.68 * 0.5 * 36)
+    assert FI.honor_allowance(25, 120, 5_000_000) == round(5_000_000 * 0.68 * 0.5 * 90) == FI.honor_allowance(25, 200, 5_000_000)
+    assert FI.pay(5, 17) == 4_838_400 and FI.pay(6, 19) == 4_309_100
+    assert FI.house_pension(54, 9e8) == 0 and FI.house_pension(55, 9e8) == 1_404_000 and 1_404_000 < FI.house_pension(57, 9e8) < 1_896_000
+    v = rt.fire.view()
+    assert v["ready"] is False and "공무원 임용일(재직기간)" in v["missing"]
+    with pytest.raises(ValueError):
+        rt.fire.save({"salary": "abc"})
+    base = {"birth": "1980-03-15", "service_start": "2006-03-01", "salary": 60_000_000, "grade_now": 6, "step_now": 19, "promo_date": "2027-01-01",
+            "promo_grade": 5, "promo_step": 17, "spend": 2_500_000, "fin_assets": 300_000_000, "home_value": 700_000_000, "mortgage": 200_000_000,
+            "mortgage_rate": 4.0, "mortgage_years": 20, "pension_gov": 1_200_000, "pension_nps": 150_000, "pension_start": "2045-03-15"}
+    v = rt.fire.save(base)
+    assert rt.db.get_setting("fire_profile")["salary"] == 60_000_000 and v["ready"]
+    pl = FI.Plan(dict(rt.fire.profile()), date(2026, 11, 26))
+    assert abs(pl.bump - 4_838_400 / 4_309_100) < 1e-9 and int(pl.age0) == 46
+    i60, i50 = pl.at_retire(60), pl.at_retire(50)
+    assert i60["gov"] == 1_200_000 and i60["honor"] == 0 and i50["gov"] < i60["gov"] and i50["honor"] > 0 and i50["allowance"] > 0
+    # 돈이 많을수록 늦게 바닥나고, 수익률이 높을수록 늦게 바닥난다
+    rich = FI.Plan(dict(rt.fire.profile(), fin_assets=2e9), date(2026, 11, 26))
+    assert rich.run(50, 3.5)["broke"] is None
+    b1, b2 = pl.run(50, 1.5)["broke"], pl.run(50, 5.0)["broke"]
+    assert (b1 or 999) <= (b2 or 999)
+    v = rt.fire.view()
+    g = {x["age"]: x for x in v["goals"]}
+    assert g[60]["spend_max"] >= g[50]["spend_max"] and (g[50]["add_need"] or 0) >= (g[60]["add_need"] or 0)
+    assert rt.fire.brief()["ready"] and v["table"][0]["age"] == 47 and v["curve_ages"][0] == 46

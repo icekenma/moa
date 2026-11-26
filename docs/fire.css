@@ -1,0 +1,83 @@
+/* ===== 파이어(일찍 은퇴) 앱(우석World) — 새벽빛: 따뜻한 종이 바탕, 짙은 보라 잉크, 해 뜨는 주황 ===== */
+html[data-sec="fire"]{background:#F6F1EA;
+  --ink:#1E1A2B;--ink2:#5A5468;--line:#E6DFD4;--card:#FFFFFF;--fi-sun:#FF8A3D;--fi-sun-s:#FFE8D6;--fi-up:#1F7A55;--fi-dn:#C2410C;--fi-plum:#2D2740}
+html[data-sec="fire"] body{background:#F6F1EA;color:var(--ink)}
+html[data-sec="fire"] main{padding:0 0 calc(104px + var(--safe-b));gap:0}
+html[data-sec="fire"] .tabbar::before{background:linear-gradient(to top,rgba(246,241,234,.94) 18%,transparent)}
+html[data-sec="fire"] .tabbar .in{background:rgba(30,26,43,.92);border-color:rgba(255,255,255,.1)}
+html[data-sec="fire"] .tab{--tc:var(--fi-sun);font-size:11px}
+html[data-sec="fire"] .tab:not(.on),html[data-sec="fire"] .tab svg{color:rgba(255,255,255,.8)}
+html[data-sec="fire"] .sheet .btn.dark{background:var(--fi-plum);border-color:var(--fi-plum)}
+
+.fi-app{display:flex;flex-direction:column;gap:14px;padding:calc(20px + var(--safe-t)) 16px 0;font-size:14px;line-height:1.45;color:var(--ink)}
+.fi-app h1,.fi-app h2,.fi-app p{margin:0}
+.fi-app button{font-family:inherit;color:inherit;cursor:pointer}
+.fi-app :focus-visible{outline:3px solid var(--fi-sun);outline-offset:2px}
+.fi-head{display:flex;justify-content:space-between;align-items:flex-end;gap:10px}
+.fi-head p{font-size:13px;color:var(--ink2)}
+.fi-head h1{font-size:24px;font-weight:800;letter-spacing:-.03em}
+.fi-ico{display:grid;place-items:center;width:40px;height:40px;border-radius:12px;background:var(--card);border:1px solid var(--line);color:var(--ink)}
+.fi-card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:15px 15px 14px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.fi-card h2{font-size:15px;font-weight:800;letter-spacing:-.02em}
+.fi-note{font-size:12px;color:var(--ink2);line-height:1.5}
+.fi-pad{padding:0 2px}
+.fi-foot{font-size:11.5px;color:var(--ink2);line-height:1.5;padding:0 2px 8px}
+.fi-hero{border-radius:22px;padding:18px 18px 16px;color:#fff;display:flex;flex-direction:column;gap:8px;
+  background:radial-gradient(120% 90% at 100% 0%,#FF8A3D 0%,rgba(255,138,61,0) 55%),linear-gradient(160deg,#2D2740,#1E1A2B)}
+.fi-hero p{font-size:12.5px;color:#E9DFF0}
+.fi-hero .fi-note{color:#CFC4DA;font-size:11.5px}
+.fi-big{font-size:52px;font-weight:800;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
+.fi-big small{font-size:20px;margin-left:3px}
+.fi-big span{font-size:22px}
+.fi-chips{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.fi-chip{display:flex;flex-direction:column;gap:1px;padding:7px 9px;border-radius:12px;background:rgba(255,255,255,.1)}
+.fi-chip small{font-size:11px;color:#CFC4DA}
+.fi-chip b{font-size:15px;font-variant-numeric:tabular-nums}
+.fi-chip.fi-mid{background:rgba(255,138,61,.28)}
+.fi-goal td,.fi-goal th{padding:8px 4px}
+.fi-ch{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.fi-seg{display:flex;gap:3px;background:#F1EBE2;border-radius:10px;padding:3px}
+.fi-seg button{border:0;background:none;padding:5px 8px;border-radius:8px;font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums}
+.fi-seg button[aria-pressed="true"]{background:var(--fi-plum);color:#fff}
+.fi-chart{width:100%;height:auto;display:block}
+.fi-chart text{font-size:10px;fill:var(--ink2);font-variant-numeric:tabular-nums}
+.fi-grid{stroke:var(--line);stroke-width:1}
+.fi-zero{stroke:var(--ink);stroke-width:1;stroke-dasharray:3 3;opacity:.5}
+.fi-vl{stroke:var(--fi-sun);stroke-width:1.5;stroke-dasharray:4 3}
+.fi-vl.p{stroke:var(--fi-up)}
+.fi-ln{fill:none;stroke-width:2.2;stroke-linejoin:round}
+.fi-ln.fi-bad{stroke:#C9A9A0}.fi-ln.fi-mid{stroke:var(--fi-plum);stroke-width:3}.fi-ln.fi-good{stroke:#F2B37E}
+.fi-leg{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:11px;color:var(--ink2)}
+.fi-leg span::before{content:"";display:inline-block;width:10px;height:3px;border-radius:2px;margin-right:4px;vertical-align:middle;background:currentColor}
+.fi-leg .fi-bad::before{background:#C9A9A0}.fi-leg .fi-mid::before{background:var(--fi-plum)}.fi-leg .fi-good::before{background:#F2B37E}.fi-leg .fi-v::before{display:none}
+.fi-kv{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.fi-kv>div{display:flex;flex-direction:column;gap:2px;padding:9px 10px;border-radius:12px;background:#F8F4EE;min-width:0}
+.fi-kv small{font-size:11.5px;color:var(--ink2)}
+.fi-kv b{font-size:17px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.fi-kv em{font-style:normal;font-size:11px;color:var(--ink2);line-height:1.4}
+.fi-app .up{color:var(--fi-up)}.fi-app .dn{color:var(--fi-dn)}
+.fi-bar{display:flex;height:10px;border-radius:6px;overflow:hidden;background:#F1EBE2}
+.fi-bar i{display:block}.fi-bar .h{background:#B9AFC9}.fi-bar .f{background:var(--fi-sun)}
+.fi-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:42px;padding:0 16px;border-radius:12px;border:1px solid var(--line);background:var(--card);font-weight:700;font-size:14px;color:var(--ink);text-decoration:none}
+.fi-btn.main{background:var(--fi-plum);border-color:var(--fi-plum);color:#fff}
+.fi-miss ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:3px;font-size:13px}
+.fi-empty p{font-size:13px;color:var(--ink2)}
+.fi-tbl-wrap{padding:10px 8px}
+.fi-tbl{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:12px}
+.fi-tbl th,.fi-tbl td{padding:7px 4px;text-align:right;border-top:1px solid var(--line);vertical-align:top}
+.fi-tbl thead th{border-top:0;font-size:11px;color:var(--ink2);font-weight:700}
+.fi-tbl th:first-child{text-align:left}
+.fi-tbl b{display:block;font-size:12.5px}
+.fi-tbl small{display:block;font-size:10.5px;color:var(--ink2);font-weight:500}
+.fi-tbl tr.on{background:var(--fi-sun-s)}
+.fi-form{display:flex;flex-direction:column;gap:12px}
+.fi-form fieldset{margin:0}
+.fi-form legend{font-size:15px;font-weight:800;padding:0;float:left;width:100%;margin-bottom:4px}
+.fi-f{display:flex;flex-direction:column;gap:4px;font-size:13px}
+.fi-f>span{font-weight:700}
+.fi-f small{font-size:11.5px;color:var(--ink2);font-weight:500}
+.fi-f input{font:inherit;font-size:16px;padding:10px 12px;border-radius:11px;border:1px solid var(--line);background:#FBF8F4;color:var(--ink);min-width:0;width:100%;box-sizing:border-box}
+.fi-act{display:flex;gap:8px;flex-wrap:wrap;padding-bottom:6px}
+.fi-act .fi-btn{flex:1}
+.fi-fact p{font-size:13px;line-height:1.55}
+.fi-fact small{font-size:11.5px;color:var(--ink2)}

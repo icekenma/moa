@@ -53,6 +53,8 @@ class Runtime:
         from .autotrade import AutoTrade
         from .replay import Replay
         self.replay = Replay(self)        # 다시 돌려 보기(지난 실제 추천을 바꾼 플랜 값으로)
+        from .fire import Fire
+        self.fire = Fire(self)            # 파이어(일찍 은퇴) 계획 — 개인 자료는 DB에만
         from .rulebt import RuleBT
         self.rulebt = RuleBT(self)        # 규칙 추천 과거 시험(AI 안 씀, 스윙·국내)
         from .calmdays import CalmDays

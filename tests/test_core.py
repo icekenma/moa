@@ -1413,17 +1413,21 @@ def test_ai_self_learning_stats_calibration_and_prompt(rt):
 
 def test_ai_outcome_ignores_pre_recommendation_bar_range(rt, monkeypatch):
     """추천 시각(23:33)이 낀 5분봉(23:30)의 저가(추천 전 급락)는 손절로 치지 않는다. 지정가는 30분 안에 안 닿으면 미체결."""
+    from datetime import date as _date, timedelta as _td
     db = rt.db
+    d0 = _date.today() - _td(days=3)                       # 채점 창(최근 며칠) 안에 들게 날짜를 오늘 기준으로 잡는다
+    d1 = d0 + _td(days=1)
+    D0, D1 = d0.strftime("%m/%d"), d1.strftime("%m/%d")
     mk = lambda et, ep: db.x("INSERT INTO ai_picks(ts,mkt,model,usd,stance,view,picks,text) VALUES(?,?,?,?,?,?,?,?)",
-        ("2026-11-12T23:33:00", "us", "claude-fable-5-2", 0.5, "보통", "", json.dumps([
+        (f"{d0.isoformat()}T23:33:00", "us", "claude-fable-5-2", 0.5, "보통", "", json.dumps([
             {"sym": "AS", "name": "아머 스포츠", "price": 30.81, "entry_type": et, "entry_price": ep, "target_pct": 2.5, "stop_pct": 1.5, "win_prob": 45}]), ""))
     mk("limit", 30.60)
     mk("market", 30.81)
-    bars = [{"t": "11/12 23:30", "o": 30.42, "h": 30.95, "l": 29.63, "c": 30.85, "v": 1},
-            {"t": "11/12 23:35", "o": 30.85, "h": 31.30, "l": 30.80, "c": 31.25, "v": 1},
-            {"t": "11/12 23:40", "o": 31.25, "h": 31.97, "l": 31.20, "c": 31.80, "v": 1}] + \
-           [{"t": f"11/13 0{h}:00", "o": 31.5, "h": 31.6, "l": 31.3, "c": 31.4, "v": 1} for h in range(0, 5)] + \
-           [{"t": "11/13 05:50", "o": 30.7, "h": 30.7, "l": 30.45, "c": 30.48, "v": 1}]
+    bars = [{"t": f"{D0} 23:30", "o": 30.42, "h": 30.95, "l": 29.63, "c": 30.85, "v": 1},
+            {"t": f"{D0} 23:35", "o": 30.85, "h": 31.30, "l": 30.80, "c": 31.25, "v": 1},
+            {"t": f"{D0} 23:40", "o": 31.25, "h": 31.97, "l": 31.20, "c": 31.80, "v": 1}] + \
+           [{"t": f"{D1} 0{h}:00", "o": 31.5, "h": 31.6, "l": 31.3, "c": 31.4, "v": 1} for h in range(0, 5)] + \
+           [{"t": f"{D1} 05:50", "o": 30.7, "h": 30.7, "l": 30.45, "c": 30.48, "v": 1}]
     monkeypatch.setattr(rt.invest, "candles", lambda m, s, tf: {"bars": bars})
     rt.aipick.evaluate(force=True)
     lim, mkt_ = rt.db.q("SELECT * FROM ai_outcomes ORDER BY pick_id")

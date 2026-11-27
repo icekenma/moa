@@ -2,7 +2,7 @@
 /* moa — 휴대폰 화면. 외부 라이브러리 없이 동작한다.
    GitHub Pages에서 열면 설정한 서버(노트북)로, 서버가 직접 준 화면이면 같은 주소로 요청한다. */
 
-const UI_VERSION = "261127.1121";
+const UI_VERSION = "261127.1445";
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const view = $("#view");
@@ -3403,6 +3403,66 @@ atAttrHtml(st) {
     bindSeg(o, "다시돌린거래", (v) => { this.rp.show = v; const d = o.querySelector(".rp-tr"); const op = d && d.open; o.innerHTML = this.rpResult(this.rp.res); this.rpBind(o); const d2 = o.querySelector(".rp-tr"); if (d2 && op) d2.open = true; });
   },
   // ---------- 자동 개선: 자동매매가 스스로 고치는 과정을 한눈에 ----------
+  // ----- AI 복기를 대화창으로 주고받기(v5.64): 질의를 복사해 Claude 대화창에 붙여 넣고, 받은 답을 올린다(API 비용 0)
+  siChatHtml(V) {
+    const C = V.chat || { open: [], done: [], targets: [] }, chat = V.via === "chat";
+    const t = (x) => (x ? `${x.slice(5, 10).replace("-", "/")} ${x.slice(11, 16)}` : "");
+    return `<section class="card sc-card">
+      <div class="sc-h"><h3>AI 복기 방식</h3><span class="sc-seg" role="group" aria-label="AI 복기 방식">
+        <button type="button" data-sivia="api" aria-pressed="${!chat}">API로 바로</button><button type="button" data-sivia="chat" aria-pressed="${chat}">대화창으로</button></span></div>
+      <p class="sc-lead">${chat ? "복기할 때가 되면 앱이 <b>질의</b>를 만들어요. 질의를 복사해 Claude 대화창(구독)에 붙여 넣고, 받은 답 전체를 '답 올리기'에 붙여 넣으면 API 답과 똑같이 읽어요. API 비용은 0원이에요."
+        : "복기할 때가 되면 앱이 Claude API를 바로 불러요(설정 › AI 스위치와 하루 상한을 따라요). '대화창으로'를 고르면 API 대신 직접 주고받아요."}</p>
+      ${chat ? `${C.open.length ? `<ul class="sc-list">${C.open.map((a) => `<li class="sc-q">
+          <div class="sc-qh"><b>Q${a.id} · ${esc(a.title)}</b><small>${esc(a.kind_label)} · ${t(a.created)} · ${Math.round(a.chars / 1000)}천 자</small></div>
+          <div class="sc-act"><button type="button" class="btn dark sm" data-sccopy="${a.id}">질의 복사</button><button type="button" class="btn sm" data-scfile="${a.id}">파일로 받기</button>
+            <button type="button" class="btn sm sc-go" data-scans="${a.id}">답 올리기</button><button type="button" class="sc-x" data-sccancel="${a.id}" aria-label="질의 닫기">닫기</button></div></li>`).join("")}</ul>`
+        : `<p class="sc-none">지금 열린 질의가 없어요. 실험 거래가 쌓이면 앱이 알아서 만들고 알림을 보내요.</p>`}
+        <details class="sc-make"><summary>지금 질의 만들기</summary><div class="sc-tg">${C.targets.map((x, i) => `<button type="button" class="btn sm" data-scmk="${i}">${esc(x.label)}</button>`).join("")}</div>
+          <p class="si-fine">자동매매 복기는 끝난 거래 5건, 추천 규칙 복기는 채점이 일정 건수 쌓여야 만들 수 있어요.</p></details>
+        ${C.done.length ? `<details class="sc-done"><summary>지난 질의 ${C.done.length}개</summary><ul>${C.done.map((a) => `<li><b>Q${a.id} · ${esc(a.title)}</b><small>${({ answered: "답 받음", expired: "기한 지남", cancelled: "닫음" })[a.status] || a.status}${a.answered ? ` · ${t(a.answered)}` : ""}</small>${a.result ? `<span>${esc(a.result)}</span>` : ""}</li>`).join("")}</ul></details>` : ""}` : ""}
+    </section>`;
+  },
+  siChatBind(box, V) {
+    const C = V.chat || { open: [], targets: [] }, find = (id) => C.open.find((a) => a.id === Number(id));
+    const reload = () => { this.siV = null; this.si(box); };
+    box.querySelectorAll("[data-sivia]").forEach((b) => (b.onclick = async () => {
+      try { await api("POST", "/api/si", { via: b.dataset.sivia }); toast(b.dataset.sivia === "chat" ? "AI 복기를 대화창으로 주고받아요" : "AI 복기를 API로 바로 불러요"); } catch (e) { return toast(e.message, true); }
+      reload();
+    }));
+    box.querySelectorAll("[data-sccopy]").forEach((b) => (b.onclick = async () => {
+      const a = find(b.dataset.sccopy);
+      try { await navigator.clipboard.writeText(a.prompt); toast("질의를 복사했어요. Claude 대화창에 붙여 넣어 주세요"); }
+      catch (e) { openSheet(`Q${a.id} 질의`, `<textarea class="sc-ta" readonly rows="12">${esc(a.prompt)}</textarea><p class="si-fine">길게 눌러 전체 선택 → 복사해 주세요.</p>`); }
+    }));
+    box.querySelectorAll("[data-scfile]").forEach((b) => (b.onclick = () => {
+      const a = find(b.dataset.scfile);
+      bkSave(new Blob([a.prompt], { type: "text/markdown" }), `woosuk-Q${a.id}.md`);
+    }));
+    box.querySelectorAll("[data-sccancel]").forEach((b) => (b.onclick = async () => {
+      if (!confirm("이 질의를 닫을까요? 다음 복기 때 새로 만들어요")) return;
+      try { await api("POST", `/api/si/ask/${b.dataset.sccancel}/cancel`); } catch (e) { return toast(e.message, true); }
+      reload();
+    }));
+    box.querySelectorAll("[data-scmk]").forEach((b) => (b.onclick = async () => {
+      const x = C.targets[Number(b.dataset.scmk)];
+      try { await api("POST", "/api/si/ask", x); toast("질의를 만들었어요"); } catch (e) { return toast(e.message, true); }
+      reload();
+    }));
+    box.querySelectorAll("[data-scans]").forEach((b) => (b.onclick = () => {
+      const a = find(b.dataset.scans);
+      openSheet(`Q${a.id} 답 올리기`, `<div class="sc-sh"><p class="si-fine">Claude가 준 답 <b>전체</b>를 붙여 넣어 주세요${a.kind === "auto" ? "(끝의 ```json 블록까지)" : ""}. 파일로 받았으면 파일을 골라도 돼요.</p>
+        <textarea id="scAns" class="sc-ta" rows="12" placeholder="여기에 답을 붙여 넣기"></textarea>
+        <label class="btn sm sc-fl">파일 고르기<input type="file" id="scFile" accept=".md,.txt,text/plain,text/markdown" hidden></label>
+        <button type="button" class="btn dark wide" id="scGo">답 올리기</button></div>`, () => {
+        $("#scFile").onchange = (e) => { const f = e.target.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => { $("#scAns").value = String(r.result || ""); }; r.readAsText(f, "utf-8"); };
+        $("#scGo").onclick = async (e) => {
+          const btn = e.currentTarget; btn.disabled = true;
+          try { const r = await api("POST", `/api/si/ask/${a.id}/answer`, { text: $("#scAns").value }); closeSheet(); toast(r.result); reload(); }
+          catch (err) { btn.disabled = false; toast(err.message, true); }
+        };
+      });
+    }));
+  },
   async si(box) {
     if (!this.siV) box.innerHTML = `<div class="empty loading">자동 개선 상황을 여는 중</div>`;
     let V;
@@ -3450,9 +3510,10 @@ atAttrHtml(st) {
         <dl class="si-n"><div><dt>반영</dt><dd>${C.adopt || 0}</dd></div><div><dt>되돌림</dt><dd>${C.rollback || 0}</dd></div><div><dt>시험</dt><dd>${C.test || 0}</dd></div><div><dt>규칙 새 판</dt><dd>${C.lesson || 0}</dd></div></dl>
         <div class="si-row"><span>실전 자동매매에도 반영</span><button type="button" class="switch" role="switch" id="siReal" aria-checked="${V.real}" aria-label="실전에도 반영" ${V.on ? "" : "disabled"}><span></span></button></div>
         <div class="si-row"><span>투자 화면도 계속 다듬기<small class="si-sub">자주 보는 화면을 Claude가 주기적으로 살펴 고쳐요</small></span><button type="button" class="switch" role="switch" id="siUi" aria-checked="${V.ui}" aria-label="투자 화면도 계속 다듬기" ${V.on ? "" : "disabled"}><span></span></button></div>
-        <div class="si-row"><span>개선에 쓰는 AI</span><b class="si-eng">${esc(V.engine.name)} 고정</b></div>
+        <div class="si-row"><span>개선에 쓰는 AI</span><b class="si-eng">${V.via === "chat" ? "대화창(직접 주고받기)" : `${esc(V.engine.name)} 고정`}</b></div>
         <div class="si-row"><span>이번 달 복기 비용</span><b>${won(V.cost.krw)}원 <small>${V.cost.n}번</small></b></div>
       </section>
+      ${this.siChatHtml(V)}
       ${V.groups.length ? V.groups.map(group).join("") : `<section class="card si-empty"><h3>돌고 있는 모의 실험이 없어요</h3><p>자동 개선은 모의 실험에서 여러 플랜을 같은 추천으로 견줘 이긴 값을 반영해요. 자동매매 화면에서 모의 실험을 시작하면 바로 돌기 시작해요.</p><button type="button" class="btn dark" data-go="auto">자동매매로 가기</button></section>`}
       ${V.lessons.length ? `<section class="card si-ls"><h3>AI 추천 규칙</h3><p class="si-fine">추천 성적이 쌓이면 AI가 규칙을 새로 써요. 새 판이 앞 판보다 나쁘면 앞 판으로 되돌려요. 막대는 최근 판들의 추천 평균 성적이에요.</p><ul>${V.lessons.map(lesson).join("")}</ul></section>` : ""}
       <section class="card si-tl"><h3>개선 기록</h3>${V.events.length ? `<ol>${V.events.map(ev).join("")}</ol>` : `<p class="si-fine">아직 기록이 없어요. 실험 거래가 쌓이면 여기에 시험·반영·되돌림이 차례로 남아요.</p>`}</section>
@@ -3462,6 +3523,7 @@ atAttrHtml(st) {
     $("#siOn").onclick = (e) => { const v = e.currentTarget.getAttribute("aria-checked") !== "true"; if (!v && !confirm("자동 개선을 끌까요? 개선안은 승인 대기로 쌓여요")) return; sw("on", v); };
     $("#siReal").onclick = (e) => sw("real", e.currentTarget.getAttribute("aria-checked") !== "true");
     $("#siUi").onclick = (e) => sw("ui", e.currentTarget.getAttribute("aria-checked") !== "true");
+    this.siChatBind(box, V);
     box.querySelectorAll("[data-siu]").forEach((b) => (b.onclick = () => {
       const u = V.ui_log.find((x) => x.ver === b.dataset.siu);
       openSheet(`${u.ver} · ${u.title}`, `<div class="si-sh"><p class="si-txt">${esc(u.what)}</p>${u.why ? `<p class="si-fine">왜: ${esc(u.why)}</p>` : ""}</div>`);

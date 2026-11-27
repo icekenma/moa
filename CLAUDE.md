@@ -28,6 +28,12 @@
 - 규칙 추천은 `ai_picks`·`ai_outcomes`에 `model="rule"`(`aipick.RULE_MODEL`)로 남는다. AI 학습(`_done_rows`)·AI 성적(`stats`)·AI 추천 기록에는 섞지 않는다. 승률은 자기 성적이 `RULE_WARM`건 쌓인 뒤부터(`rule_prob`), 그전엔 승률 기준을 보지 않는다.
 - 점수식은 `aipick.day_score`·`swing_score` 한 곳. 과거 시험 `moa/rulebt.py`(스윙·국내, 지난 일봉, 미래 정보 없이)도 같은 식을 쓴다. 바꾸면 둘 다 같이 바뀐다.
 
+## AI 복기를 대화창으로(v5.64~, `moa/chatbridge.py`)
+
+- 사용자 요청(2026-11-27): 자동 개선의 AI 복기를 API 대신 대화창 입력·출력으로도. 설정 `self_improve.via`("api" 기본 | "chat"), 화면은 자동 개선 › 'AI 복기 방식'.
+- chat이면 `selfimprove._reviews`·`aipick.auto_learn`이 API 대신 `ChatBridge.create`로 질의(`chat_asks`)를 만든다. 질의 글은 API와 같은 `ai.context`(SYSTEM+ask+앱 데이터). 올린 답은 `save_review`(model "chat", usd 0)·`save_lessons`로 API 답과 같은 길을 탄다 — 그 뒤 시험·승격·되돌림은 그대로.
+- 같은 대상 질의는 하나만 열어 두고, 생성에도 `si_rv_try`·`ai_learn_try` 간격을 지킨다. 대화창 답 형식(```json 블록)이 바뀌면 `save_review` 파서와 함께 본다.
+
 ## 2주 점검(v5.57~, `moa/trial.py`)
 
 - 사용자가 'Max 구독이 2주 남았고, 2주 안에 투자 부분 개선 효과가 없으면 해지'라고 했다(2026-11-25). 그 판단용으로 투자 › AI 자동매매 맨 위에 네 가지 숫자를 보여 준다: 기본 플랜 vs '다 사기' 기준선, 거래당 평균 수익, AI 비용 하루 상한, 비용 뺀 모의 손익. 7일째·끝날 알림 한 번씩.

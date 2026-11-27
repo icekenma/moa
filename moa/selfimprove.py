@@ -63,7 +63,8 @@ class SelfImprove:
     # ------------------------------------------------------------------ 설정
     def conf(self):
         s = self.rt.db.get_setting("self_improve") or {}
-        return {"on": bool(s.get("on", True)), "real": bool(s.get("real", True)), "ui": bool(s.get("ui", True))}
+        return {"on": bool(s.get("on", True)), "real": bool(s.get("real", True)), "ui": bool(s.get("ui", True)),
+                "via": "chat" if s.get("via") == "chat" else "api"}     # AI 복기를 API로 부를지, 대화창 질의로 주고받을지(chatbridge)
 
     def on(self):
         return self.conf()["on"]
@@ -76,6 +77,9 @@ class SelfImprove:
             if k in (d or {}) and bool(d[k]) != c[k]:
                 c[k] = bool(d[k])
                 ch.append(f"{name[k]} {'켬' if c[k] else '끔'}")
+        if d and d.get("via") in ("api", "chat") and d["via"] != c["via"]:
+            c["via"] = d["via"]
+            ch.append("AI 복기: " + ("대화창으로 주고받기" if c["via"] == "chat" else "API로 바로"))
         if ch:
             self.rt.db.set_setting("self_improve", c)
             self.note("setting", None, None, " · ".join(ch))
@@ -378,7 +382,8 @@ class SelfImprove:
     def _reviews(self):
         """실험 기본 플랜에 거래가 새로 쌓이면 AI 복기(FABLE)를 부른다 → 개선안 → take()로 시험."""
         at = self.rt.autotrade
-        if not self.rt.ai.configured():
+        chat = self.conf()["via"] == "chat"              # 대화창 방식: API를 부르지 않고 질의만 만든다(AI 스위치와 상관없이)
+        if not chat and not self.rt.ai.configured():
             return
         for b, rs in self._labs():
             th = self._rv.get(b["id"])
@@ -394,6 +399,16 @@ class SelfImprove:
             if (tries.get(str(b["id"])) or "") > gap:
                 continue
             if self._stats(b["id"], t)["n"] < REVIEW_EVERY.get(b["style"], 8):
+                continue
+            if chat:
+                if self.rt.chat.open_for("auto", {"run_id": b["id"]}):
+                    continue                                  # 이미 열린 질의가 있으면 답을 기다린다
+                tries[str(b["id"])] = datetime.now().isoformat(timespec="seconds")
+                self.rt.db.set_setting("si_rv_try", tries)
+                try:
+                    self.rt.chat.create("auto", {"run_id": b["id"], "auto": True}, f"실험 기본 플랜의 새 거래 {self._stats(b['id'], t)['n']}건을 복기할 차례예요")
+                except ValueError:
+                    pass
                 continue
             self.note("review", b["mkt"], b["style"], "AI 복기 시작", f"실험 기본 플랜의 새 거래 {self._stats(b['id'], t)['n']}건을 복기해 개선안을 찾아요")
             tries[str(b["id"])] = datetime.now().isoformat(timespec="seconds")
@@ -493,7 +508,8 @@ class SelfImprove:
         from .evolution import DEV
         ui_log = [{"ver": v, "day": d, "title": t, "what": w, "why": y} for v, d, a, t, w, y in DEV if a == "ui"][:8]
         from .ai import BG_MAX
-        return {"on": c["on"], "real": c["real"], "ui": c["ui"], "ui_on": c["on"] and c["ui"], "ui_log": ui_log, "engine": {"model": BG_MAX, "name": MODELS[BG_MAX][0].split(" · ")[0]},
+        ch = self.rt.chat.list() if getattr(self.rt, "chat", None) else {"open": [], "done": []}
+        return {"on": c["on"], "real": c["real"], "ui": c["ui"], "via": c["via"], "chat": dict(ch, targets=self.rt.chat.targets() if getattr(self.rt, "chat", None) else []), "ui_on": c["on"] and c["ui"], "ui_log": ui_log, "engine": {"model": BG_MAX, "name": MODELS[BG_MAX][0].split(" · ")[0]},
                 "cost": {"usd": round(float(u.get("s") or 0), 3), "n": int(u.get("n") or 0), "krw": round(float(u.get("s") or 0) * self.rt.ai.fx())},
                 "counts": cnt, "groups": groups, "lessons": lessons, "events": ev,
                 "rules": {"min_n": MIN_N, "edge": EDGE, "watch_n": WATCH_N, "cool_h": COOL_H, "block_d": BLOCK_D, "review_every": REVIEW_EVERY},

@@ -2192,7 +2192,9 @@ def auto_learn(self):
     si = getattr(self.rt, "selfimp", None)
     if auto is not None and not auto and not (si is not None and si.on()):     # 자동 개선이 켜져 있으면 복기는 늘 돈다
         return
-    if not self.rt.ai.configured() or getattr(self, "_learning", False):
+    chat = getattr(self.rt, "chat", None)
+    via_chat = chat is not None and chat.on()            # 대화창 방식: API 대신 질의를 만든다
+    if (not via_chat and not self.rt.ai.configured()) or getattr(self, "_learning", False):
         return
     for h, H in HORIZONS.items():
         ls = lessons(self, h)
@@ -2205,6 +2207,13 @@ def auto_learn(self):
             continue
         tries[h] = today
         self.rt.db.set_setting("ai_learn_try", tries)
+        if via_chat:
+            if not chat.open_for("learn", {"horizon": h}):
+                try:
+                    chat.create("learn", {"horizon": h}, f"{H['label']} 추천 채점이 {n}건 쌓여 추천 규칙을 새로 쓸 차례예요")
+                except ValueError:
+                    pass
+            continue
         self._learning = True
 
         def run(h=h, H=H):

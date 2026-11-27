@@ -3257,3 +3257,46 @@ def test_rulebt_simulate_uses_only_past_bars():
     B2 = {s: [dict(b, o=b["o"] * 1.3, h=b["h"] * 1.5, l=b["l"] * 0.6, c=b["c"] * 0.7) if b["t"] > cut else b for b in bs] for s, bs in B.items()}
     keep = lambda res: [t for t in res["trades"] if t["exit_day"] <= cut]
     assert keep(RB.simulate(B2, days=60, keep_all=True)) == keep(r) and keep(r)
+
+
+# ---------- 자동 개선 AI 복기를 대화창으로 주고받기(v5.64) ----------
+def test_chat_bridge_asks_and_reads_answers(env, monkeypatch):
+    """대화창 방식이면 API를 부르지 않고 질의를 만든다. 올린 답은 API 답과 같은 길(save_review·save_lessons)로 읽는다."""
+    rt, at = env.rt, env.at
+    monkeypatch.setattr(rt.ai, "configured", lambda: False)
+    monkeypatch.setattr(rt.ai, "stream", lambda *a, **k: (_ for _ in ()).throw(AssertionError("API를 부르면 안 돼요")))
+    rid = env.run()
+    _seed(env, rid, 12)
+    rt.selfimp.set({"via": "chat"})
+    assert rt.chat.on() and rt.selfimp.view()["via"] == "chat"
+    a = rt.chat.create("auto", {"run_id": rid, "auto": True})
+    assert a["status"] == "open" and f"Q{a['id']}" in a["prompt"] and "<앱 데이터>" in a["prompt"] and "```json" in a["prompt"]
+    assert rt.chat.create("auto", {"run_id": rid, "auto": True})["id"] == a["id"]        # 같은 대상은 하나만 열어 둔다
+    with pytest.raises(ValueError):
+        rt.chat.answer(a["id"], "짧음")
+    with pytest.raises(ValueError):
+        rt.chat.answer(a["id"], "결론: 승률 기준을 올려요. 그런데 JSON 블록이 없는 답이에요.")
+    ans = "결론: 낮은 승률 추천이 잃었어요\n- 승률 60% 미만은 평균 -1.2%\n```json\n{\"summary\":\"승률 기준 올리기\",\"changes\":[{\"key\":\"min_win_prob\",\"to\":60,\"why\":\"60 미만 20건 평균 -1.2%\"}]}\n```"
+    r = rt.chat.answer(a["id"], ans)
+    assert "개선안 1개" in r["result"] and "최소 승률" in r["result"]
+    pr = rt.db.one("SELECT * FROM at_proposals WHERE run_id=? AND source='ai' ORDER BY id DESC LIMIT 1", (rid,))
+    assert pr and json.loads(pr["stats"])["model"] == "chat" and json.loads(pr["changes"])[0]["to"] == 60
+    with pytest.raises(ValueError):
+        rt.chat.answer(a["id"], ans)                                                    # 닫힌 질의
+    L = rt.chat.list()
+    assert not L["open"] and L["done"][0]["status"] == "answered"
+    # 추천 규칙 복기: 자료가 모자라면 만들지 않는다, 답은 규칙 새 판으로
+    with pytest.raises(ValueError):
+        rt.chat.create("learn", {"horizon": "day"})
+    monkeypatch.setattr(rt.ai, "context", lambda kind, d: ("AI 당일 추천 복기", "규칙을 써 줘", {"x": 1}))
+    b = rt.chat.create("learn", {"horizon": "day"})
+    rt.chat.answer(b["id"], "총평: 오전 돌파가 잘 통했어요\n## 규칙\n- 09:30 전 돌파는 비중을 줄여요")
+    ls = rt.aipick.lessons("day")
+    assert ls["model"] == "chat" and ls["ver"] == 1 and "돌파" in ls["text"]
+    # 오래된 질의는 닫힌다
+    c = rt.chat.create("learn", {"horizon": "swing"})
+    rt.db.x("UPDATE chat_asks SET created='2020-01-01T00:00:00' WHERE id=?", (c["id"],))
+    assert not rt.chat.list()["open"]
+    # API 방식으로 돌리면 대화창 질의를 만들지 않는다
+    rt.selfimp.set({"via": "api"})
+    assert not rt.chat.on()

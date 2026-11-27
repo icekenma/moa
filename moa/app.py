@@ -1708,6 +1708,30 @@ def create_app(rt, updater=None):
     def si_set():
         return jsonify(rt.selfimp.set(body()))
 
+    @app.post("/api/si/ask")
+    def si_ask():
+        d = body()
+        try:
+            kind = d.get("kind")
+            arg = {"run_id": int(d.get("run_id") or 0), "auto": True} if kind == "auto" else {"horizon": d.get("horizon") or "day"}
+            rt.chat.create(kind, arg, "화면에서 직접 만든 질의")
+            return jsonify(rt.selfimp.view())
+        except (ValueError, TypeError) as e:
+            return jsonify({"error": str(e)}), 400
+
+    @app.post("/api/si/ask/<int:aid>/answer")
+    def si_answer(aid):
+        try:
+            r = rt.chat.answer(aid, body().get("text"))
+            return jsonify(result=r["result"], view=rt.selfimp.view())
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+    @app.post("/api/si/ask/<int:aid>/cancel")
+    def si_ask_cancel(aid):
+        rt.chat.cancel(aid)
+        return jsonify(rt.selfimp.view())
+
     @app.get("/api/auto/journal")
     def auto_journal():
         q = request.args

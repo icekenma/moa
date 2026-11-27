@@ -16,6 +16,20 @@ MODEL = "chat"          # 대화창으로 받은 답(at_proposals.stats.model, l
 DATA_MAX = 60000
 
 
+
+def _fence_json(text):
+    """``` 없이 붙여 넣은 답에서 changes가 든 JSON 객체를 찾아 ```json 블록으로 감싼다. 못 찾으면 그대로."""
+    dec = json.JSONDecoder()
+    for i in [k for k, ch in enumerate(text) if ch == "{"]:
+        try:
+            obj, end = dec.raw_decode(text[i:])
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and "changes" in obj:
+            head = text[:i].rstrip()
+            return (head + "\n\n" if head else "") + "```json\n" + text[i:i + end] + "\n```\n" + text[i + end:].lstrip()
+    return text
+
 class ChatBridge:
     def __init__(self, rt):
         self.rt = rt
@@ -93,6 +107,8 @@ class ChatBridge:
             raise ValueError("답이 너무 짧아요. Claude가 준 답 전체를 붙여 넣어 주세요")
         d = json.loads(row["d"] or "{}")
         if row["kind"] == "auto":
+            if "```" not in text:
+                text = _fence_json(text)          # 코드 블록 안만 복사해 붙여 넣은 경우(``` 없이 JSON만) — 감싸서 같은 길로
             if "```" not in text:
                 raise ValueError("답 끝에 ```json 코드 블록(summary·changes)이 있어야 해요. 그 부분까지 함께 붙여 넣어 주세요")
             pr = self.rt.autotrade.save_review(text, dict(d, auto=True), MODEL, 0.0)

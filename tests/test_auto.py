@@ -3300,3 +3300,20 @@ def test_chat_bridge_asks_and_reads_answers(env, monkeypatch):
     # API 방식으로 돌리면 대화창 질의를 만들지 않는다
     rt.selfimp.set({"via": "api"})
     assert not rt.chat.on()
+
+
+
+def test_chat_answer_without_code_fence(env):
+    """대화창 답에서 코드 블록 안만 복사해 붙여 넣어도(``` 없이 JSON만) 읽는다(2026-11-27 사용자 화면)."""
+    from moa.chatbridge import _fence_json
+    raw = '{"summary":"보유 수 늘리기","changes":[{"key":"max_positions","to":4,"why":"자리 없어 놓친 16건이 더 나음"}]}'
+    t = _fence_json(raw)
+    assert t.startswith("```json") and json.loads(t.split("```json")[1].split("```")[0])["changes"][0]["to"] == 4
+    t2 = _fence_json("결론 한 줄\n- 항목\n" + raw + "\n끝")
+    assert "결론 한 줄" in t2 and "```json\n" + raw + "\n```" in t2
+    assert _fence_json("JSON이 없는 답 {이건 객체 아님}") == "JSON이 없는 답 {이건 객체 아님}"
+    rid = env.run()
+    _seed(env, rid, 12)
+    a = env.rt.chat.create("auto", {"run_id": rid, "auto": True})
+    r = env.rt.chat.answer(a["id"], raw)
+    assert r["result"].startswith("개선안 1개") and "→4" in r["result"]

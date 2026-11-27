@@ -34,6 +34,7 @@
 
   // 금융자산 곡선(나쁨·보통·좋음). 은퇴 나이·연금 시작 나이에 세로선
   function chart(d, R) {
+    const ga = (d.table.find((x) => x.age === R) || {}).gov_age || d.gov_age;
     const ages = d.curve_ages, keys = ["bad", "mid", "good"], W = 400, H = 190, pl = 40, pr = 8, pt = 10, pb = 24;
     const C = Object.fromEntries(keys.map((k) => [k, d.curves[R][k].map((v, i) => ({ age: ages[i], assets: v }))]));
     const all = keys.flatMap((k) => C[k]);
@@ -43,13 +44,13 @@
     const x = (a) => pl + (a - a0) / (a1 - a0) * (W - pl - pr), y = (v) => pt + (hi - Math.max(lo, v)) / (hi - lo || 1) * (H - pt - pb);
     const path = (rows) => rows.map((r, i) => `${i ? "L" : "M"}${x(r.age).toFixed(1)},${y(r.assets).toFixed(1)}`).join("");
     const ticks = [0, hi / 2, hi].map((v) => `<text x="${pl - 6}" y="${y(v) + 4}" text-anchor="end">${eok(v)}</text><line x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}" class="fi-grid"/>`).join("");
-    const xt = [a0, R, d.gov_age, a1].filter((v, i, s) => s.indexOf(v) === i).map((a) => `<text x="${x(a)}" y="${H - 6}" text-anchor="middle">${a}세</text>`).join("");
+    const xt = [a0, R, ga, a1].filter((v, i, s) => s.indexOf(v) === i).map((a) => `<text x="${x(a)}" y="${H - 6}" text-anchor="middle">${a}세</text>`).join("");
     return `<svg class="fi-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${R}세 은퇴 때 금융자산 흐름">
       ${ticks}${xt}
-      <line x1="${x(R)}" x2="${x(R)}" y1="${pt}" y2="${H - pb}" class="fi-vl"/><line x1="${x(d.gov_age)}" x2="${x(d.gov_age)}" y1="${pt}" y2="${H - pb}" class="fi-vl p"/>
+      <line x1="${x(R)}" x2="${x(R)}" y1="${pt}" y2="${H - pb}" class="fi-vl"/><line x1="${x(ga)}" x2="${x(ga)}" y1="${pt}" y2="${H - pb}" class="fi-vl p"/>
       <line x1="${pl}" x2="${W - pr}" y1="${y(0)}" y2="${y(0)}" class="fi-zero"/>
       ${keys.map((k) => `<path d="${path(C[k])}" class="fi-ln fi-${k}"/>`).join("")}</svg>
-      <div class="fi-leg"><span class="fi-bad">나쁨 1.5%</span><span class="fi-mid">보통 3.5%</span><span class="fi-good">좋음 5%</span><span class="fi-v">│ 은퇴 ${R}세 · 연금 ${d.gov_age}세</span></div>`;
+      <div class="fi-leg"><span class="fi-bad">나쁨 1.5%</span><span class="fi-mid">보통 3.5%</span><span class="fi-good">좋음 5%</span><span class="fi-v">│ 은퇴 ${R}세 · 공무원연금 ${ga}세</span></div>`;
   }
 
   function missingBox(d) {
@@ -79,8 +80,8 @@
           <div><small>95세 때 남는 돈(보통)</small><b class="${ok ? "up" : "dn"}">${ok ? eok(mid.end) : `${mid.broke}세에 바닥`}</b></div>
           <div><small>퇴직수당(세전)</small><b>${eok(row.allowance)}</b></div>
           <div><small>명예퇴직수당(어림)</small><b>${row.honor ? eok(row.honor) : "대상 아님"}</b></div>
-          <div><small>공무원연금(월, ${d.gov_age}세부터)</small><b>${eok(row.gov)}</b><em>재직 ${row.years ?? "?"}년${row.ok ? "" : " · 10년 미만이면 일시금"}</em></div>
-          <div><small>은퇴 → 연금까지</small><b>${Math.max(0, d.gov_age - R)}년</b><em>이 기간을 모은 돈으로 버텨야 해요</em></div>
+          <div><small>공무원연금(월, ${row.gov_age}세부터)</small><b>${eok(row.gov)}</b><em>지금 그만두면 ${eok(d.gov_now)} → ${R}세까지 일하면${row.years != null ? ` · 재직 ${row.years}년` : ""}${row.ok ? "" : " · 10년 미만: 연계퇴직연금"}</em></div>
+          <div><small>은퇴 → 공무원연금까지</small><b>${Math.max(0, row.gov_age - R)}년</b><em>이 기간을 모은 돈으로 버텨야 해요</em></div>
         </div>
       </section>
       <section class="fi-card"><h2>이 나이에 은퇴하려면</h2>
@@ -101,7 +102,8 @@
           <div><small>한 해 생활비</small><b>${eok(d.rule4.spend_year)}</b><em>${d.src.spend ? `가계부 ${d.app.spend_n}달 평균` : "내 자료 값"}</em></div>
           <div><small>4% 법칙 목표(×25)</small><b>${eok(d.rule4.x25)}</b><em>연금 없이 버티려면. 연금이 있어 실제 필요액은 더 적어요</em></div>
           <div><small>은퇴~연금 공백에 드는 돈(보통)</small><b>${eok(d.bridge.need)}</b><em>${d.bridge.years}년 동안 연금 없이</em></div>
-          <div><small>연금 합계(월)</small><b>${eok(d.gov_month + (d.used.pension_nps || 0))}</b><em>공무원 ${eok(d.gov_month)} + 국민 ${eok(d.used.pension_nps)}</em></div>
+          <div><small>연금 합계(월, ${d.pick}세 은퇴)</small><b>${eok(d.gov_month + (d.used.pension_nps || 0))}</b><em>공무원 ${eok(d.gov_month)} + 국민 ${eok(d.used.pension_nps)}</em></div>
+          <div><small>1년 더 일하면 공무원연금</small><b class="up">월 +${eok(d.gov_gain)}</b><em>평생 해마다 +${eok(d.gov_gain * 12)} (지금 연봉÷12 × 지급률 약 1.7%)</em></div>
           <div><small>건보 피부양자(연금만 볼 때)</small><b>${d.dependent.ok_income ? "소득 기준 안" : "소득 기준 넘음"}</b><em>공적연금 연 ${eok(d.dependent.pension_year)} / 기준 2,000만. 재산 기준은 따로</em></div>
           <div><small>승진 뒤 세전 연봉(내년)</small><b>${eok(d.salary.y_next)}</b><em>봉급표 비율 ×${d.salary.bump.toFixed(3)}${d.salary.guess_th ? " · 실수령 76% 어림" : ""}</em></div>
         </div></section>
@@ -113,11 +115,11 @@
     if (!d.ready) return home(d);
     const cell = (x) => (x.broke == null ? `<b class="up">버팀</b><small>${eok(x.end)}</small>` : `<b class="dn">${x.broke}세</b><small>바닥</small>`);
     return `${head("파이어", "은퇴 나이별 비교")}
-      <section class="fi-card fi-tbl-wrap"><table class="fi-tbl"><thead><tr><th>은퇴</th><th>나쁨</th><th>보통</th><th>좋음</th><th>퇴직수당<br><small>+명퇴</small></th><th>연금(월)</th></tr></thead>
+      <section class="fi-card fi-tbl-wrap"><table class="fi-tbl"><thead><tr><th>은퇴</th><th>나쁨</th><th>보통</th><th>좋음</th><th>퇴직수당<br><small>+명퇴</small></th><th>연금(월)<br><small>시작</small></th></tr></thead>
         <tbody>${d.table.map((r) => `<tr class="${r.age === d.best.mid ? "on" : ""}"><th>${r.age}세<small>재직 ${r.years ?? "?"}년</small></th>
           <td>${cell(r.bad)}</td><td>${cell(r.mid)}</td><td>${cell(r.good)}</td>
-          <td><b>${eok(r.allowance)}</b><small>${r.honor ? `+${eok(r.honor)}` : "-"}</small></td><td><b>${eok(r.gov)}</b></td></tr>`).join("")}</tbody></table>
-        <p class="fi-note">'버팀'은 95세까지 금융자산이 0 아래로 안 내려간다는 뜻이고, 아래 금액은 95세 때 남는 돈이에요. 연금은 그만둘 때까지 재직연수만큼 줄여 어림했어요.</p></section>`;
+          <td><b>${eok(r.allowance)}</b><small>${r.honor ? `+${eok(r.honor)}` : "-"}</small></td><td><b>${eok(r.gov)}</b><small>${r.gov_age}세</small></td></tr>`).join("")}</tbody></table>
+        <p class="fi-note">'버팀'은 95세까지 금융자산이 0 아래로 안 내려간다는 뜻이고, 아래 금액은 95세 때 남는 돈이에요. 연금은 그만둘 때까지 일한 해만큼 늘려 어림했어요(그해 연봉 × 지급률).</p></section>`;
   }
 
   function form(d) {
@@ -126,7 +128,7 @@
     const ph = (k) => (U[k] ? `가져온 값 ${eok(U[k])}` : "");
     const groups = [["나", ["birth", "service_start", "life"]], ["월급", ["salary", "take_home", "grade_now", "step_now", "promo_date", "promo_grade", "promo_step"]],
       ["쓰는 돈·모은 돈", ["spend", "fin_assets", "save_extra"]], ["집", ["home_value", "mortgage", "mortgage_rate", "mortgage_years", "house_pension_age"]],
-      ["연금", ["pension_gov", "pension_nps", "pension_start", "pension_early", "honor_on"]], ["가정", ["health_ins", "inflation"]]];
+      ["연금", ["pension_gov", "pension_asof", "pension_nps", "pension_start", "pension_early", "honor_on"]], ["가정", ["health_ins", "inflation"]]];
     const meta = Object.fromEntries(d.fields.map((f) => [f.key, f]));
     return `${head("파이어", "내 자료")}
       <p class="fi-note fi-pad">노트북 서버에만 저장돼요(저장소·바깥으로 나가지 않아요). 비워 둔 생활비·금융자산·집·대출은 가계부·자산 화면 값을 써요.</p>

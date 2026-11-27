@@ -3311,7 +3311,11 @@ def test_fire_rules_and_plan(rt):
     pl = FI.Plan(dict(rt.fire.profile()), date(2026, 11, 26))
     assert abs(pl.bump - 4_838_400 / 4_309_100) < 1e-9 and int(pl.age0) == 46
     i60, i50 = pl.at_retire(60), pl.at_retire(50)
-    assert i60["gov"] == 1_200_000 and i60["honor"] == 0 and i50["gov"] < i60["gov"] and i50["honor"] > 0 and i50["allowance"] > 0
+    assert i60["honor"] == 0 and 1_200_000 < i50["gov"] < i60["gov"] and i50["honor"] > 0 and i50["allowance"] > 0   # 연금은 일한 만큼 늘어난다
+    assert i60["start"] == 65 and FI.start_age(2031, 25) == 64 and FI.start_age(2028, 12) == 63 and FI.start_age(2028, 9) == 65   # 10년 미만은 연계(65세)
+    assert FI.accrual_rate(2026) == 1.736 and FI.accrual_rate(2040) == 1.7
+    gov1, gain = pl.gov_at(date(2027, 11, 26))
+    assert gain == round(60_000_000 / 12 * 0.01736) and gain < gov1 - 1_200_000 < gain * 1.2    # 1년 더 일하면 월 연금이 대략 '연봉÷12 × 1.7%'만큼(승진분 포함) 는다
     # 돈이 많을수록 늦게 바닥나고, 수익률이 높을수록 늦게 바닥난다
     rich = FI.Plan(dict(rt.fire.profile(), fin_assets=2e9), date(2026, 11, 26))
     assert rich.run(50, 3.5)["broke"] is None

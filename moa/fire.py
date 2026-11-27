@@ -22,8 +22,21 @@ PAY_YEAR = 2026
 RETIRE_RATE = ((5, 6.5), (10, 22.75), (15, 29.25), (20, 32.5), (99, 39.0))
 RETIRE_YEARS_MAX = 33
 PENSION_YEARS_MAX = 36      # 퇴직연금 재직기간 상한
-PENSION_MIN_YEARS = 10      # 10년 이상이어야 연금
-PENSION_AGE = 65            # 2033년 이후 퇴직자의 지급개시 연령
+PENSION_MIN_YEARS = 10      # 공무원 재직 10년 이상이면 퇴직연금, 미만이면 국민연금과 이어 받는 연계퇴직연금(국민연금 개시 나이부터)
+PENSION_AGE = 65            # 국민(연계)연금 개시 나이, 2033년 이후 퇴직자의 공무원연금 개시 나이
+START_AGE = ((2021, 60), (2023, 61), (2026, 62), (2029, 63), (2032, 64))   # 퇴직 연도별 공무원연금 개시 나이(그 뒤 65세)
+
+
+def start_age(retire_year, years):
+    """공무원연금을 받기 시작하는 나이. 재직 10년 미만이면 연계퇴직연금이라 국민연금과 같이 65세."""
+    if years is not None and years < PENSION_MIN_YEARS:
+        return PENSION_AGE
+    return next((a for y, a in START_AGE if retire_year <= y), PENSION_AGE)
+
+
+def accrual_rate(year):
+    """그해 재직 1년에 쌓이는 지급률(%): 2026년 1.736%에서 해마다 0.004%p씩 내려 2035년부터 1.7%."""
+    return round(max(1.7, 1.736 - 0.004 * max(0, year - 2026)), 3)
 EARLY_CUT = 5.0             # 조기퇴직연금: 1년 앞당길 때마다 5% 깎임, 최대 5년(25%)
 EARLY_MAX = 5
 HONOR_MIN_YEARS = 20        # 명예퇴직: 20년 이상 재직, 정년 1년 이상 남음
@@ -53,7 +66,8 @@ FIELDS = {   # 키: (이름, 기본값, 단위, 설명)
     "mortgage": ("주택담보대출 잔액", 0, "원", ""),
     "mortgage_rate": ("대출 금리", 0, "%", "모르면 비워 두기(4%로 어림)"),
     "mortgage_years": ("대출 남은 기간", 0, "년", "모르면 비워 두기(25년으로 어림)"),
-    "pension_gov": ("공무원(연계퇴직)연금 예상액(월, 현재가치)", 0, "원", "연금공단 예상연금조회 값. 정년(60세)까지 근무 기준"),
+    "pension_gov": ("공무원(연계퇴직)연금 예상액(월) — 지금 그만두면", 0, "원", "연금공단 예상연금조회 값. 앞으로 일하는 만큼 해마다 '그해 기준소득월액 × 지급률(약 1.7%)'씩 늘려 셈해요"),
+    "pension_asof": ("예상액 조회일", "", "date", "비우면 저장한 날"),
     "pension_nps": ("국민(연계노령)연금 예상액(월, 현재가치)", 0, "원", ""),
     "pension_start": ("연금 개시일", "", "date", ""),
     "pension_early": ("공무원연금 앞당겨 받기(년)", 0, "년", "0~5년, 1년마다 5% 깎임"),
@@ -179,8 +193,9 @@ class Plan:
         yrs = self.svc_years(when)
         g = self.gross_in(when.year)
         out = {"age": R, "date": when.isoformat(), "years": round(yrs, 1) if yrs is not None else None}
+        gov, gain = self.gov_at(when)
         if yrs is None:
-            return dict(out, allowance=0, honor=0, gov=float(self.P.get("pension_gov") or 0), ok=True)
+            return dict(out, allowance=0, honor=0, gov=gov, gain=gain, start=start_age(when.year, None), ok=True)
         allow = retire_allowance(yrs, g / 12)
         months_left = (RETIRE_AGE - R) * 12
         P = self.P
@@ -189,11 +204,27 @@ class Plan:
             step = int(P["promo_step"]) + max(0, when.year - self.promo_year)
         honor = honor_allowance(yrs, months_left, pay(P.get("promo_grade") if self.promo_year and when.year >= self.promo_year else P.get("grade_now"),
                                                      step or P.get("step_now")))
-        full = self.svc_years(date(self.birth.year + RETIRE_AGE, self.birth.month, min(self.birth.day, 28))) or 0
+        return dict(out, allowance=allow, honor=honor, gov=gov, gain=gain, start=start_age(when.year, yrs), ok=yrs >= PENSION_MIN_YEARS)
+
+    def gov_at(self, when):
+        """그만두는 날의 공무원연금(월, 실질). 조회 때 '지금 그만두면' 받을 값에, 그 뒤 일한 해마다 '그해 기준소득월액 × 지급률'을 더한다.
+        기준소득월액은 세전 연봉 ÷ 12로 어림(소득 재분배·상한은 빼고). 재직 36년을 넘는 기간은 더하지 않는다."""
+        P = self.P
         base = float(P.get("pension_gov") or 0)
-        ratio = min(yrs, PENSION_YEARS_MAX) / min(full, PENSION_YEARS_MAX) if full else 1.0
-        gov = round(base * min(1.0, ratio)) if yrs >= PENSION_MIN_YEARS else 0
-        return dict(out, allowance=allow, honor=honor, gov=gov, ok=yrs >= PENSION_MIN_YEARS, ratio=round(min(1.0, ratio), 3))
+        asof = _d(P.get("pension_asof")) or self.today
+        if not base or when <= asof:
+            return round(base), 0
+        cap = None
+        if self.svc:
+            cap = date(self.svc.year + PENSION_YEARS_MAX, self.svc.month, min(self.svc.day, 28))
+        add, cur = 0.0, asof
+        while cur < when:
+            nxt = min(when, date(cur.year + 1, 1, 1))
+            end = min(nxt, cap) if cap else nxt
+            if end > cur:
+                add += self.gross_in(cur.year) / 12 * accrual_rate(cur.year) / 100 * _years(cur, end)
+            cur = nxt
+        return round(base + add), round(self.gross_in(asof.year) / 12 * accrual_rate(asof.year) / 100)
 
     def run(self, R, ret_pct):
         """R세에 그만두고 수익률 ret_pct(실질)로 굴릴 때, 해마다 금융자산. 바닥나는 나이(없으면 None)."""
@@ -204,9 +235,9 @@ class Plan:
         hins = float(P.get("health_ins") or 0) * 12
         nps = float(P.get("pension_nps") or 0) * 12
         info = self.at_retire(R)
-        early = max(0, min(EARLY_MAX, int(P.get("pension_early") or 0)))
+        early = max(0, min(EARLY_MAX, int(P.get("pension_early") or 0))) if info["ok"] else 0   # 연계퇴직연금은 앞당겨 받지 않는 것으로 본다
         gov = info["gov"] * 12 * (1 - EARLY_CUT * early / 100)
-        gov_age = PENSION_AGE - early
+        gov_age = info["start"] - early
         hp_age = int(P.get("house_pension_age") or 0)
         hp = house_pension(hp_age, float(P.get("home_value") or 0)) * 12 if hp_age else 0
         life = int(P.get("life") or 95)
@@ -295,6 +326,8 @@ class Fire:
                     raise ValueError(f"{FIELDS[k][0]} 값이 숫자가 아니에요")
                 if cur[k] < 0:
                     raise ValueError(f"{FIELDS[k][0]}은(는) 0 이상이어야 해요")
+        if cur.get("pension_gov") and not cur.get("pension_asof"):
+            cur["pension_asof"] = date.today().isoformat()        # '지금 그만두면' 값은 조회한 날 기준이다
         self.rt.db.set_setting("fire_profile", cur)
         return self.view()
 
@@ -349,7 +382,8 @@ class Fire:
                 if res["broke"] is None and key not in best:
                     best[key] = R
             info = pl.at_retire(R)
-            row.update(allowance=info["allowance"], honor=info["honor"], gov=info["gov"], years=info["years"], ok=info["ok"])
+            early = max(0, min(EARLY_MAX, int(P.get("pension_early") or 0))) if info["ok"] else 0
+            row.update(allowance=info["allowance"], honor=info["honor"], gov=info["gov"], years=info["years"], ok=info["ok"], gov_age=info["start"] - early)
             table.append(row)
         pick = best.get("mid") or RETIRE_AGE
         res = pl.run(pick, 3.5)
@@ -363,10 +397,11 @@ class Fire:
         debt = float(P.get("mortgage") or 0)
         fin = float(P.get("fin_assets") or 0)
         gap_years = max(0, res["gov_age"] - pick)
-        bridge = sum(max(0, r["out"] - r["in"]) for r in res["rows"] if pick <= r["age"] < PENSION_AGE)
+        bridge = sum(max(0, r["out"] - r["in"]) for r in res["rows"] if pick <= r["age"] < res["gov_age"])
         pension_year = (res["gov_month"] + float(P.get("pension_nps") or 0)) * 12
         return dict(out, ready=True, age=round(pl.age0, 1), best=best, pick=pick, scen=[{"key": k, "label": lb, "ret": r} for k, lb, r in SCEN],
                     table=table, curves=curves, curve_ages=curve_ages, goals=goals, at_pick=res["info"], gov_age=res["gov_age"], gov_month=res["gov_month"], hp_month=res["hp_month"],
+                    gov_now=round(float(P.get("pension_gov") or 0)), gov_gain=res["info"].get("gain") or pl.gov_at(date(pl.y0 + 1, 12, 31))[1],
                     net={"home": home, "debt": debt, "home_eq": home - debt, "fin": fin, "total": home - debt + fin},
                     mortgage={"pay_month": round(pl.mort_pay / 12), "rate": pl.mort_rate, "years": pl.mort_yrs, "end": pl.mort_end,
                               "guess": not (raw.get("mortgage_rate") and raw.get("mortgage_years"))},
@@ -389,8 +424,8 @@ class Fire:
 def facts():
     """화면 '제도' 탭: 셈에 쓴 제도 숫자와 출처."""
     return [
-        {"t": "공무원연금 지급 시작", "d": f"2033년 이후 퇴직하면 {PENSION_AGE}세부터. 재직 {PENSION_MIN_YEARS}년 이상이어야 연금(미만이면 일시금). 최대 {EARLY_MAX}년 앞당길 수 있고 1년마다 {EARLY_CUT:g}% 깎여요(최대 25%).", "src": "gongmuwon.studygov.kr(공무원연금법 정리)"},
-        {"t": "연금 크기와 재직기간", "d": f"퇴직연금은 재직 1년마다 쌓여요(지급률 2026년 약 1.736%, 2035년 1.7%). 앱은 공단 예상액(정년까지 근무 기준)에 '그만둘 때 재직연수 ÷ 정년까지 재직연수'(최대 {PENSION_YEARS_MAX}년)를 곱해 어림해요. 평균 소득 차이는 반영하지 않아요.", "src": "공무원연금법 정리"},
+        {"t": "공무원연금 지급 시작", "d": f"재직 {PENSION_MIN_YEARS}년 이상이면 퇴직연금: 퇴직 연도에 따라 2027~2029년 63세, 2030~2032년 64세, 2033년 이후 {PENSION_AGE}세부터. 최대 {EARLY_MAX}년 앞당길 수 있고 1년마다 {EARLY_CUT:g}% 깎여요(최대 25%). 10년 미만이면 국민연금과 이어 받는 연계퇴직연금이라 국민연금처럼 {PENSION_AGE}세부터예요.", "src": "공무원연금법 정리 · 연금공단 예상연금조회 화면"},
+        {"t": "연금은 일할수록 늘어요", "d": f"공단 예상액은 '지금 그만두면' 받을 값이에요. 앱은 그 뒤 일하는 해마다 '그해 기준소득월액(세전 연봉÷12) × 지급률'만큼 더해요. 지급률은 2026년 1.736%에서 해마다 0.004%p씩 내려 2035년부터 1.7%. 재직 {PENSION_YEARS_MAX}년을 넘는 기간은 더하지 않아요. 2016년 뒤 기간의 소득 재분배(전체 공무원 평균과 섞는 것)와 기준소득 상한은 빼서 어림값이에요.", "src": "공무원연금법 정리"},
         {"t": "퇴직수당", "d": "재직연수 × 기준소득월액 × 비율: 1~5년 6.5%, 5~10년 22.75%, 10~15년 29.25%, 15~20년 32.5%, 20년 이상 39%(재직 33년까지). 세금 전 금액이에요.", "src": "공무원연금법 제62조·시행령 제58조"},
         {"t": "명예퇴직수당", "d": f"재직 {HONOR_MIN_YEARS}년 이상, 정년까지 1년 이상 남았을 때. 월봉급액(봉급의 {HONOR_PAY_RATE:.0%}) × ½ × 정년 잔여월수(5년까지), 5~10년은 [60 + (잔여월수−60)÷2]개월분. 10년 넘게 남아도 10년분. 예산·심사로 못 받을 수 있어요. 확인 필요: 인사과.", "src": "국가공무원 명예퇴직수당 등 지급 규정 정리"},
         {"t": "봉급표", "d": "2026년 일반직 봉급표(본봉, 수당 제외). 승진 뒤 연봉은 '승진 뒤 봉급 ÷ 지금 봉급'만큼 오른다고 보고, 그 뒤 해마다 호봉 1칸씩 올려요. 봉급 인상률은 물가와 같다고 봐요(실질 0%).", "src": "인사혁신처 2026 봉급표"},
